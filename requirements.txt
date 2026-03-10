@@ -1,0 +1,11 @@
+# UpsideFuzz Python Engine Requirements
+
+# Core dependency for System V shared memory (optional, only if --use-sysv flag is used)
+# Install only if needed: pip install sysv_ipc
+# sysv_ipc==1.1.0
+
+# HTTP client for sending requests to API
+requests==2.31.0
+
+# Note: multiprocessing, mmap, json, os, subprocess are all built-in to Python 3.8+
+# No additional dependencies required for the POSIX SHM approach (/dev/shm)

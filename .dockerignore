@@ -1,0 +1,22 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Coverage and fuzzing outputs
+coverage/
+fuzzing/findings/
+fuzzing/crashes/
+
+# Docker
+.dockerignore
+
+# Git
+.git/
+.gitignore

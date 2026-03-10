@@ -1,0 +1,71 @@
+[
+    {
+        "name": "Basic Logic (Standard)",
+        "method": "GET",
+        "path": "/Fuzz?input=hello"
+    },
+    {
+        "name": "Basic Logic (Secret Branch)",
+        "method": "GET",
+        "path": "/Fuzz?input=mystery"
+    },
+    {
+        "name": "Basic Logic (Repeatable Point)",
+        "method": "GET",
+        "path": "/Fuzz?input=world"
+    },
+    {
+        "name": "Calculation: Addition",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=10&b=5&op=add"
+    },
+    {
+        "name": "Calculation: Subtraction",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=10&b=2&op=sub"
+    },
+    {
+        "name": "Calculation: Multiplication",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=6&b=7&op=mul"
+    },
+    {
+        "name": "Calculation: Division by Zero",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=10&b=0&op=div"
+    },
+    {
+        "name": "Calculation: Safe Division",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=100&b=4&op=div"
+    },
+    {
+        "name": "Calculation: Unknown Op",
+        "method": "GET",
+        "path": "/Fuzz/calculate?a=1&b=1&op=evil"
+    },
+    {
+        "name": "Complex: Short String",
+        "method": "POST",
+        "path": "/Fuzz/complex",
+        "json": "short"
+    },
+    {
+        "name": "Complex: Long String",
+        "method": "POST",
+        "path": "/Fuzz/complex",
+        "json": "this_is_a_very_long_string"
+    },
+    {
+        "name": "Complex: Fuzz Prefix",
+        "method": "POST",
+        "path": "/Fuzz/complex",
+        "json": "fuzz_data_stream"
+    },
+    {
+        "name": "Complex: Crash Branch",
+        "method": "POST",
+        "path": "/Fuzz/complex",
+        "json": "crash"
+    }
+]
