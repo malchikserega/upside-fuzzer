@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Launch SmartFuzzer as a sidecar container with direct SHM access.
+# Launch Void as a sidecar container with direct SHM access.
 #
 # Usage:
 #   ./run-fuzzer-docker.sh <prep-dir> [fuzzer-args...]
@@ -11,7 +11,7 @@
 #
 # Before running:
 #   1. Start the target stack (e.g. docker compose --profile fuzz up -d)
-#   2. Ensure grammar.py exists in smart_fuzzer/
+#   2. Ensure grammar.py exists in void/
 
 set -euo pipefail
 

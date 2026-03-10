@@ -75,7 +75,7 @@ dotnet --version        # 8.0+
 │  │  + /dev/shm:/dev/shm volume                                    │    │
 │  │  + coverage_shm (tmpfs) volume                                 │    │
 │  │  + ASPNETCORE_ENVIRONMENT=Development                          │    │
-│  │  + [commented] smartfuzzer-go sidecar                          │    │
+│  │  + [commented] void sidecar                          │    │
 │  └────────────────────────────────────────────────────────────────┘    │
 │                                                                         │
 │  ┌─── Helpers/CoverageExtensions.cs ──────────────────────────────┐    │
@@ -111,11 +111,11 @@ dotnet --version        # 8.0+
 │  • Producer→Consumer deps  │     │  • From OpenAPI + C# source        │
 └────────────┬───────────────┘     └─────────────────────────────────── ┘
              │
-    docker compose --profile fuzz-go run --rm smartfuzzer-go
+    docker compose --profile fuzz-go run --rm void
              │
              ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  SmartFuzzer-Go (Coverage-Guided)                                       │
+│  Void (Coverage-Guided)                                       │
 │                                                                         │
 │  Epochs: Baseline → Deterministic → Havoc → Splicing                   │
 │  Reads bitmap via mmap (--direct-shm) or HTTP (/shm/coverage)          │
@@ -177,7 +177,7 @@ python3 fuzz-prep-multi.py \
    - Adds `/dev/shm:/dev/shm` volume mount
    - Adds `coverage_shm` tmpfs volume
    - Adds `ASPNETCORE_ENVIRONMENT=Development`
-   - Adds commented-out `smartfuzzer-go` sidecar block
+   - Adds commented-out `void` sidecar block
 8. **Patches** `.csproj` files: adds `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` and `SharpFuzz` package reference
 9. Injects into `Program.cs`: `CoverageExtensions.Initialize()`, `UseCoverageMiddleware()`, `AddCoverageEndpoints()`
 
@@ -287,7 +287,7 @@ Add the `fuzz-go` profile to the output compose and run:
 cd <OUTPUT_DIR>
 
 export AUTH_TOKEN="<your-jwt-token>"
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   -direct-shm \
   -time-budget 60
 ```
@@ -298,7 +298,7 @@ For a fast CI scan (disable slow analysis):
 
 ```bash
 export AUTH_TOKEN="<your-jwt-token>"
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   -direct-shm \
   -time-budget 20 \
   -concurrency 64 -max-concurrency 128 \
@@ -308,24 +308,24 @@ docker compose --profile fuzz-go run --rm smartfuzzer-go \
   -no-ui
 ```
 
-> For this to work, the `smartfuzzer-go` service must be defined in the compose file with the `fuzz-go` profile. `fuzz-prep-multi.py` adds a commented-out template — uncomment and configure it.
+> For this to work, the `void` service must be defined in the compose file with the `fuzz-go` profile. `fuzz-prep-multi.py` adds a commented-out template — uncomment and configure it.
 
 ### Mode B — Go Fuzzer on host (HTTP coverage mode)
 
 Target URL and auth are set via **environment variables**, not flags:
 
 ```bash
-cd /path/to/mvpsharpfuzznet/smart_fuzzer/go
+cd /path/to/mvpsharpfuzznet/void/go
 
 # Build binary (one-time — see Build section below)
-go build -o smartfuzzergo .
+go build -o void .
 
 # Run against a locally running instrumented app
 export TARGET_HOST="http://localhost:<PORT>"
 export SHM_HOST="http://localhost:<PORT>"   # same as TARGET_HOST unless separate
 export AUTH_TOKEN="<your-jwt-token>"
 
-./smartfuzzergo -grammar ../grammars/<project> -time-budget 20
+./void -grammar ../grammars/<project> -time-budget 20
 ```
 
 All bug-finding features are **on by default**: crash triage, repro, minimization, race detection, anti-forgery tokens, adaptive concurrency, source-aware prioritization.
@@ -362,10 +362,10 @@ cat crashes/unique-crashes.jsonl | python3 -c "import sys,json; [print(json.dump
 
 ```bash
 # Host mode (HTTP coverage)
-./smartfuzzergo -time-budget 60
+./void -time-budget 60
 
 # Docker sidecar (direct SHM — faster)
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   -direct-shm -time-budget 60
 ```
 
@@ -402,7 +402,7 @@ The following are **on by default** and only need explicit flags to *disable*:
 ### Fast-scan profile (CI — maximize throughput, skip slow analysis)
 
 ```bash
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   -direct-shm \
   -time-budget 20 \
   -concurrency 64 -max-concurrency 128 \
@@ -414,11 +414,11 @@ docker compose --profile fuzz-go run --rm smartfuzzer-go \
 
 ### Full flag reference
 
-See [`smart_fuzzer/README.md`](smart_fuzzer/README.md) for the complete table of all 60+ flags with accurate defaults taken from source.
+See [`void/README.md`](void/README.md) for the complete table of all 60+ flags with accurate defaults taken from source.
 
 ### Build for any platform
 
-See [`smart_fuzzer/README.md §Build`](smart_fuzzer/README.md#build-for-any-platform) for cross-compilation and Docker buildx instructions.
+See [`void/README.md §Build`](void/README.md#build-for-any-platform) for cross-compilation and Docker buildx instructions.
 
 ---
 
@@ -464,7 +464,7 @@ cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/h
 
 ```bash
 cd prepared-helpdesk
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm smartfuzzer-go \
+AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
   --direct-shm --shm-path /coverage_shm/bitmap --shm-read-mode file \
   --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json --src /src \
   --time-budget 20 --concurrency 16 --adaptive-concurrency \
@@ -474,7 +474,7 @@ AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm smartfuzzer-go \
 #### Fuzz — max throughput profile
 
 ```bash
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm smartfuzzer-go \
+AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
   --direct-shm --shm-path /coverage_shm/bitmap --shm-read-mode file \
   --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json \
   --time-budget 20 --concurrency 64 --min-concurrency 64 --max-concurrency 160 \
@@ -487,7 +487,7 @@ AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm smartfuzzer-go \
 #### Fuzz — hybrid profile (race detection + multi-identity)
 
 ```bash
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm smartfuzzer-go \
+AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
   --direct-shm --shm-path /coverage_shm/bitmap --shm-read-mode file \
   --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json --src /src \
   --time-budget 20 --concurrency 48 --min-concurrency 24 --max-concurrency 96 \
@@ -517,7 +517,7 @@ python3 fuzz-prep-multi.py \
 ```bash
 cd mpt-prepared
 AUTH_TOKEN="..." \
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   --direct-shm --shm-path /coverage_shm/bitmap \
   --time-budget 7 --concurrency 16 --coverage-interval 4 \
   --sequence-prob 0.35 --sequence-max-depth 4 --sequence-fanout 8
@@ -547,7 +547,7 @@ cd /path/to/mvpsharpfuzznet
 cd nopcommerce-prepared
 
 docker compose -f docker-compose.yml -f docker-compose.fuzz-go.yml \
-  --profile fuzz-go run --rm smartfuzzer-go \
+  --profile fuzz-go run --rm void \
   --direct-shm \
   --shm-path /coverage_shm/bitmap \
   --coverage-bitmap-size 262144 \
@@ -581,11 +581,11 @@ cd .. && ./compile-grammar.sh swagger-eshop.json --src ./esh
 cp restler_output/Compile/* grammars/eshop/
 
 # Fuzz (HTTP mode)
-cd smart_fuzzer/go
+cd void/go
 export TARGET_HOST="http://localhost:5200"
 export SHM_HOST="http://localhost:5200"
 export AUTH_TOKEN="<token>"
-./smartfuzzergo -grammar ../../grammars/eshop -time-budget 5
+./void -grammar ../../grammars/eshop -time-budget 5
 ```
 
 ---
@@ -604,11 +604,11 @@ cd .. && ./compile-grammar.sh swagger-loyalty.json --src ./customer-loyalty
 cp restler_output/Compile/* grammars/loyalty/
 
 # Fuzz (HTTP mode)
-cd smart_fuzzer/go
+cd void/go
 export TARGET_HOST="http://localhost:5100"
 export SHM_HOST="http://localhost:5100"
 export AUTH_TOKEN="<token>"
-./smartfuzzergo -grammar ../../grammars/loyalty -time-budget 5
+./void -grammar ../../grammars/loyalty -time-budget 5
 ```
 
 ---

@@ -1,5 +1,5 @@
 #!/bin/bash
-# deploy-grammar.sh — Copy compiled grammar to smart_fuzzer/
+# deploy-grammar.sh — Copy compiled grammar to void/
 # Requires ./compile-grammar.sh to have been run first.
 set -e
 
@@ -7,7 +7,7 @@ show_help() {
     cat <<'EOF'
 deploy-grammar.sh — Deploy compiled RESTler grammar to the smart fuzzer.
 
-Copies grammar.py and dict.json from restler_output/Compile/ into smart_fuzzer/
+Copies grammar.py and dict.json from restler_output/Compile/ into void/
 so the Go fuzzer can pick them up on the next run.
 
 Usage:
@@ -27,7 +27,7 @@ Examples:
 Workflow:
   1. ./compile-grammar.sh swagger.json [--dict dict.json] [--src ./src]
   2. ./deploy-grammar.sh
-  3. cd smart_fuzzer && TARGET_HOST=... AUTH_TOKEN=... ./go/smartfuzzergo-darwin-arm64 -time-budget 60
+  3. cd smart_fuzzer && TARGET_HOST=... AUTH_TOKEN=... ./go/void-darwin-arm64 -time-budget 60
 EOF
 }
 

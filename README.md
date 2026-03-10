@@ -22,7 +22,7 @@
        │                             ← sanitizes swagger, runs RESTler compiler,
   grammar.py + dict.json               enhances with OpenAPI enums + C# constraints
        │
-  smartfuzzer-go             ← coverage-guided fuzzing: epoch scheduling, adaptive
+  void             ← coverage-guided fuzzing: epoch scheduling, adaptive
        │                        concurrency, MOpt mutations, stateful sequences
   crashes/unique-crashes.jsonl
 ```
@@ -51,11 +51,11 @@
 ├── compile-grammar.sh          swagger.json → RESTler grammar → enhanced dict
 ├── enhance-grammar.py          Grammar/dict enricher (called by compile-grammar.sh)
 ├── sanitize-swagger-for-restler.sh  Fix deepObject/nested params before RESTler
-├── deploy-grammar.sh           Copy compiled grammar into smart_fuzzer/
-├── run-smart-fuzzer.sh         Quick launcher (host mode, HTTP coverage)
+├── deploy-grammar.sh           Copy compiled grammar into void/
+├── run-void.sh         Quick launcher (host mode, HTTP coverage)
 ├── run-fuzzer-docker.sh        Launcher for Docker compose sidecar mode
 │
-├── smart_fuzzer/
+├── void/
 │   ├── go/
 │   │   ├── main.go             Fuzzer engine: scheduler, mutations, SHM, TUI
 │   │   ├── advanced_features.go  Crash triage, minimization, race probing
@@ -124,7 +124,7 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
   --dict my-domain-dict.json \   # optional: domain-specific values
   --src ./my-project             # optional: C# source for constraint extraction
 
-./deploy-grammar.sh              # copies grammar.py + dict.json → smart_fuzzer/
+./deploy-grammar.sh              # copies grammar.py + dict.json → void/
 ```
 
 ### 5. Run the fuzzer
@@ -133,7 +133,7 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 
 ```bash
 export AUTH_TOKEN="<your-jwt-token>"
-docker compose --profile fuzz-go run --rm smartfuzzer-go \
+docker compose --profile fuzz-go run --rm void \
   -direct-shm -time-budget 60
 ```
 
@@ -142,17 +142,17 @@ docker compose --profile fuzz-go run --rm smartfuzzer-go \
 ```bash
 export TARGET_HOST="http://localhost:8080"
 export AUTH_TOKEN="<your-jwt-token>"
-./run-smart-fuzzer.sh -time-budget 60
+./run-void.sh -time-budget 60
 ```
 
 ### 6. Monitor crashes
 
 ```bash
 # Live unique crashes
-tail -f smart_fuzzer/crashes/unique-crashes-*.jsonl
+tail -f void/crashes/unique-crashes-*.jsonl
 
 # Pretty-print
-cat smart_fuzzer/crashes/unique-crashes-*.jsonl | \
+cat void/crashes/unique-crashes-*.jsonl | \
   python3 -c "import sys,json; [print(json.dumps(json.loads(l),indent=2)) for l in sys.stdin]"
 ```
 
@@ -172,7 +172,7 @@ All bug-finding features are **on by default**. You only need flags to tune or d
 | `-crash-triage=false` | — | Disable for max throughput in CI |
 | `-repro-runs 0` | — | Skip repro verification |
 
-Full reference: `./smart_fuzzer/go/smartfuzzergo --help` or [smart_fuzzer/README.md](smart_fuzzer/README.md)
+Full reference: `./void/go/void --help` or [void/README.md](void/README.md)
 
 ---
 
@@ -200,4 +200,4 @@ Each unique crash in `unique-crashes-*.jsonl`:
 
 - **[INSTRUCTIONS.md](INSTRUCTIONS.md)** — Full step-by-step runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine
-- **[smart_fuzzer/README.md](smart_fuzzer/README.md)** — Go fuzzer: all 60+ flags with defaults, build for any platform, cross-compilation guide
+- **[void/README.md](void/README.md)** — Go fuzzer: all 60+ flags with defaults, build for any platform, cross-compilation guide

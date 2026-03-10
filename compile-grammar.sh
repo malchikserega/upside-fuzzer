@@ -47,8 +47,8 @@ Examples:
   ./compile-grammar.sh swagger.json my-dict.json ./MyProject
 
 After running:
-  Copy output to smart_fuzzer/:  ./deploy-grammar.sh
-  Or manually:   cp restler_output/Compile/{grammar.py,dict.json} smart_fuzzer/
+  Copy output to void/:  ./deploy-grammar.sh
+  Or manually:   cp restler_output/Compile/{grammar.py,dict.json} void/
 EOF
             exit 0
             ;;

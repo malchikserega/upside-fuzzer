@@ -87,7 +87,7 @@ The platform automates transforming a standard .NET solution into a feedback-dri
      └──────────────────────────────────────────┐
                                                 │
                     ┌───────────────────────────▼──────────────────────┐
-                    │            SmartFuzzer-Go                         │
+                    │            Void                         │
                     │                                                   │
                     │  ┌─ Epoch scheduler ─────────────────────────┐   │
                     │  │  Baseline → Deterministic → Havoc →        │   │
@@ -303,20 +303,20 @@ The grammar provides:
 
 ---
 
-## 7. SmartFuzzer-Go Architecture
+## 7. Void Architecture
 
-The production fuzzer is the Go runtime (`smart_fuzzer/go/main.go` + `advanced_features.go`). It implements coverage-guided mutation with structured epochs, a seed corpus, adaptive concurrency, and crash triage.
+The production fuzzer is the Go runtime (`void/go/main.go` + `advanced_features.go`). It implements coverage-guided mutation with structured epochs, a seed corpus, adaptive concurrency, and crash triage.
 
 ### Component Map
 
 ```
-smart_fuzzer/go/
+void/go/
 ├── main.go              Core engine: Config, worker pool, epoch scheduler,
 │                        mutation engine, SHM reader, corpus, TUI dashboard
 ├── advanced_features.go Crash triage, PoC generation, crash minimization,
 │                        race condition probing, multi-identity mode
-├── go.mod               Module: smartfuzzergo, go 1.22
-└── smartfuzzergo        Pre-built binary (Linux/amd64)
+├── go.mod               Module: void, go 1.22
+└── void        Pre-built binary (Linux/amd64)
 ```
 
 ### Epoch Architecture
@@ -462,7 +462,7 @@ mvpsharpfuzznet/
 ├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
 ├── compile-grammar.sh          ★ Compile swagger.json → RESTler grammar
 ├── enhance-grammar.py          ★ Post-process grammar/dict (OpenAPI + C# source constraints)
-├── deploy-grammar.sh           Deploy grammar to smart_fuzzer/
+├── deploy-grammar.sh           Deploy grammar to void/
 ├── run-fuzzer-docker.sh        Launch fuzzer as Docker sidecar (convenience script)
 ├── prepare-nopcommerce.sh      Bootstrap nopCommerce end-to-end
 ├── nuget.config                NuGet config for instrumentor builds
@@ -477,12 +477,12 @@ mvpsharpfuzznet/
 │   ├── instrument.sh           Build + run script
 │   └── instrumentor.csproj     Project file
 │
-├── smart_fuzzer/
+├── void/
 │   ├── go/
 │   │   ├── main.go             ★ Go fuzzer: epochs, workers, mutations, SHM, TUI
 │   │   ├── advanced_features.go  Crash triage, race probing, multi-identity
 │   │   ├── go.mod              Module file (go 1.22)
-│   │   └── smartfuzzergo       Pre-built binary
+│   │   └── void       Pre-built binary
 │   ├── Dockerfile.go           ★ Container image for Go fuzzer sidecar
 │   ├── grammar.py              Active compiled grammar (deploy-grammar.sh target)
 │   ├── dict.json               Active dictionary

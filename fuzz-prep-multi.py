@@ -564,7 +564,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
                 svc_name = target_service or 'app'
                 fuzzer_block = (
                     "\n"
-                    "  # --- SmartFuzzer sidecar (uncomment to use direct SHM mode) ---\n"
+                    "  # --- Void sidecar (uncomment to use direct SHM mode) ---\n"
                     "  # smartfuzzer:\n"
                     "  #   build:\n"
                     "  #     context: ../smart_fuzzer\n"
@@ -608,7 +608,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
       - /dev/shm:/dev/shm
       - coverage_shm:/coverage_shm
 
-  # --- SmartFuzzer sidecar (uncomment to use direct SHM mode) ---
+  # --- Void sidecar (uncomment to use direct SHM mode) ---
   # smartfuzzer:
   #   build:
   #     context: ../smart_fuzzer

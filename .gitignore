@@ -30,29 +30,29 @@ __pycache__/
 *.pyd
 .Python
 venv/
-smart_fuzzer/venv/
+void/venv/
 *.egg-info/
 
 # ── Go binaries (keep source, exclude compiled binaries) ─────────────────────
-smart_fuzzer/go/smartfuzzergo
-smart_fuzzer/go/smartfuzzergo-*
+void/go/smartfuzzergo
+void/go/void-*
 # But keep pre-built Darwin arm64 binary if you want to ship it:
-# !smart_fuzzer/go/smartfuzzergo-darwin-arm64
+# !void/go/smartfuzzergo-darwin-arm64
 
 # ── Fuzzer run output ─────────────────────────────────────────────────────────
-smart_fuzzer/crashes/
-smart_fuzzer/summaries/
-smart_fuzzer/logs/
-smart_fuzzer/fuzzer/
+void/crashes/
+void/summaries/
+void/logs/
+void/fuzzer/
 
 # ── Generated grammar artifacts (produced by compile-grammar.sh + deploy-grammar.sh) ──
 # These are generated per-project and should NOT be committed.
 grammars/
-smart_fuzzer/grammar.py
-smart_fuzzer/dict.json
-smart_fuzzer/templates.export.json
-smart_fuzzer/templates.helpdesk.json
-smart_fuzzer/templates.export.public.json
+void/grammar.py
+void/dict.json
+void/templates.export.json
+void/templates.helpdesk.json
+void/templates.export.public.json
 
 # ── RESTler runtime output ────────────────────────────────────────────────────
 restler_output/
