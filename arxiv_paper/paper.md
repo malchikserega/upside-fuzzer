@@ -40,8 +40,29 @@ The architecture of UpsideFuzz consists of three distinct phases: Instrumentatio
 ### 3.1 Automated Instrumentation Pipeline
 To acquire coverage feedback without altering the target's deployment topology, UpsideFuzz utilizes a preparation script (`fuzz-prep-multi.py`). This script clones the target project and automatically injects SharpFuzz IL instrumentation during the container build process. It amends the application's `Dockerfile` to include the `instrumentor` binary, replacing all first-party `.dll` files with their instrumented counterparts.
 
+```mermaid
+graph TD
+    A[Target Repository] --> B(fuzz-prep-multi.py)
+    B --> C[Instrumented Docker Image]
+    B --> D[Updated docker-compose.yml]
+    C --> E[SharpFuzz coverage injected]
+```
+
 ### 3.2 Semantic Source Extraction and Grammar Compilation
 The most significant novelty in UpsideFuzz is the *Semantic Source-Aware Grammar Enhancement* (`enhance-grammar.py`). 
+
+```mermaid
+graph LR
+    A[swagger.json] --> B(compile-grammar.sh)
+    B --> C(RESTler Compiler)
+    C --> D[Raw grammar.py & dict.json]
+    
+    E[C# Source Code] --> F(enhance-grammar.py)
+    D --> F
+    F --> G[Enhanced grammar.py & dict.json]
+    
+    style F fill:#f9f,stroke:#333,stroke-width:4px
+```
 
 While RESTler compilers ingest `swagger.json` to identify endpoint structures, the Swagger definition often lacks the precision of the actual implementation. For instance, an OpenAPI spec might define a field as simply `type: string`. Our enhancer statically parses the C# source code, analyzing:
 - **Data Annotations:** Searching for attributes like `[StringLength(50)]`, `[Range(1, 100)]`, or `[RegularExpression]`.
@@ -69,6 +90,17 @@ To validate the efficacy of UpsideFuzz, we target three distinct .NET implementa
 1. **nopCommerce:** A massive, open-source e-commerce solution.
 2. **eShopOnContainers:** Microsoft's microservice reference architecture.
 3. **mpt-helpdesk:** A custom, validation-heavy enterprise API.
+
+```mermaid
+xychart-beta
+    title "Expected Edge Coverage over Time (24h)"
+    x-axis [1h, 4h, 8h, 12h, 16h, 20h, 24h]
+    y-axis "Edges Discovered" 0 --> 10000
+    line [1000, 2500, 4000, 5000, 5500, 5800, 6000]
+    line [1500, 4000, 6500, 7800, 8500, 9000, 9200]
+    %% First line is RESTler, second is UpsideFuzz (placeholder data)
+```
+*(Placeholder graph: Actual runtime data to be substituted post-evaluation).*
 
 **Experiment Design:** We will measure metrics over a 24-hour fuzzing window, comparing the standard black-box RESTler (baseline) against the full UpsideFuzz pipeline.
 
