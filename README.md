@@ -76,11 +76,7 @@ graph TD
 ```
 .
 ├── fuzz-prep-multi.py          Instrument a .NET project for fuzzing
-├── compile-grammar.sh          swagger.json → RESTler grammar → enhanced dict
-├── enhance-grammar.py          Grammar/dict enricher (called by compile-grammar.sh)
 ├── sanitize-swagger-for-restler.sh  Fix deepObject/nested params before RESTler
-├── run-void.sh         Quick launcher (host mode, HTTP coverage)
-├── run-fuzzer-docker.sh        Launcher for Docker compose sidecar mode
 │
 ├── void/
 │   ├── go/
@@ -171,7 +167,7 @@ docker compose --profile fuzz-go run --rm void \
 ```bash
 export TARGET_HOST="http://localhost:8080"
 export AUTH_TOKEN="<your-jwt-token>"
-./run-void.sh -grammar restler_output/Compile -time-budget 60
+./void/go/void -grammar restler_output/Compile -time-budget 60
 ```
 
 ### 6. Monitor crashes

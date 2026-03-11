@@ -462,8 +462,8 @@ mvpsharpfuzznet/
 ├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
 ├── compile-grammar.sh          ★ Compile swagger.json → RESTler grammar
 ├── enhance-grammar.py          ★ Post-process grammar/dict (OpenAPI + C# source constraints)
+├── sanitize-swagger-for-restler.sh   Fix deepObject/nested arrays
 ├── deploy-grammar.sh           Deploy grammar to void/
-├── run-fuzzer-docker.sh        Launch fuzzer as Docker sidecar (convenience script)
 ├── prepare-nopcommerce.sh      Bootstrap nopCommerce end-to-end
 │
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
