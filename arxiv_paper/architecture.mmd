@@ -1,0 +1,21 @@
+graph TD
+    classDef dotNet fill:#512bd4,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef python fill:#ffd43b,stroke:#306998,stroke-width:2px,color:#000;
+    classDef go fill:#00add8,stroke:#000,stroke-width:2px,color:#fff;
+    classDef output fill:#e8e8e8,stroke:#333,stroke-width:2px,color:#333;
+
+    A[".NET Source + Dockerfile"]:::dotNet -->|fuzz-prep-multi.py| B
+    B["Instrumented Copy (/shm added)"]:::dotNet -->|docker compose up| C
+    
+    swagger["swagger.json"]:::output -->|compile-grammar.sh| E
+    
+    C[("Running API + Live SHM Coverage")]:::output
+    E["grammar.py + dict.json"]:::python
+    
+    E -->|deploy-grammar.sh| F
+    C -->|Feedback Loop| F
+    
+    F{"Void Fuzzer Engine (Go)"}:::go
+    F -->|Requests + Mutations| C
+    
+    F -->|Outputs| G["unique-crashes.jsonl"]:::output

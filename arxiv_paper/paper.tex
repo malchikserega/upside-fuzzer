@@ -115,6 +115,12 @@ UpsideFuzz consists of four loosely coupled components executed in two phases: a
 
 \textbf{Fuzzing phase.} The Void execution engine (Section~\ref{sec:void}) is started alongside the instrumented application container. Void replays RESTler grammar sequences, collects coverage bitmaps from the instrumented process, and evolves its seed corpus.
 
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{architecture.pdf}}
+\caption{UpsideFuzz Architecture and End-to-End Pipeline.}
+\label{fig:architecture}
+\end{figure}
+
 % ============================================================
 \section{Automated Instrumentation Pipeline}
 \label{sec:instrumentation}
@@ -140,6 +146,12 @@ The entire preparation completes in the time required for a \texttt{docker build
 \section{Semantic Source Extraction}
 \label{sec:sse}
 % ============================================================
+
+\begin{figure}[htbp]
+\centerline{\includegraphics[width=\linewidth]{sse.pdf}}
+\caption{Semantic Source-Aware Grammar Enhancement Pipeline.}
+\label{fig:sse}
+\end{figure}
 
 \subsection{Motivation}
 When RESTler replaces a fuzzable token typed as \texttt{string}, it substitutes a value from its dictionary, typically containing only a generic placeholder such as \texttt{"fuzzstring"} or \texttt{"[FUZZ]"}. A backend validator enforcing \texttt{[StringLength(8, MinimumLength=4)]} will immediately return HTTP 400 on this input, and RESTler's dynamic feedback mechanism will record the sequence as unproductive and deprioritize it. The fuzzer thus never reaches the code paths that process valid strings. Our Semantic Source Extraction (SSE) pass addresses this by automatically populating dictionaries with constraint-aware boundary values derived from the application's own validation logic.

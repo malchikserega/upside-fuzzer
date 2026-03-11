@@ -1,0 +1,10 @@
+graph LR
+    A[swagger.json] --> B[compile-grammar.sh]
+    B --> C[RESTler Compiler]
+    C --> D[grammar.py & dict.json]
+    
+    E[C# Source Code] --> F[enhance-grammar.py]
+    D --> F
+    F --> G[Enhanced grammar.py & dict.json]
+    
+    style F fill:#f9f,stroke:#333,stroke-width:4px
