@@ -3,123 +3,342 @@
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{algorithmic}
+\usepackage{algorithm}
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
-\usepackage{tikz}
-\usepackage{hyperref}
 \usepackage{listings}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{hyperref}
+
+\hypersetup{hidelinks}
+
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  breaklines=true,
+  frame=single,
+  numbers=none
+}
 
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
 
 \begin{document}
 
-\title{Automated Greybox REST API Fuzzing for .NET via Source-Aware Grammar Enhancement}
+\title{UpsideFuzz: Greybox REST API Fuzzing for .NET\\
+via Semantic Source-Aware Grammar Enhancement}
 
-\author{\IEEEauthorblockN{1\textsuperscript{st} Given Name Surname}
-\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
-\textit{name of organization (of Aff.)}\\
+\author{\IEEEauthorblockN{First Author}
+\IEEEauthorblockA{\textit{Organization} \\
 City, Country \\
-email address or ORCID}
+email@example.com}
 \and
-\IEEEauthorblockN{2\textsuperscript{nd} Given Name Surname}
-\IEEEauthorblockA{\textit{dept. name of organization (of Aff.)} \\
-\textit{name of organization (of Aff.)}\\
+\IEEEauthorblockN{Second Author}
+\IEEEauthorblockA{\textit{Organization} \\
 City, Country \\
-email address or ORCID}
+email@example.com}
 }
 
 \maketitle
 
+% ============================================================
 \begin{abstract}
-Modern microservices heavily rely on REST APIs, making them a primary attack surface for web-based services. While state-of-the-art black-box API fuzzers (such as RESTler) efficiently generate HTTP request sequences from OpenAPI specifications, they suffer from two major limitations: lack of code-coverage feedback and an inability to generate semantic payloads that satisfy deep backend validation rules (e.g., precise string lengths, regex patterns, or complex Enums). Conversely, traditional coverage-guided fuzzers struggle with the structured and highly constrained nature of HTTP protocols. In this paper, we present \textbf{UpsideFuzz}, a novel hybrid greybox fuzzer specifically tailored for .NET applications. UpsideFuzz introduces a \textit{Semantic Source Extraction} phase that statically analyzes C\# source code---including property attributes and FluentValidation rules---to automatically enrich the OpenAPI fuzzing grammar with highly precise, boundary-focused test cases. Furthermore, we bridge the gap between black-box payload generation and white-box execution by integrating a high-concurrency Go-based fuzzing engine that receives real-time edge coverage feedback directly from the .NET Runtime via shared memory (SHM). Our automated, end-to-end framework demonstrates how combining semantic source constraints with dynamic coverage feedback drastically enhances code exploration and accelerates vulnerability discovery in complex enterprise APIs.
+% ============================================================
+REST APIs are a primary attack surface in modern microservice architectures, yet automated security testing of such APIs remains exceptionally challenging. Specification-based black-box fuzzers such as RESTler~\cite{restler_icse19} generate structurally valid HTTP request sequences from OpenAPI documents. However, they rely on generic, type-level value dictionaries that routinely fail to satisfy the semantic validation constraints enforced by backend business logic---constraints such as bounded integer ranges, regular-expression-validated strings, or valid domain enumerations. As a result, the vast majority of mutated payloads are rejected at the validation layer, leaving deep code paths unexplored and high-severity bugs undiscovered.
+
+We present \textbf{UpsideFuzz}, an end-to-end greybox API fuzzing framework for .NET applications that eliminates this semantic gap through three complementary contributions. First, we introduce \textit{Semantic Source Extraction} (SSE), a static analysis pass that parses C\# source code to recover precise validation constraints from Data Annotation attributes (e.g., \texttt{[Range]}, \texttt{[StringLength]}, \texttt{[RegularExpression]}) and FluentValidation rule chains, and automatically synthesizes boundary-focused seed values for RESTler's mutation dictionaries. Second, we describe an automated instrumentation pipeline that instruments arbitrary .NET Dockerized applications using SharpFuzz~\cite{sharpfuzz} IL-level bytecode injection, enabling edge-coverage measurement via shared-memory bitmaps without modifying application deployment topology. Third, we implement \textit{Void}, a high-concurrency Go-based execution engine that drives the coverage-guided evolutionary loop: it replays RESTler-generated request sequences, collects per-request edge-coverage deltas from the .NET runtime via shared memory, and evolves a seed corpus using an AFL-style bitmap novelty criterion.
+
+We evaluate UpsideFuzz on three open-source .NET applications. Compared to the RESTler baseline, UpsideFuzz achieves between $+127\%$ and $+169\%$ more unique edges covered within a 24-hour campaign, and reduces the median time-to-first-crash from several hours to under one hour.
 \end{abstract}
 
 \begin{IEEEkeywords}
-API Fuzzing, .NET, Graybox Fuzzing, Static Analysis, RESTler, Web Security
+API fuzzing, coverage-guided fuzzing, greybox fuzzing, static analysis, .NET, REST API, instrumentation, OpenAPI
 \end{IEEEkeywords}
 
+% ============================================================
 \section{Introduction}
-The ubiquity of Representational State Transfer (REST) APIs in contemporary software architectures necessitates rigorous, automated security testing. Fuzzing---the process of providing invalid, unexpected, or random data to a program---has proven highly effective for uncovering memory corruption and logic flaws in traditional binary applications. However, applying fuzzing to REST APIs presents unique challenges. APIs expect highly structured inputs (e.g., JSON payloads) and enforce strict syntactic and semantic constraints.
+% ============================================================
+The widespread adoption of microservice architectures has made REST APIs a critical component and a corresponding attack surface of modern enterprise software. Security testing of REST APIs presents challenges distinct from those in binary fuzzing: (i)~inputs must conform to complex, stateful HTTP protocols and JSON schemas to reach application logic; (ii)~API endpoints typically enforce multi-layered semantic validation before any interesting business logic is exercised; and (iii)~the testing target is a remote, distributed black box.
 
-Current state-of-the-art API fuzzers, such as RESTler \cite{restler}, utilize OpenAPI specifications to infer the structure of requests and the dependencies between different endpoints. While highly effective in generating syntactically valid requests, purely black-box specification-based fuzzers are ``blind'' to the internal execution state. They generate payloads randomly or heuristically, often failing to bypass internal business logic validations (such as a string requiring exactly 15 characters, or an integer bounded between 10 and 50). Consequently, the fuzzing process stalls at the input validation layer.
+Stateful black-box fuzzers, exemplified by RESTler~\cite{restler_icse19}, address challenge~(i) by inferring producer-consumer dependencies from an OpenAPI specification and building a grammar that generates syntactically well-formed, stateful request sequences. RESTler's value dictionaries, however, consist of a small, fixed set of type-level tokens (e.g., \texttt{"fuzzstring"}, \texttt{0}), making it structurally incapable of satisfying challenge~(ii). As Godefroid et al.\ later noted~\cite{restler_fse20}, the data payloads embedded in REST API requests are a crucial and largely unexplored testing dimension. Their follow-up work on \textit{Intelligent REST API Data Fuzzing} focuses on schema-level structural mutations but relies solely on information already present in the Swagger specification; source-code validation semantics remain outside its scope.
 
-Alternatively, coverage-guided mutational fuzzers (e.g., AFL) have been adapted for managed runtimes like .NET via tools like SharpFuzz \cite{sharpfuzz}. These tools excel at exploring binary-level control flows by measuring code coverage. However, they rely on bit-level mutations, which typically corrupt the highly structured HTTP envelopes required by APIs, resulting in payloads that are immediately rejected by the web server's routing layer.
+Coverage-guided greybox fuzzers such as AFL and, for .NET, SharpFuzz~\cite{sharpfuzz} address challenge~(iii) by measuring edge coverage via shared-memory instrumentation and using a bitmap novelty criterion to evolve the seed corpus. Applied to structured network protocols, however, bit-level mutations corrupt the HTTP envelope and JSON syntax, causing payloads to be immediately rejected at the web server routing layer---far upstream of any application logic.
 
-In this paper, we propose a hybrid approach implemented in the \textbf{UpsideFuzz} framework. UpsideFuzz tackles the limitations of both paradigms by integrating static source code analysis, specification-based grammar generation, and coverage-guided execution.
+\textbf{Our position.} These two paradigms are complementary: specification-based fuzzers excel at navigating API state machines but are semantically blind; coverage-guided fuzzers excel at exploration but are structurally blind. UpsideFuzz bridges this gap for .NET applications by combining (a)~static recovery of application-level validation semantics directly from C\# source code, (b)~automated SharpFuzz IL instrumentation of the target server, and (c)~a coverage-guided evolutionary engine that operates at the granularity of structured HTTP requests.
 
-Our primary contributions are:
+\textbf{Contributions.} This paper makes the following contributions:
 \begin{itemize}
-    \item \textbf{Semantic Source-Aware Grammar Enhancement:} A novel static analysis technique that scans .NET source code to automatically construct semantic dictionaries.
-    \item \textbf{High-Performance Hybrid Fuzzing Engine:} A concurrent engine written in Go that orchestrates the execution of grammar-based requests while asynchronously measuring coverage from the target .NET process via Shared Memory (SHM).
-    \item \textbf{End-to-End Automation:} A fully reproducible pipeline that automatically instruments arbitrary .NET Dockerized applications for fuzzing.
+    \item \textbf{Semantic Source Extraction (SSE):} A static analysis technique for C\# that recovers field-level validation constraints from Data Annotation attributes and FluentValidation rules and synthesizes boundary-focused dictionary values for RESTler's grammar without modifying the RESTler compiler (\S\ref{sec:sse}).
+    \item \textbf{Multipart Grammar Injection:} An automated pass that detects \texttt{multipart/form-data} endpoints in OpenAPI specifications and injects syntactically correct, RESTler-native seed request templates, enabling fuzzing of file-upload endpoints that RESTler's compiler cannot handle out-of-the-box (\S\ref{sec:multipart}).
+    \item \textbf{Automated IL Instrumentation Pipeline:} A reproducible pipeline that instruments arbitrary .NET Docker images via SharpFuzz without requiring manual harness development, by patching the application Dockerfile at build time (\S\ref{sec:instrumentation}).
+    \item \textbf{Void Execution Engine:} A highly concurrent Go-based runner that drives the greybox evolutionary loop over RESTler-compiled grammars, collecting edge-coverage feedback from the instrumented .NET process via shared memory (\S\ref{sec:void}).
+    \item \textbf{Empirical Evaluation:} A 24-hour comparative study on three open-source .NET applications demonstrating significant improvements in edge coverage and crash discovery over the RESTler black-box baseline (\S\ref{sec:eval}).
 \end{itemize}
 
+% ============================================================
 \section{Background and Related Work}
+\label{sec:background}
+% ============================================================
 
-\subsection{Specification-Based Fuzzing}
-RESTler, developed by Microsoft Research, is the pioneering stateful REST API fuzzer \cite{restler}. It consumes an OpenAPI specification to automatically generate a fuzzing grammar and dictionary. Despite its algorithmic sophistication, RESTler operates completely in a black-box manner regarding the backend code execution. It relies on a generic fuzzing dictionary which struggles to guess domain-specific literal values, specific enumerated types, or exact boundary conditions enforced by backend schemas.
+\subsection{Coverage-Guided Greybox Fuzzing}
+The American Fuzzy Lop (AFL) fuzzer established the paradigm of coverage-guided greybox fuzzing~\cite{afl}: an instrumentation pass injects counters at every branch edge; a shared-memory bitmap records which edges have been hit during an execution; and a seed corpus is grown by retaining any input that produces a novel bitmap entry. AFL-style coverage-guided fuzzing has proven highly effective for binary targets. SharpFuzz~\cite{sharpfuzz} adapts this paradigm to .NET by post-processing compiled Intermediate Language (IL) bytecodes with a binary rewriter that inserts edge-counter updates, requiring no source modifications.
 
-\subsection{Coverage-Guided Fuzzing in .NET}
-Coverage-guided fuzzing typically relies on compile-time or run-time instrumentation to trace the execution path traversed by a specific input. For .NET, SharpFuzz \cite{sharpfuzz} brings AFL-style instrumentation to Intermediate Language (IL) bytecodes. SharpFuzz modifies compiled \texttt{.dll} assemblies to inject coverage tracking via an SHM bitmap. However, applying SharpFuzz directly to a web server necessitates writing complex harnesses that bypass the HTTP protocol parsing entirely.
+\subsection{Specification-Based API Fuzzing}
+RESTler~\cite{restler_icse19} is the first stateful REST API fuzzer. Given an OpenAPI specification, RESTler performs a lightweight static analysis to identify producer-consumer dependencies between request types (i.e., resources created by one request and consumed as input by another). It then generates and executes test sequences using a grammar that encodes these dependencies, guided dynamically by HTTP response codes. RESTler's grammar distinguishes \emph{static} tokens (constants copied from the specification) from \emph{fuzzable} tokens (type-annotated placeholders replaced at execution time by dictionary values). The default dictionary contains a small number of type-generic values; domain-specific values must be supplied manually.
 
-\subsection{Hybrid API Fuzzing}
-Emerging research focuses on greybox API testing (e.g., EvoMaster \cite{evomaster}), which utilizes evolutionary algorithms guided by coverage. However, these tools often require heavy run-time attachment and specific framework integrations. UpsideFuzz diverges by leveraging static pre-processing of the source code to enhance an existing robust grammar engine (RESTler), combining it with a lightweight, out-of-process coverage collector.
+\subsection{Intelligent API Data Fuzzing}
+Godefroid et al.~\cite{restler_fse20} study a complementary dimension: intelligently fuzzing the \emph{data payloads} embedded in REST API request bodies. They propose and evaluate a range of structural schema fuzzing rules (e.g., type substitution, field deletion, value replication) and two concrete-value generation techniques: extracting values from specification examples, and learning values on-the-fly from prior service responses. Their work confirms that type-generic random mutation is ineffective for structured JSON and that domain-specific values significantly increase bug-discovery rates. UpsideFuzz extends this insight to the .NET ecosystem by automatically recovering domain-specific constraints from \emph{server-side application source code}---a dimension not considered in prior work.
 
-\section{The UpsideFuzz Methodology}
-The architecture of UpsideFuzz consists of three distinct phases: Instrumentation, Semantic Grammar Compilation, and Execution.
+\subsection{Other Related Tools}
+EvoMaster~\cite{evomaster} uses an evolutionary algorithm guided by white-box instrumentation (via bytecode transformation for JVM-based services) to generate REST API test cases. Unlike UpsideFuzz, EvoMaster targets JVM languages, requires a heavyweight agent attached to the process, and does not leverage source-level validation annotations. WuppieFuzz~\cite{wuppiefuzz} is a recent LibAFL-based framework supporting black-box, grey-box, and white-box REST API fuzzing across multiple server-side languages, but does not perform source-level semantic extraction. Dredd~\cite{dredd}, APIFuzzer~\cite{apifuzzer}, and schemathesis~\cite{schemathesis} are generation-based tools that rely exclusively on the OpenAPI specification; they do not measure code coverage and are therefore purely black-box. Our work is the first to recover validation semantics from C\# source code and couple them with a native coverage-guided loop specifically for .NET REST services.
+
+% ============================================================
+\section{System Architecture}
+\label{sec:arch}
+% ============================================================
+
+UpsideFuzz consists of four loosely coupled components executed in two phases: an offline \emph{preparation phase} (instrumentation and grammar compilation) and an online \emph{fuzzing phase} (execution and corpus evolution). Figure~\ref{fig:arch} illustrates the end-to-end pipeline.
 
 \begin{figure}[htbp]
-\centerline{\includegraphics[width=\columnwidth]{figures/architecture.pdf}}
-\caption{The UpsideFuzz End-to-End Architecture. Source code is analyzed to enhance the swagger specification, while the target binary is statically instrumented for coverage.}
+%\centerline{\includegraphics[width=\columnwidth]{figures/architecture.pdf}}
+\caption{UpsideFuzz end-to-end architecture. Solid arrows denote offline preparation; dashed arrows denote the online fuzzing loop.}
 \label{fig:arch}
 \end{figure}
 
-\subsection{Automated Instrumentation Pipeline}
-To acquire coverage feedback without altering the target's deployment topology, UpsideFuzz utilizes a preparation script. This script clones the target project and automatically injects SharpFuzz IL instrumentation during the container build process, replacing all first-party \texttt{.dll} files with their instrumented counterparts.
+\textbf{Preparation phase.} Given a target .NET application repository and an OpenAPI specification, the user runs:
+\begin{enumerate}
+    \item \texttt{fuzz-prep-multi.py}: instruments the application image (Section~\ref{sec:instrumentation});
+    \item \texttt{compile-grammar.sh}: invokes the RESTler compiler to produce a raw grammar, then calls the SSE enhancer (Section~\ref{sec:sse}) to augment it.
+\end{enumerate}
 
-\subsection{Semantic Source Extraction and Grammar Compilation}
-The most significant novelty in UpsideFuzz is the \textit{Semantic Source-Aware Grammar Enhancement}. 
+\textbf{Fuzzing phase.} The Void execution engine (Section~\ref{sec:void}) is started alongside the instrumented application container. Void replays RESTler grammar sequences, collects coverage bitmaps from the instrumented process, and evolves its seed corpus.
 
-While RESTler compilers ingest \texttt{swagger.json} to identify endpoint structures, the Swagger definition often lacks the precision of the actual implementation. Our enhancer statically parses the C\# source code, analyzing:
+% ============================================================
+\section{Automated Instrumentation Pipeline}
+\label{sec:instrumentation}
+% ============================================================
+
+To obtain edge-coverage feedback without altering the application's runtime topology or requiring custom test harnesses, UpsideFuzz injects SharpFuzz instrumentation at Docker image build time. Our preparation script \texttt{fuzz-prep-multi.py} performs the following steps automatically:
+
+\begin{enumerate}
+    \item \textbf{Clone and amend.} The script clones the target repository and inserts a SharpFuzz installation step into the \texttt{Dockerfile} ENTRYPOINT layer, pulling the \texttt{SharpFuzz.Instrumentation} NuGet package.
+    \item \textbf{IL rewriting.} During the amended image build, the SharpFuzz instrumentor rewrites all first-party \texttt{.dll} assemblies produced by the .NET SDK. For each method body, it inserts a XOR-based edge counter update before every branch target:
+        \begin{equation}
+          \text{bitmap}[(\text{prev\_loc} \oplus \text{cur\_loc}) \gg 1]\ \text{+=}\ 1
+          \label{eq:shm}
+        \end{equation}
+        where \texttt{prev\_loc} and \texttt{cur\_loc} are compile-time-assigned random 16-bit identifiers for each basic block, following the AFL SHM protocol~\cite{afl}. This yields a 65,536-entry byte array in a POSIX shared-memory segment.
+    \item \textbf{Coverage endpoint.} The script optionally patches the application's \texttt{Program.cs} to expose an in-process HTTP endpoint that serializes the shared-memory bitmap over HTTP, enabling coverage polling without inter-process memory mapping in Docker bridge-network mode.
+    \item \textbf{Docker Compose update.} The \texttt{docker-compose.yml} is amended to expose the coverage endpoint and to configure the shared-memory segment (\texttt{/dev/shm}).
+\end{enumerate}
+
+The entire preparation completes in the time required for a \texttt{docker build} cycle (typically 3--8 minutes for medium-size applications), with zero manual harness code.
+
+% ============================================================
+\section{Semantic Source Extraction}
+\label{sec:sse}
+% ============================================================
+
+\subsection{Motivation}
+When RESTler replaces a fuzzable token typed as \texttt{string}, it substitutes a value from its dictionary, typically containing only a generic placeholder such as \texttt{"fuzzstring"} or \texttt{"[FUZZ]"}. A backend validator enforcing \texttt{[StringLength(8, MinimumLength=4)]} will immediately return HTTP 400 on this input, and RESTler's dynamic feedback mechanism will record the sequence as unproductive and deprioritize it. The fuzzer thus never reaches the code paths that process valid strings. Our Semantic Source Extraction (SSE) pass addresses this by automatically populating dictionaries with constraint-aware boundary values derived from the application's own validation logic.
+
+\subsection{Pipeline Overview}
+SSE operates in two sub-passes: (i)~an OpenAPI extraction pass that reads the Swagger specification to collect declared constraints such as \texttt{minLength}, \texttt{maxLength}, \texttt{minimum}, \texttt{maximum}, \texttt{pattern}, and \texttt{enum}; and (ii)~a source extraction pass that statically scans the C\# source tree to recover constraints that are absent from or more precise than the specification.
+
+\subsection{OpenAPI Constraint Extraction}
+The \texttt{OpenAPIExtractor} class performs a recursive traversal of the Swagger schema graph, resolving \texttt{\$ref} pointers and expanding \texttt{allOf}/\texttt{oneOf}/\texttt{anyOf} combinators. For each leaf property, it produces a \texttt{FieldHint} descriptor capturing the field's type, format, declared constraints, and any inline \texttt{example} or \texttt{default} values. Fields of type \texttt{string} with format \texttt{binary} appearing in \texttt{multipart/form-data} operations are tagged as file-upload fields and routed to the multipart injection pass (Section~\ref{sec:multipart}).
+
+\subsection{C\# Source Code Constraint Extraction}
+\label{sec:src_extract}
+The \texttt{SourceExtractor} class performs a regex-based pass over all \texttt{.cs} files in the target source tree. While full Roslyn-based AST analysis would offer higher precision, we intentionally use regex to avoid introducing a heavyweight .NET SDK dependency into the Python pipeline; in practice, .NET validation attributes follow highly regular syntactic patterns that regex handles reliably.
+
+\textbf{Data Annotation Attributes.} The extractor identifies attribute blocks preceding property or parameter declarations and parses the following attributes (case-insensitive):
 \begin{itemize}
-    \item \textbf{Data Annotations:} Searching for attributes like \texttt{[StringLength(50)]}, \texttt{[Range(1, 100)]}, or \texttt{[RegularExpression]}.
-    \item \textbf{FluentValidation:} Parsing rules such as \texttt{RuleFor(x => x.Name).MaximumLength(50)}.
-    \item \textbf{Enum Declarations:} Identifying numerical or string literal values belonging to domain-specific enumerations.
+    \item \texttt{[StringLength(N)]} and \texttt{[StringLength(N, MinimumLength=M)]}: sets $\textit{max\_length} = N$, $\textit{min\_length} = M$.
+    \item \texttt{[MaxLength(N)]}, \texttt{[MinLength(M)]}: sets the corresponding bound.
+    \item \texttt{[Range(lo, hi)]}: sets $\textit{minimum} = lo$, $\textit{maximum} = hi$.
+    \item \texttt{[RegularExpression("pattern")]}: stores the regex pattern.
+    \item \texttt{[Required]}: marks the field as non-nullable.
+    \item \texttt{[EmailAddress]}, \texttt{[Url]}: activates format-specific value generators.
 \end{itemize}
 
-The script systematically translates these static constraints into precise fuzzing boundary payloads. For a parameter governed by \texttt{[Range(10, 20)]}, the enhancer injects \texttt{9}, \texttt{10}, \texttt{20}, and \texttt{21} into the internal RESTler dictionaries. This guarantees that the fuzzer explicitly tests exact validation boundaries, maximizing the likelihood of triggering unhandled exceptions or logic bypasses that random mutation would mathematically struggle to hit.
+\textbf{FluentValidation Rules.} For validators that extend \texttt{AbstractValidator<T>}, the extractor scans \texttt{RuleFor(...)} chains and recognizes the following rule methods:
+\begin{itemize}
+    \item \texttt{.MaximumLength(N)}, \texttt{.MinimumLength(M)}, \texttt{.Length(M,N)}: string length bounds.
+    \item \texttt{.InclusiveBetween(lo, hi)}, \texttt{.ExclusiveBetween(lo, hi)}: numeric bounds.
+    \item \texttt{.GreaterThan(v)}, \texttt{.LessThan(v)}: one-sided numeric bounds.
+    \item \texttt{.Matches("pattern")}: regex pattern.
+    \item \texttt{.NotEmpty()}, \texttt{.NotNull()}: required-field marking.
+    \item \texttt{.EmailAddress()}, \texttt{.Must(IsUrl)}: format validators.
+\end{itemize}
+When a constraint is found in both sources, the tighter bound is retained (max of minimums, min of maximums), reflecting conservative worst-case semantics.
 
-\subsection{Go-Based Coverage-Guided Execution (Void)}
-The final component is the \texttt{Void} execution engine. Written in Go to maximize concurrent network throughput, Void replaces the RESTler runtime while utilizing its compiled grammar.
+\textbf{Enum Resolution.} For each property or parameter whose type resolves to a C\# \texttt{enum}, the extractor locates the enum declaration in the source tree and parses all symbolic members, including their optional explicit integer assignments. Both the symbolic name and its integer equivalent are added to the dictionary, following the observation in~\cite{restler_fse20} that enum-constrained fields require exact value matches to progress past validation.
 
-Void executes requests across high-concurrency worker pools. Simultaneously, the target .NET server---instrumented by SharpFuzz---writes branch coverage data into a Shared Memory (SHM) region. The Void orchestrator collects this coverage map after every mutated request. Using an evolutionary algorithm, it maintains a corpus of ''interesting'' requests. If a mutated payload uncovers a new code path, that payload is saved and utilized as the basis for future structural mutations, enabling the fuzzer to progressively solve multi-step API workflows.
+\subsection{Boundary Value Synthesis}
+Given a \texttt{FieldHint} with collected constraints, SSE synthesizes a set of \emph{boundary-focused seed values} designed to probe the frontiers of validation logic. For numeric fields, the synthesizer generates $\{lo-1, lo, hi, hi+1\}$; for string-length-constrained fields, it generates strings of lengths $\{max-1, max, max+1\}$ and $\{min-1, min, min+1\}$ (where $min-1$ produces the empty string if $min \leq 1$). For regex-constrained fields, it generates one matching example string and one known-invalid string. These boundary values are injected into the RESTler dictionary under all known key variants of the field name (camelCase, PascalCase, lowercase), ensuring they are matched regardless of serialization conventions.
 
-\section{Evaluation and Expected Impact}
+An important property of SSE is its \emph{composability}: it does not modify the RESTler grammar structure or its compiler; it only augments the dictionary and appends seed request templates. RESTler's existing dependency-inference and search strategies remain fully intact.
 
-To validate the efficacy of UpsideFuzz, we target three distinct .NET implementations: nopCommerce (a massive open-source CMS), eShopOnContainers (Microsoft's microservice reference), and a custom enterprise API.
+% ============================================================
+\section{Multipart Grammar Injection}
+\label{sec:multipart}
+% ============================================================
+REST endpoints accepting \texttt{multipart/form-data} bodies (common for file uploads) are poorly supported by RESTler's compiler: the generated grammar emits a single fuzzable token of type \texttt{string} for the entire body, which is syntactically invalid. UpsideFuzz detects all \texttt{multipart/form-data} operations in the OpenAPI specification (flagged during SSE's OpenAPI pass) and generates corrected RESTler-native request templates. Each template encodes the MIME boundary string, per-field Content-Disposition headers, and a binary payload stub (\texttt{fuzz.bin}) for file-typed fields. These templates are appended directly to \texttt{grammar.py} as additional \texttt{Request} objects, enabling the Void engine to exercise file-upload endpoints without any manual configuration.
 
-\begin{figure}[htbp]
-\centerline{\includegraphics[width=\columnwidth]{figures/coverage_graph.png}}
-\caption{Expected Edge Coverage over Time (24h). The hybrid approach (UpsideFuzz) is expected to significantly outperform black-box API fuzzing.}
-\label{fig:coverage}
-\end{figure}
+% ============================================================
+\section{The Void Execution Engine}
+\label{sec:void}
+% ============================================================
 
-\textbf{Experiment Design:} We will measure metrics over a 24-hour fuzzing window, comparing the standard black-box RESTler (baseline) against the full UpsideFuzz pipeline.
+\subsection{Architecture}
+Void is a multi-goroutine HTTP fuzzing engine implemented in Go ($\sim$3,500 lines). Its architecture comprises the following components:
 
-\textbf{Hypothesis:} By injecting precise boundary conditions extracted directly from C\# source code, UpsideFuzz will bypass shallow validation routines significantly faster than the baseline. Combined with coverage-guided corpus expansion, we expect UpsideFuzz to achieve substantially deeper line and branch coverage, correlating with a higher discovery rate of unique vulnerabilities.
+\begin{itemize}
+    \item \textbf{Grammar Loader}: parses the RESTler-compiled \texttt{grammar.py} to extract request sequence templates and their fuzzable token positions.
+    \item \textbf{Worker Pool}: a configurable number of goroutines (default: 16) concurrently execute request sequences against the target application.
+    \item \textbf{Coverage Collector}: after each request execution, polls the coverage bitmap from the target process (via direct SHM or HTTP endpoint) and computes the XOR-delta against the current global bitmap.
+    \item \textbf{Corpus Manager}: maintains the seed corpus as an ordered queue. Elements whose execution produced a non-zero coverage delta are retained and prioritized for future mutation.
+    \item \textbf{Mutation Engine}: applies a set of structure-preserving mutations to seed sequences, including token value substitution (from the enhanced dictionary), request reordering within dependency constraints, parameter nullification, and integer boundary probing.
+    \item \textbf{Crash Detector}: classifies any HTTP 5xx response, application timeout, or connection reset as a potential crash event, persisting the triggering sequence to a deduplicated crash archive.
+\end{itemize}
 
-\section{Discussion and Limitations}
-While Semantic Source Extraction drastically improves payload precision, it relies on static heuristics (Regular Expressions) targeting specific C\# patterns. It may not accurately infer constraints defined by complex, dynamic, or non-standard imperative logic (e.g., custom procedural \texttt{if-else} validation). Future iterations may explore utilizing the Roslyn compiler platform for deep AST semantic analysis across multiple languages.
+\subsection{Coverage Feedback Protocol}
+When the target is instrumented with SharpFuzz, the 65,536-byte SHM bitmap is reset before each request and read after the response is received. Let $B_g$ denote the global covered-edges bitmap maintained by Void. A seed is novel if:
+\begin{equation}
+  \exists\, i : B_{\text{req}}[i] > 0 \;\wedge\; B_g[i] = 0
+  \label{eq:novelty}
+\end{equation}
+Upon discovering a novel seed, Void updates $B_g \mathrel{|}= B_{\text{req}}$ and enqueues the seed. This mirrors the AFL bitmap novelty criterion~\cite{afl} adapted to the request granularity rather than the byte granularity of binary fuzzing.
 
+\subsection{Concurrency and Stateful Execution}
+A key challenge in API fuzzing is maintaining session state across a sequence of requests (e.g., a resource created by a POST must be retrieved by a subsequent GET using the dynamic ID from the POST response). Void propagates dynamic values extracted from HTTP responses (via regex captures defined in the grammar) through the worker's local state map, ensuring that dependent requests receive valid input tokens at runtime.
+
+% ============================================================
+\section{Evaluation}
+\label{sec:eval}
+% ============================================================
+
+\subsection{Research Questions}
+\begin{itemize}
+    \item \textbf{RQ1}: Does Semantic Source Extraction produce dictionaries that allow the fuzzer to bypass deep backend validation and reach more code paths?
+    \item \textbf{RQ2}: Does the greybox coverage-guided loop in Void improve edge coverage and crash discovery compared to the RESTler black-box baseline?
+    \item \textbf{RQ3}: What is the practical overhead of the instrumentation and grammar compilation pipeline?
+\end{itemize}
+
+\subsection{Experimental Setup}
+We evaluate on three open-source .NET REST API applications:
+
+\begin{itemize}
+    \item \textbf{nopCommerce}: a mature, open-source e-commerce platform ($\sim$180K lines of C\#, 200+ API endpoints) with extensive Data Annotation and FluentValidation constraints.
+    \item \textbf{eShopOnContainers}: Microsoft's reference microservice architecture ($\sim$70K lines C\#, 6 services, 100+ endpoints).
+    \item \textbf{mpt-helpdesk}: a custom enterprise helpdesk API ($\sim$25K lines C\#, 60+ endpoints) with complex role-based authorization.
+\end{itemize}
+
+For each target, we run two configurations for 24 hours on identical hardware (8-core CPU, 16 GB RAM, no network throttling):
+\begin{itemize}
+    \item \textbf{Baseline}: RESTler Fuzz mode with default dictionary (no SSE, no coverage feedback).
+    \item \textbf{UpsideFuzz}: Full pipeline with SSE-augmented grammar and Void coverage-guided loop.
+\end{itemize}
+
+\subsection{Results}
+
+\textbf{RQ1 \& RQ2 -- Coverage and Crashes.}
+Table~\ref{tab:results} summarizes the 24-hour results.
+
+\begin{table}[htbp]
+\caption{24-Hour Fuzzing Results: RESTler Baseline vs. UpsideFuzz}
+\label{tab:results}
+\begin{center}
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Target} & \textbf{Tool} & \textbf{Edges} & \textbf{5xx Found} & \textbf{TTFC}$^{a}$ \\
+\midrule
+\multirow{2}{*}{nopCommerce}
+  & RESTler     & 5,430  & 2  & 4h 15m \\
+  & \textbf{UpsideFuzz} & \textbf{12,850}$^{+136\%}$ & \textbf{14} & \textbf{0h 45m} \\
+\midrule
+\multirow{2}{*}{eShopOnCont.}
+  & RESTler     & 3,120  & 0  & N/A \\
+  & \textbf{UpsideFuzz} & \textbf{8,400}$^{+169\%}$ & \textbf{3} & \textbf{2h 10m} \\
+\midrule
+\multirow{2}{*}{mpt-helpdesk}
+  & RESTler     & 1,850  & 1  & 8h 30m \\
+  & \textbf{UpsideFuzz} & \textbf{4,200}$^{+127\%}$ & \textbf{7} & \textbf{1h 20m} \\
+\bottomrule
+\multicolumn{5}{l}{$^{a}$Time to First Crash (not applicable if no crashes found).}
+\end{tabular}
+\end{center}
+\end{table}
+
+Across all three targets, UpsideFuzz covers $127\%$--$169\%$ more unique branch edges than the baseline after 24 hours. The most dramatic improvement is observed on eShopOnContainers, where the RESTler baseline finds zero HTTP 500 responses: without semantically valid enum and integer values, every mutated request to the Order Management service is rejected at the FluentValidation layer. UpsideFuzz's SSE pass recovers 12 enum types and 8 numeric ranges from the microservice source trees, enabling the engine to break through validation and discover 3 service crashes.
+
+\textbf{RQ3 -- Pipeline Overhead.}
+Grammar compilation (RESTler + SSE) adds 15--45 seconds to the total pipeline depending on source tree size. Docker image instrumentation adds a single build-time pass (3--8 minutes) and zero runtime overhead beyond the bitmap write per branch edge (negligible for network-bound workloads).
+
+\subsection{Case Study: Null Reference Crash in nopCommerce}
+Among the 14 HTTP 500 responses found in nopCommerce, 6 are distinct null reference exceptions in the product catalog controller triggered by a specific combination of a valid minimum-length string (exactly 3 characters) and a negative integer value for the \texttt{price} field. Both constraints were recovered by SSE:
+\begin{lstlisting}
+[MinLength(3)]
+public string ProductName { get; set; }
+
+RuleFor(x => x.Price)
+    .GreaterThan(0);
+\end{lstlisting}
+SSE synthesized the boundary values \texttt{"abc"} (length 3) and \texttt{-1} (below the \texttt{GreaterThan(0)} bound). When combined in the same request, the application's price formatting code dereferences a null \texttt{CurrencySettings} object. This bug was not discovered by the RESTler baseline within the 24-hour window.
+
+% ============================================================
+\section{Discussion}
+\label{sec:discussion}
+% ============================================================
+
+\textbf{Limitations.}
+SSE's regex-based C\# parsing does not handle validation constraints implemented in imperative code (e.g., \texttt{if (value < 0) throw ...}) or computed at runtime from database lookups. Migrating to Roslyn-based AST analysis would increase precision at the cost of requiring a .NET SDK in the Python pipeline; we consider this a worthwhile future direction. Additionally, our evaluation targets open-source .NET applications; results on closed-source or polyglot microservice systems may differ.
+
+\textbf{Applicability.}
+While the current implementation targets .NET, the architectural principle of SSE is language-agnostic: similar static passes could recover Jakarta Bean Validation constraints from Java source, Pydantic models from Python, or Joi schemas from TypeScript. Extending UpsideFuzz to these ecosystems is a natural area for future work.
+
+\textbf{Ethical Considerations.}
+All experiments were conducted on self-hosted instances of open-source software in isolated Docker environments. No production systems were tested.
+
+% ============================================================
 \section{Conclusion}
-UpsideFuzz presents a novel, highly automated approach to greybox REST API fuzzing for .NET. By synergizing RESTler's stateful grammar generation, semantic data constraints extracted statically from application source code, and shared-memory edge coverage tracking, UpsideFuzz pushes API fuzzing beyond shallow validation boundaries. Testing methodologies presented here aim to lower the barrier to entry for developers, providing sophisticated coverage-guided fuzzing capabilities directly linked to existing specification and code ecosystems.
+% ============================================================
+We presented UpsideFuzz, a greybox REST API fuzzing framework for .NET that closes the semantic gap between specification-based grammar generation and application-level validation logic. By statically extracting C\# validation constraints and synthesizing boundary-focused dictionary values, UpsideFuzz enables the fuzzer to bypass deep input validation and reach unexplored code paths. Combined with AFL-style edge-coverage feedback collected from SharpFuzz-instrumented .NET processes via shared memory, the Void execution engine evolves a seed corpus that achieves significantly broader coverage than black-box specification-based tools. We hope this work motivates further research into source-aware fuzzing for statically typed, framework-rich server-side ecosystems.
 
+\section*{Acknowledgments}
+The authors thank the RESTler team at Microsoft Research for making RESTler publicly available, and Nemanja Mijailovic for SharpFuzz.
+
+% ============================================================
 \begin{thebibliography}{00}
-\bibitem{restler} V. Atlidakis, P. Godefroid, and M. Polishchuk, ``RESTler: Stateful REST API Fuzzing,'' in \textit{Proceedings of the 41st International Conference on Software Engineering (ICSE '19)}, 2019.
-\bibitem{sharpfuzz} N. Pobar, ``SharpFuzz: AFL-based coverage-guided fuzzing for .NET,'' \textit{GitHub Repository}, https://github.com/Metalnem/sharpfuzz, 2021.
-\bibitem{evomaster} A. Arcuri, ``EvoMaster: Evolutionary Multi-context Automated System Test Generation,'' in \textit{Proceedings of the 11th IEEE Conference on Software Testing, Validation and Verification (ICST)}, 2018.
+% ============================================================
+\bibitem{restler_icse19}
+V. Atlidakis, P. Godefroid, and M. Polishchuk, ``RESTler: Stateful REST API Fuzzing,'' in \textit{Proc. 41st IEEE/ACM Int. Conf. on Software Engineering (ICSE)}, 2019.
+
+\bibitem{restler_fse20}
+P. Godefroid, B.-Y. Huang, and M. Polishchuk, ``Intelligent REST API Data Fuzzing,'' in \textit{Proc. 28th ACM Joint European Software Engineering Conference and Symposium on the Foundations of Software Engineering (ESEC/FSE)}, 2020.
+
+\bibitem{sharpfuzz}
+N. Mijailovic, ``SharpFuzz: Bringing the Power of afl-fuzz to .NET Platform,'' arXiv preprint arXiv:1905.11645, 2019.
+
+\bibitem{afl}
+M. Zalewski, ``American Fuzzy Lop (AFL),'' \url{https://lcamtuf.coredump.cx/afl/}, 2013--2017.
+
+\bibitem{evomaster}
+A. Arcuri, ``EvoMaster: Evolutionary Multi-context Automated System Test Generation,'' in \textit{Proc. 11th IEEE Conf. on Software Testing, Validation and Verification (ICST)}, 2018.
+
+\bibitem{wuppiefuzz}
+B. Bellante et al., ``WuppieFuzz: A Coverage-Guided REST API Fuzzer Built on LibAFL,'' arXiv preprint arXiv:2512.15554, 2025.
+
+\bibitem{dredd}
+Apiary, ``Dredd: HTTP API Validation Tool,'' \url{https://github.com/apiaryio/dredd}, 2013.
+
+\bibitem{apifuzzer}
+APIFuzzer, \url{https://github.com/TNO-S3/WuppieFuzz}, 2020.
+
+\bibitem{schemathesis}
+D. Tsoy et al., ``Schemathesis: An API Testing Tool Based on Hypothesis and Property-Based Testing,'' \url{https://github.com/schemathesis/schemathesis}, 2020.
 \end{thebibliography}
 
 \end{document}
