@@ -101,7 +101,6 @@ graph TD
 │   └── instrumentor.csproj
 │
 ├── requirements.txt            Python dependencies
-├── nuget.config
 ├── INSTRUCTIONS.md             Step-by-step runbook (new system → fuzzing)
 └── ARCHITECTURE.md             Platform internals, diagrams, design decisions
 ```

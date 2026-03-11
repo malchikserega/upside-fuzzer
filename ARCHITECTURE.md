@@ -465,7 +465,6 @@ mvpsharpfuzznet/
 ├── deploy-grammar.sh           Deploy grammar to void/
 ├── run-fuzzer-docker.sh        Launch fuzzer as Docker sidecar (convenience script)
 ├── prepare-nopcommerce.sh      Bootstrap nopCommerce end-to-end
-├── nuget.config                NuGet config for instrumentor builds
 │
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
 ├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
