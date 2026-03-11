@@ -201,7 +201,12 @@ type MutationCategory struct {
 }
 
 // mutationCategories is the global registry. Initialized once in init().
-var mutationCategories []*MutationCategory
+// mutCatMu protects all reads/writes to mutationCategories fields (Hits, Attempts, Weight),
+// which are accessed concurrently from worker goroutines and the main scheduling loop.
+var (
+	mutationCategories []*MutationCategory
+	mutCatMu           sync.Mutex
+)
 
 func init() {
 	mutationCategories = []*MutationCategory{
@@ -314,6 +319,8 @@ func init() {
 // pickMutationCategory selects a category using MOpt-style weighted random.
 // Categories that find more coverage edges get higher selection probability.
 func pickMutationCategory() *MutationCategory {
+	mutCatMu.Lock()
+	defer mutCatMu.Unlock()
 	total := 0.0
 	for _, c := range mutationCategories {
 		total += c.Weight
@@ -336,6 +343,8 @@ func pickMutationCategory() *MutationCategory {
 // weight = base + bonus * (hits / attempts), so productive categories
 // get up to 3x their base weight.
 func updateMutationCategoryWeights() {
+	mutCatMu.Lock()
+	defer mutCatMu.Unlock()
 	for _, c := range mutationCategories {
 		if c.Attempts == 0 {
 			continue
@@ -347,6 +356,8 @@ func updateMutationCategoryWeights() {
 
 // recordMutationCategoryHit is called when a mutation label finds new edges.
 func recordMutationCategoryHit(label string) {
+	mutCatMu.Lock()
+	defer mutCatMu.Unlock()
 	for _, c := range mutationCategories {
 		if strings.Contains(label, "mcat_"+c.Name) {
 			c.Hits++
@@ -357,6 +368,8 @@ func recordMutationCategoryHit(label string) {
 
 // recordMutationCategoryAttempt marks an attempt for the category in the label.
 func recordMutationCategoryAttempt(label string) {
+	mutCatMu.Lock()
+	defer mutCatMu.Unlock()
 	for _, c := range mutationCategories {
 		if strings.Contains(label, "mcat_"+c.Name) {
 			c.Attempts++
@@ -742,15 +755,21 @@ func (d *DictStore) allIDLikeValues() []string {
 type RuntimeStore struct {
 	mu        sync.RWMutex
 	values    map[string][]string
+	// valueSeen is a parallel set for O(1) dedup in addValue, avoiding O(n) linear scan.
+	valueSeen map[string]map[string]struct{}
 	relations map[string][][2]string
-	depValues map[string][]string
+	depValues    map[string][]string
+	// depValueSeen is a parallel set for O(1) dedup in addDepValue.
+	depValueSeen map[string]map[string]struct{}
 }
 
 func newRuntimeStore() *RuntimeStore {
 	return &RuntimeStore{
-		values:    map[string][]string{},
-		relations: map[string][][2]string{},
-		depValues: map[string][]string{},
+		values:       map[string][]string{},
+		valueSeen:    map[string]map[string]struct{}{},
+		relations:    map[string][][2]string{},
+		depValues:    map[string][]string{},
+		depValueSeen: map[string]map[string]struct{}{},
 	}
 }
 
@@ -770,15 +789,26 @@ func (r *RuntimeStore) addValue(key, value string) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	cur := r.values[ck]
-	if contains(cur, v) {
-		return false
+	// O(1) dedup via parallel set (vs. O(n) linear scan with contains()).
+	if seen := r.valueSeen[ck]; seen != nil {
+		if _, exists := seen[v]; exists {
+			return false
+		}
 	}
-	cur = append(cur, v)
+	cur := append(r.values[ck], v)
 	if len(cur) > maxRuntimeValuesPerKey {
-		cur = cur[len(cur)-maxRuntimeValuesPerKey:]
+		// Evict oldest entry from the seen-set when the slice is trimmed.
+		evicted := cur[0]
+		cur = cur[1:]
+		if s := r.valueSeen[ck]; s != nil {
+			delete(s, evicted)
+		}
 	}
 	r.values[ck] = cur
+	if r.valueSeen[ck] == nil {
+		r.valueSeen[ck] = make(map[string]struct{})
+	}
+	r.valueSeen[ck][v] = struct{}{}
 	return true
 }
 
@@ -800,7 +830,7 @@ func (r *RuntimeStore) addRelation(keyA, valueA, keyB, valueB string) bool {
 	if !isUsefulValue(va) || !isUsefulValue(vb) {
 		return false
 	}
-	pk, asc, ca, cb := pairKey(keyA, keyB)
+	pk, asc, _, _ := pairKey(keyA, keyB)
 	if pk == "" {
 		return false
 	}
@@ -821,8 +851,6 @@ func (r *RuntimeStore) addRelation(keyA, valueA, keyB, valueB string) bool {
 		cur = cur[len(cur)-maxRuntimeRelationsPerKV:]
 	}
 	r.relations[pk] = cur
-	_ = ca
-	_ = cb
 	return true
 }
 
@@ -833,15 +861,25 @@ func (r *RuntimeStore) addDepValue(depName, value string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	cur := r.depValues[depName]
-	if contains(cur, v) {
-		return
+	// O(1) dedup via parallel set.
+	if seen := r.depValueSeen[depName]; seen != nil {
+		if _, exists := seen[v]; exists {
+			return
+		}
 	}
-	cur = append(cur, v)
+	cur := append(r.depValues[depName], v)
 	if len(cur) > maxRuntimeValuesPerKey {
-		cur = cur[len(cur)-maxRuntimeValuesPerKey:]
+		evicted := cur[0]
+		cur = cur[1:]
+		if s := r.depValueSeen[depName]; s != nil {
+			delete(s, evicted)
+		}
 	}
 	r.depValues[depName] = cur
+	if r.depValueSeen[depName] == nil {
+		r.depValueSeen[depName] = make(map[string]struct{})
+	}
+	r.depValueSeen[depName][v] = struct{}{}
 }
 
 func (r *RuntimeStore) getDepValue(depName string) string {
@@ -6406,7 +6444,10 @@ func uniqStrings(in []string) []string {
 	return out
 }
 
+// dedupStrings removes duplicate strings; equivalent to uniqStrings.
+// Kept for backward compatibility with callers in advanced_features.go.
 func dedupStrings(in []string) []string { return uniqStrings(in) }
+
 
 func filterUsefulStrings(in []string) []string {
 	out := make([]string, 0, len(in))

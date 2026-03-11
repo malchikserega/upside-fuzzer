@@ -13,6 +13,7 @@ This script is intentionally generic (no endpoint hardcoding).
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 from collections import defaultdict
@@ -25,6 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 # Helpers
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=4096)
 def _canonical_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
@@ -89,6 +91,7 @@ def _key_variants(name: str) -> List[str]:
     return _uniq([v for v in variants if v])
 
 
+@functools.lru_cache(maxsize=2048)
 def _looks_like_id_name(name: str) -> bool:
     c = _canonical_key(name)
     return c == "id" or c.endswith("id")
