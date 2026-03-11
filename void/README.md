@@ -212,6 +212,27 @@ docker compose --profile fuzz-go run --rm void \
 
 ---
 
+## Architecture & Code Structure (`void/go/`)
+
+The fuzzer engine has been designed around distinct, cohesive files for maintainability and clear onboarding:
+
+- **`types.go`**: Core data structures (`Config`, `WorkItem`, `SendResult`, `Fuzzer` interfaces).
+- **`mutations.go`**: MOpt-style payload dictionaries and adaptive mutation category selection algorithms.
+- **`store.go`**: Runtime knowledge extraction, global value deduplication, and dynamic `DictStore` lookup.
+- **`coverage.go`**: Handlers for Shared Memory (SHM) direct byte reads and HTTP `/coverage` polling.
+- **`fuzzer.go`**: Main fuzzer struct and high-level lifecycle hooks (`Run`, `Close`, scheduling steps).
+- **`auth.go`**: Identity rotation (JWT, session cookies) and Anti-forgery (CSRF) token harvesting/injection.
+- **`template.go`**: Parsing of `templates.export.json` and rendering API request structures into raw HTTP bytes.
+- **`worker.go`**: Core fuzzing loop, concurrency management, and worker thread synchronization (`sync.WaitGroup`).
+- **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
+- **`crash.go`**: Unique crash detection, fingerprinting, deduplication, triage severity scoring, and reproduction queues.
+- **`mutation_engine.go`**: Context-aware injection algorithms (JSON payload flipping, path traversal injection, query dropping, etc.).
+- **`ui.go`**: Rich terminal dashboard rendering, ASCII progress bars, and run reporting.
+- **`utils.go`**: General string manipulation, byte arrays, path parsers, and generic mathematical helpers.
+- **`main.go`**: CLI flags parsing, configuration validation, and application bootstrap entry point.
+
+---
+
 ## Build for Any Platform
 
 The Go binary is fully self-contained. Cross-compilation requires only Go 1.22+ installed locally (no CGO, no external deps).
