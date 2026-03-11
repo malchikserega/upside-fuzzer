@@ -192,28 +192,104 @@ REST endpoints accepting \texttt{multipart/form-data} bodies (common for file up
 \label{sec:void}
 % ============================================================
 
-\subsection{Architecture}
-Void is a multi-goroutine HTTP fuzzing engine implemented in Go ($\sim$3,500 lines). Its architecture comprises the following components:
+\subsection{Architecture Overview}
+Void is a multi-goroutine HTTP fuzzing engine implemented in Go ($\sim$3,500 lines). Its overall structure follows a producer-consumer pipeline: a \emph{dispatcher goroutine} generates \texttt{WorkItem} structs (each encoding an HTTP method, path, body, headers, mutation name, and seed index), enqueues them into a bounded channel, and a fixed \emph{worker pool} of goroutines concurrently dispatches them over HTTP. Completed \texttt{SendResult} structs are returned via a result channel to a single \emph{result handler} that updates global state without locks.
 
+\subsection{SharpFuzz Instrumentation and Coverage Transport}
+\label{sec:coverage_transport}
+
+\textbf{SHM bitmap layout.} The SharpFuzz instrumentor rewrites compiled IL bytecodes at build time, inserting a branch-hit counter at every branch edge. For each edge $(u \to v)$ in the control-flow graph, SharpFuzz assigns a random 16-bit identifier $l_u$ to the source block and updates the shared-memory bitmap as:
+\begin{equation}
+  \text{shm}\bigl[(l_u \oplus l_v) \gg 1\bigr] \mathrel{+}= 1
+  \label{eq:shm_edge}
+\end{equation}
+where $l_u$ is the block ID of the previous basic block (thread-local), and $l_v$ the ID of the target block. This produces a 65,536-byte POSIX shared-memory region mapping each possible edge index to a hit count, exactly matching the AFL protocol~\cite{afl}.
+
+\textbf{Two coverage transport modes.} The instrumented .NET process exposes the bitmap in two transport modes, selected at startup:
+
+\begin{enumerate}
+    \item \textbf{Direct SHM mode} (\texttt{SHMCoverageReader}): Void opens the bitmap as a memory-mapped file backed by a \texttt{/dev/shm} path shared via Docker volume. Void's \texttt{GetEdges()} method reads the file directly via \texttt{mmap(2)} (Linux) or \texttt{ReadAt()} fallback, accumulating a cumulative \texttt{seen[]} byte array to track globally discovered edges. The SHM region is zeroed (\texttt{WriteAt} zeros + \texttt{Sync}) before each request to isolate per-request coverage.
+    \item \textbf{HTTP coverage mode} (\texttt{HTTPCoverageReader}): The patched \texttt{Program.cs} exposes in-process REST endpoints (\texttt{/shm/create}, \texttt{/shm/coverage}, \texttt{/shm/reset}) that serialize bitmap statistics. This mode is used in Docker bridge-network deployments where file sharing between containers is unavailable.
+\end{enumerate}
+
+\textbf{Per-request edge attribution.} A key design decision is to attribute coverage to individual HTTP requests rather than polling the global bitmap in batches. Void injects a unique identifier into every outbound request:
+\begin{lstlisting}
+req.Header.Set("X-Fuzz-Request-Id", "fz-"+id)
+\end{lstlisting}
+The .NET middleware captures this header, resets the local thread's SharpFuzz coverage context, and after the controller returns, serializes the delta of newly hit edges into a response header:
+\begin{lstlisting}
+X-Coverage-Delta: 42
+\end{lstlisting}
+Upon receiving the response, Void's \texttt{handleResult()} first checks for this header; if present, it attributes the delta directly to the request (\texttt{edgeShare = coverageDelta}). Only when the header is absent (e.g., the middleware layer was bypassed by an exception handler that marks the response as already-started) does Void fall back to a batch poll of the SHM reader every \texttt{CoverageInterval} requests. This dual-path design gives exact per-request coverage attribution without the overhead of a synchronous SHM read on every request.
+
+\subsection{Endpoint-Level Coverage Statistics and Request Prioritization}
+\label{sec:endpoint_stats}
+
+For each \texttt{(method, path)} pair, Void maintains an \texttt{EndpointStats} record tracking:
 \begin{itemize}
-    \item \textbf{Grammar Loader}: parses the RESTler-compiled \texttt{grammar.py} to extract request sequence templates and their fuzzable token positions.
-    \item \textbf{Worker Pool}: a configurable number of goroutines (default: 16) concurrently execute request sequences against the target application.
-    \item \textbf{Coverage Collector}: after each request execution, polls the coverage bitmap from the target process (via direct SHM or HTTP endpoint) and computes the XOR-delta against the current global bitmap.
-    \item \textbf{Corpus Manager}: maintains the seed corpus as an ordered queue. Elements whose execution produced a non-zero coverage delta are retained and prioritized for future mutation.
-    \item \textbf{Mutation Engine}: applies a set of structure-preserving mutations to seed sequences, including token value substitution (from the enhanced dictionary), request reordering within dependency constraints, parameter nullification, and integer boundary probing.
-    \item \textbf{Crash Detector}: classifies any HTTP 5xx response, application timeout, or connection reset as a potential crash event, persisting the triggering sequence to a deduplicated crash archive.
+    \item \textbf{NewEdges}: cumulative edges discovered through requests to this endpoint.
+    \item \textbf{ReqsSinceEdge}: how many requests have been sent since the last new edge was found on this endpoint.
+    \item \textbf{S2xx / S4xx / S5xx}: HTTP status counters for yield estimation.
 \end{itemize}
 
-\subsection{Coverage Feedback Protocol}
-When the target is instrumented with SharpFuzz, the 65,536-byte SHM bitmap is reset before each request and read after the response is received. Let $B_g$ denote the global covered-edges bitmap maintained by Void. A seed is novel if:
+Template selection during the \emph{Mutate} and \emph{Havoc} epochs uses weighted sampling that combines three factors:
 \begin{equation}
-  \exists\, i : B_{\text{req}}[i] > 0 \;\wedge\; B_g[i] = 0
-  \label{eq:novelty}
+  w(t) = w_{\text{health}}(t) \cdot w_{\text{dep}}(t) \cdot w_{\text{src}}(t)
+  \label{eq:template_weight}
 \end{equation}
-Upon discovering a novel seed, Void updates $B_g \mathrel{|}= B_{\text{req}}$ and enqueues the seed. This mirrors the AFL bitmap novelty criterion~\cite{afl} adapted to the request granularity rather than the byte granularity of binary fuzzing.
+where $w_{\text{health}}(t)$ penalizes endpoints with many recent 4xx or 5xx errors (indicating structural incompatibility), $w_{\text{dep}}(t)$ boosts endpoints whose producer dependencies have already been satisfied at runtime (e.g., a GET that requires an ID yielded by a prior POST), and $w_{\text{src}}(t)$ gives higher weight to templates derived from grammar templates marked as SSE-enhanced.
 
-\subsection{Concurrency and Stateful Execution}
-A key challenge in API fuzzing is maintaining session state across a sequence of requests (e.g., a resource created by a POST must be retrieved by a subsequent GET using the dynamic ID from the POST response). Void propagates dynamic values extracted from HTTP responses (via regex captures defined in the grammar) through the worker's local state map, ensuring that dependent requests receive valid input tokens at runtime.
+\textbf{Coverage stagnation detection.} If no new edge has been discovered for five minutes, Void detects stagnation and resets the \texttt{ReqsSinceEdge} counter for all endpoints that have received fewer than 50 requests, redistributing the sampling weight away from exhausted endpoints toward underexplored ones. Simultaneously, if the global bitmap occupancy exceeds 85\% (indicating rampant hash collisions at Equation~\ref{eq:shm_edge}), Void calls \texttt{SHMCoverageReader.Reset()} to zero the SHM bitmap and restarts accumulation, preventing noise from dominating the novelty signal.
+
+\subsection{Seed Energy and Corpus Evolution}
+\label{sec:corpus}
+
+Every request that produces \texttt{edgeShare > 0} is promoted to the seed corpus as a new \texttt{Seed} entry. The energy of a seed encodes its expected future utility for finding new edges:
+\begin{equation}
+  E(s) = \Delta_{\text{edge}} \cdot \max\!\bigl(1,\; 1 + \log_2(\text{Reqs}(e))\bigr) \cdot \gamma_e
+  \label{eq:seed_energy}
+\end{equation}
+where $\Delta_{\text{edge}}$ is the number of new edges found by $s$, $\text{Reqs}(e)$ is the total number of requests sent to endpoint $e$ at time of discovery, and $\gamma_e = 3.0$ if the endpoint has never produced a new edge before (a \emph{surprise bonus}). The intuition mirrors AFL++'s rare-branch favoring~\cite{afl}: discovering a new edge on an endpoint that has received thousands of requests without finding one is a stronger signal of a novel code path than finding an edge on an untested endpoint.
+
+Seeds are sampled proportionally to their energy for mutation using a \emph{Fenwick tree} (Binary Indexed Tree) probability sampler, enabling $O(\log N)$ weighted selection over a corpus of up to 400 seeds. Corpus minimization runs when the corpus exceeds 500 entries: seeds with energy below 0.3 \emph{and} more than 80 selections without producing new edges are pruned; remaining seeds are sorted by energy and truncated to 400.
+
+\subsection{Campaign Phases and Adaptive Concurrency}
+\label{sec:phases}
+
+\textbf{Epoch-based campaign.} Void divides the fuzzing campaign into five sequential phases, each allocated a fraction of the total time budget (Table~\ref{tab:epochs}).
+
+\begin{table}[htbp]
+\caption{Void Fuzzing Campaign Epochs}
+\label{tab:epochs}
+\begin{center}
+\begin{tabular}{llrl}
+\toprule
+\textbf{Epoch} & \textbf{Mode} & \textbf{Budget} & \textbf{Purpose} \\
+\midrule
+Baseline     & None       & 5\%  & Replay grammar templates sequentially \\
+Harvest      & Harvest    & 25\% & Learn dynamic IDs from 2xx responses \\
+Deterministic& Mutate     & 25\% & Systematic boundary-value substitution \\
+Havoc        & Havoc      & 35\% & Random multi-mutation combinations \\
+Splicing     & Havoc      & 10\% & Cross-seed payload recombination \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+At each epoch transition, Void measures the edge discovery rate (edges found per request) achieved during the completed epoch. If the rate falls below $10^{-3}$ edges/request after more than 200 requests, 30\% of that epoch's remaining budget is transferred to the Havoc epoch, which has consistently higher exploration yield for large, multi-structured APIs.
+
+\textbf{Adaptive concurrency.} Void continuously adjusts the goroutine worker count between a configured minimum and maximum, aiming to maximize throughput without saturating the target application. Every second, it computes the request completion rate and error rate over the preceding interval and applies the following heuristic:
+\begin{itemize}
+    \item If error rate $> 15\%$ or mean response latency $> 3\times$ baseline: reduce concurrency by 2.
+    \item If mean latency $> 2\times$ baseline: reduce by 1.
+    \item If completion rate $> 75\%$ of current concurrency \emph{and} latency $< 1.3\times$ baseline \emph{and} error rate $< 5\%$: increase by 1.
+\end{itemize}
+This mirrors congestion-control principles adapted to HTTP workloads, preventing the target server from being overwhelmed while maximizing coverage throughput.
+
+\subsection{Dynamic Value Learning and Stateful Execution}
+\label{sec:state}
+
+A fundamental challenge in REST API fuzzing is maintaining producer-consumer state: a POST that creates an object returns a dynamic \texttt{id} that subsequent GET, PUT, and DELETE requests must use. Void addresses this through a \emph{runtime dependency map}: the grammar loader statically identifies all \texttt{restler\_custom\_payload\_uuid4\_suffix} and \texttt{restler\_fuzzable\_*} tokens annotated as expectation-producers in the RESTler grammar and registers their corresponding response-capture regexes. During the Harvest epoch, every successful 2xx response is scanned; captured values (IDs, tokens, anti-forgery headers, session cookies) are stored in a per-execution-context dependency map and substituted into subsequent requests that declare a dependency on them, enabling deep multi-step API state navigation.
 
 % ============================================================
 \section{Evaluation}
