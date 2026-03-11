@@ -126,7 +126,7 @@ class MultiProjectAnalyzer:
 
         return False
 
-    def analyze_solution(self, manual_main: str = None) -> MultiAnalysisResult:
+    def analyze_solution(self, manual_main: Optional[str] = None) -> MultiAnalysisResult:
         self.log("\n" + "=" * 70)
         self.log("  UpsideFuzz: Multi-Project Solution Analyzer")
         self.log("=" * 70 + "\n")
@@ -1209,32 +1209,39 @@ def inject_multi_shm_endpoints(result: MultiAnalysisResult, output_path: Path):
 # Main
 # ============================================================================
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description='Multi-Project .NET Fuzz Prep (.NET 8+)')
     parser.add_argument('--src', required=True, help='Path to the source .NET project/solution')
     parser.add_argument('--out', required=True, help='Path for the instrumented output copy')
     parser.add_argument('--main', help='Force the main web API project name (e.g. PublicApi)', default=None)
     args = parser.parse_args()
 
-    analyzer = MultiProjectAnalyzer(args.src)
-    result = analyzer.analyze_solution(manual_main=args.main)
+    try:
+        analyzer = MultiProjectAnalyzer(args.src)
+        result = analyzer.analyze_solution(manual_main=args.main)
 
-    out_path = Path(args.out)
-    if out_path.exists():
-        shutil.rmtree(out_path)
-    shutil.copytree(args.src, args.out, ignore=shutil.ignore_patterns('bin', 'obj', '.git', '.idea', '.vs'))
+        out_path = Path(args.out)
+        if out_path.exists():
+            shutil.rmtree(out_path)
+        shutil.copytree(args.src, args.out, ignore=shutil.ignore_patterns('bin', 'obj', '.git', '.idea', '.vs'))
 
-    patch_all_csprojs(out_path)
-    generate_unified_instrumentor(result, out_path)
-    generate_multi_docker_configs(result, out_path)
-    generate_multi_coverage_helper(result, out_path)
-    inject_multi_shm_endpoints(result, out_path)
+        patch_all_csprojs(out_path)
+        generate_unified_instrumentor(result, out_path)
+        generate_multi_docker_configs(result, out_path)
+        generate_multi_coverage_helper(result, out_path)
+        inject_multi_shm_endpoints(result, out_path)
 
-    print(f"\n  Multi-Project Preparation Complete for Solution: {result.solution_name}")
-    print(f"  Instrumented Projects: {result.instrumented_projects}")
-    print(f"  Main Project: {result.main_project}")
-    print(f"  Namespaces: {', '.join(result.all_namespaces)}")
-
+        print(f"\n  Multi-Project Preparation Complete for Solution: {result.solution_name}")
+        print(f"  Instrumented Projects: {result.instrumented_projects}")
+        print(f"  Main Project: {result.main_project}")
+        print(f"  Namespaces: {', '.join(result.all_namespaces)}")
+        return 0
+    except Exception as e:
+        print(f"\n[!] Error during preparation: {e}", file=sys.stderr)
+        # Uncomment for full tracebacks during development
+        # traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+

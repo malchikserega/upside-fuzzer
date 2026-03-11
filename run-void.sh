@@ -1,17 +1,17 @@
 # run-void.sh — Quick launcher for the Void fuzzer (host mode, HTTP coverage).
 # run-smart-fuzzer.sh — Quick launcher for the Go fuzzer (host mode, HTTP coverage).
 # For Docker sidecar (direct SHM mode) use docker compose --profile fuzz-go instead.
-set -e
+set -euo pipefail
 
 show_help() {
     cat <<'EOF'
-run-smart-fuzzer.sh — Launch the Void binary in host mode.
+run-void.sh — Launch the Void binary in host mode.
 
 Reads target URL and auth from environment variables, then starts the fuzzer.
 All bug-finding features are ON by default (triage, repro, minimization, race detection).
 
 Usage:
-  ./run-smart-fuzzer.sh [fuzzer flags...]
+  ./run-void.sh [fuzzer flags...]
 
 Required environment variables:
   TARGET_HOST   Base URL of the instrumented API  (e.g. http://localhost:8080)
@@ -22,15 +22,15 @@ Optional environment variables:
 
 Examples:
   # Minimal — 20 minutes, default settings
-  TARGET_HOST=http://localhost:8080 AUTH_TOKEN=<jwt> ./run-smart-fuzzer.sh
+  TARGET_HOST=http://localhost:8080 AUTH_TOKEN=<jwt> ./run-void.sh
 
   # Custom grammar directory and time budget
   TARGET_HOST=http://localhost:8080 AUTH_TOKEN=<jwt> \
-    ./run-smart-fuzzer.sh -grammar ./grammars/myapi -time-budget 60
+    ./run-void.sh -grammar ./grammars/myapi -time-budget 60
 
   # Fast scan (disable slow analysis)
   TARGET_HOST=http://localhost:8080 AUTH_TOKEN=<jwt> \
-    ./run-smart-fuzzer.sh \
+    ./run-void.sh \
       -concurrency 32 -request-timeout 2.5 -coverage-interval 6 \
       -crash-triage=false -repro-runs 0 -minimize-crash=false \
       -no-ui -time-budget 20

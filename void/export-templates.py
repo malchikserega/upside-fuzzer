@@ -236,7 +236,7 @@ class GrammarInterpreter:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Export RESTler grammar.py to JSON templates for SmartFuzzer-Go"
     )
@@ -259,12 +259,12 @@ def main():
         data = interp.export()
     except FileNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+        return 1
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         if args.verbose:
             traceback.print_exc(file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     out_dir = os.path.dirname(out_path)
     if out_dir:
@@ -275,6 +275,8 @@ def main():
     print(f"[export-templates] Exported {data['count']} templates "
           f"({data['skipped']} skipped) → {out_path}", file=sys.stderr)
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

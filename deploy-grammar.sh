@@ -1,7 +1,7 @@
 #!/bin/bash
 # deploy-grammar.sh — Copy compiled grammar to void/
 # Requires ./compile-grammar.sh to have been run first.
-set -e
+set -euo pipefail
 
 show_help() {
     cat <<'EOF'
@@ -17,22 +17,22 @@ Options:
   --grammar-dir DIR   Source directory with grammar.py + dict.json
                       (default: restler_output/Compile)
   --dest DIR          Destination directory
-                      (default: smart_fuzzer)
+                      (default: void)
   --help, -h          Show this help
 
 Examples:
   ./deploy-grammar.sh
-  ./deploy-grammar.sh --grammar-dir my_output/Compile --dest smart_fuzzer
+  ./deploy-grammar.sh --grammar-dir my_output/Compile --dest void
 
 Workflow:
   1. ./compile-grammar.sh swagger.json [--dict dict.json] [--src ./src]
   2. ./deploy-grammar.sh
-  3. cd smart_fuzzer && TARGET_HOST=... AUTH_TOKEN=... ./go/void-darwin-arm64 -time-budget 60
+  3. cd void && TARGET_HOST=... AUTH_TOKEN=... ./go/void-darwin-arm64 -time-budget 60
 EOF
 }
 
 GRAMMAR_DIR="restler_output/Compile"
-DEST="smart_fuzzer"
+DEST="void"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

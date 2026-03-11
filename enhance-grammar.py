@@ -13,6 +13,7 @@ This script is intentionally generic (no endpoint hardcoding).
 from __future__ import annotations
 
 import argparse
+import sys
 import functools
 import json
 import re
@@ -260,18 +261,18 @@ class OpenAPIExtractor:
         p_type = str(rs.get("type", "string"))
         p_fmt = str(rs.get("format", ""))
         p_enum = [str(v) for v in rs.get("enum", [])] if isinstance(rs.get("enum"), list) else []
-        examples: List[str] = []
+        examples_leaf: List[str] = []
         if "example" in rs:
-            examples.append(_to_scalar(rs.get("example")))
+            examples_leaf.append(_to_scalar(rs.get("example")))
         if "default" in rs:
-            examples.append(_to_scalar(rs.get("default")))
+            examples_leaf.append(_to_scalar(rs.get("default")))
         out.append(
             FieldHint(
                 name=leaf_name,
                 type_name=p_type,
                 fmt=p_fmt,
                 enum_values=_uniq([x for x in p_enum if x != ""]),
-                examples=_uniq([x for x in examples if x != ""]),
+                examples=_uniq([x for x in examples_leaf if x != ""]),
                 min_length=_safe_int(rs.get("minLength")),
                 max_length=_safe_int(rs.get("maxLength")),
                 minimum=_safe_float(rs.get("minimum")),
@@ -285,7 +286,7 @@ class OpenAPIExtractor:
     def _iter_operations(self) -> Iterable[Tuple[str, str, Dict[str, Any], Dict[str, Any]]]:
         paths = self.spec.get("paths", {})
         if not isinstance(paths, dict):
-            return []
+            return
         methods = ("get", "post", "put", "delete", "patch", "head", "options")
         for path, path_item in paths.items():
             if not isinstance(path_item, dict):
@@ -1015,25 +1016,25 @@ def main() -> int:
     external_dict_path = Path(args.external_dict) if args.external_dict else None
 
     if not swagger_path.exists():
-        print(f"[enhance] swagger file not found: {swagger_path}")
+        print(f"[enhance] swagger file not found: {swagger_path}", file=sys.stderr)
         return 1
     if not grammar_path.exists():
-        print(f"[enhance] grammar file not found: {grammar_path}")
+        print(f"[enhance] grammar file not found: {grammar_path}", file=sys.stderr)
         return 1
     if not dict_path.exists():
-        print(f"[enhance] dictionary file not found: {dict_path}")
+        print(f"[enhance] dictionary file not found: {dict_path}", file=sys.stderr)
         return 1
 
     try:
         spec = json.loads(swagger_path.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"[enhance] failed to parse swagger JSON: {e}")
+        print(f"[enhance] failed to parse swagger JSON: {e}", file=sys.stderr)
         return 1
 
     try:
         restler_dict = json.loads(dict_path.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"[enhance] failed to parse dict JSON: {e}")
+        print(f"[enhance] failed to parse dict JSON: {e}", file=sys.stderr)
         return 1
 
     extractor = OpenAPIExtractor(spec)
