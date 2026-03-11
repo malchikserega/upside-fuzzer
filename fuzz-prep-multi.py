@@ -567,7 +567,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
                     "  # --- Void sidecar (uncomment to use direct SHM mode) ---\n"
                     "  # smartfuzzer:\n"
                     "  #   build:\n"
-                    "  #     context: ../smart_fuzzer\n"
+                    "  #     context: ../void\n"
                     "  #     dockerfile: Dockerfile\n"
                     "  #   volumes:\n"
                     "  #     - coverage_shm:/coverage_shm\n"
@@ -611,7 +611,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
   # --- Void sidecar (uncomment to use direct SHM mode) ---
   # smartfuzzer:
   #   build:
-  #     context: ../smart_fuzzer
+  #     context: ../void
   #     dockerfile: Dockerfile
   #   volumes:
   #     - coverage_shm:/coverage_shm

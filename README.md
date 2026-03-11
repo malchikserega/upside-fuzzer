@@ -5,7 +5,35 @@
 
 ---
 
-## How It Works
+## How It Works / End-to-End Flow Diagram
+
+```mermaid
+graph TD
+    %% Define Styles
+    classDef dotNet fill:#512bd4,stroke:#fff,stroke-width:2px,color:#fff;
+    classDef python fill:#ffd43b,stroke:#306998,stroke-width:2px,color:#000;
+    classDef go fill:#00add8,stroke:#000,stroke-width:2px,color:#fff;
+    classDef output fill:#e8e8e8,stroke:#333,stroke-width:2px,color:#333;
+    classDef bash fill:#4EAA25,stroke:#fff,stroke-width:2px,color:#fff;
+
+    A[".NET Source + Dockerfile"]:::dotNet -->|fuzz-prep-multi.py| B
+    B["Instrumented Copy (/shm added)"]:::dotNet -->|docker compose up| C
+    
+    swagger["swagger.json"]:::output -->|compile-grammar.sh| E
+    
+    C[("Running API + Live SHM Coverage")]:::output
+    E["grammar.py + dict.json"]:::python
+    
+    E -->|deploy-grammar.sh| F
+    C -->|Feedback Loop| F
+    
+    F{"void Fuzzer Engine (Go)"}:::go
+    F -->|Requests + Mutations| C
+    
+    F -->|Outputs| G["unique-crashes.jsonl + Reproducers"]:::output
+```
+
+### High-level pipeline:
 
 ```
 .NET Source + Dockerfile
@@ -57,9 +85,14 @@
 │
 ├── void/
 │   ├── go/
-│   │   ├── main.go             Fuzzer engine: scheduler, mutations, SHM, TUI
-│   │   ├── advanced_features.go  Crash triage, minimization, race probing
-│   │   └── go.mod
+│   │   ├── main.go             CLI flags and app bootstrap
+│   │   ├── fuzzer.go           Main lifecycle hooks
+│   │   ├── worker.go           Core fuzzing loop
+│   │   ├── store.go            Knowledge extraction & dedup
+│   │   ├── crash.go            Triage, dedup, and severity scoring
+│   │   ├── sequence.go         Stateful producer/consumer chains
+│   │   ├── mutations.go        MOpt payload mutation categories
+│   │   └── ui.go               Live terminal dashboard
 │   ├── export-templates.py     RESTler grammar.py → JSON templates
 │   └── Dockerfile.go           Docker image for Go sidecar
 │
