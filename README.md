@@ -79,7 +79,6 @@ graph TD
 ├── compile-grammar.sh          swagger.json → RESTler grammar → enhanced dict
 ├── enhance-grammar.py          Grammar/dict enricher (called by compile-grammar.sh)
 ├── sanitize-swagger-for-restler.sh  Fix deepObject/nested params before RESTler
-├── deploy-grammar.sh           Copy compiled grammar into void/
 ├── run-void.sh         Quick launcher (host mode, HTTP coverage)
 ├── run-fuzzer-docker.sh        Launcher for Docker compose sidecar mode
 │
@@ -155,8 +154,6 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 ./compile-grammar.sh swagger.json \
   --dict my-domain-dict.json \   # optional: domain-specific values
   --src ./my-project             # optional: C# source for constraint extraction
-
-./deploy-grammar.sh              # copies grammar.py + dict.json → void/
 ```
 
 ### 5. Run the fuzzer
@@ -166,6 +163,7 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 ```bash
 export AUTH_TOKEN="<your-jwt-token>"
 docker compose --profile fuzz-go run --rm void \
+  -grammar restler_output/Compile \
   -direct-shm -time-budget 60
 ```
 
@@ -174,7 +172,7 @@ docker compose --profile fuzz-go run --rm void \
 ```bash
 export TARGET_HOST="http://localhost:8080"
 export AUTH_TOKEN="<your-jwt-token>"
-./run-void.sh -time-budget 60
+./run-void.sh -grammar restler_output/Compile -time-budget 60
 ```
 
 ### 6. Monitor crashes

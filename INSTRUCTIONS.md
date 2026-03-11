@@ -111,7 +111,7 @@ dotnet --version        # 8.0+
 │  • Producer→Consumer deps  │     │  • From OpenAPI + C# source        │
 └────────────┬───────────────┘     └─────────────────────────────────── ┘
              │
-    docker compose --profile fuzz-go run --rm void
+    docker compose --profile fuzz-go run --rm void -grammar <grammar_dir>
              │
              ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -288,6 +288,7 @@ cd <OUTPUT_DIR>
 
 export AUTH_TOKEN="<your-jwt-token>"
 docker compose --profile fuzz-go run --rm void \
+  -grammar /grammar_path \
   -direct-shm \
   -time-budget 60
 ```
@@ -299,6 +300,7 @@ For a fast CI scan (disable slow analysis):
 ```bash
 export AUTH_TOKEN="<your-jwt-token>"
 docker compose --profile fuzz-go run --rm void \
+  -grammar /grammar_path \
   -direct-shm \
   -time-budget 20 \
   -concurrency 64 -max-concurrency 128 \
@@ -362,10 +364,11 @@ cat crashes/unique-crashes.jsonl | python3 -c "import sys,json; [print(json.dump
 
 ```bash
 # Host mode (HTTP coverage)
-./void -time-budget 60
+./void -grammar /path/to/grammar -time-budget 60
 
 # Docker sidecar (direct SHM — faster)
 docker compose --profile fuzz-go run --rm void \
+  -grammar /path/to/grammar \
   -direct-shm -time-budget 60
 ```
 
@@ -403,6 +406,7 @@ The following are **on by default** and only need explicit flags to *disable*:
 
 ```bash
 docker compose --profile fuzz-go run --rm void \
+  -grammar /path/to/grammar \
   -direct-shm \
   -time-budget 20 \
   -concurrency 64 -max-concurrency 128 \
