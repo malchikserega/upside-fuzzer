@@ -101,7 +101,6 @@ graph TD
 │   ├── instrument.sh
 │   └── instrumentor.csproj
 │
-├── fuzz-cases-multi.json       Business logic detection config
 ├── requirements.txt            Python dependencies
 ├── nuget.config
 ├── INSTRUCTIONS.md             Step-by-step runbook (new system → fuzzing)
