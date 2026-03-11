@@ -208,19 +208,57 @@ where $l_u$ is the block ID of the previous basic block (thread-local), and $l_v
 \textbf{Two coverage transport modes.} The instrumented .NET process exposes the bitmap in two transport modes, selected at startup:
 
 \begin{enumerate}
-    \item \textbf{Direct SHM mode} (\texttt{SHMCoverageReader}): Void opens the bitmap as a memory-mapped file backed by a \texttt{/dev/shm} path shared via Docker volume. Void's \texttt{GetEdges()} method reads the file directly via \texttt{mmap(2)} (Linux) or \texttt{ReadAt()} fallback, accumulating a cumulative \texttt{seen[]} byte array to track globally discovered edges. The SHM region is zeroed (\texttt{WriteAt} zeros + \texttt{Sync}) before each request to isolate per-request coverage.
-    \item \textbf{HTTP coverage mode} (\texttt{HTTPCoverageReader}): The patched \texttt{Program.cs} exposes in-process REST endpoints (\texttt{/shm/create}, \texttt{/shm/coverage}, \texttt{/shm/reset}) that serialize bitmap statistics. This mode is used in Docker bridge-network deployments where file sharing between containers is unavailable.
+    \item \textbf{Direct SHM mode} (\texttt{SHMCoverageReader}): Void opens the SHM region as a file under \texttt{/dev/shm}, shared via a Docker volume mount. The reader maintains a local \texttt{seen[65536]} accumulator byte array. On every poll, it scans the SHM buffer and counts bytes that are non-zero in the SHM but zero in \texttt{seen[]}, recording them as new edges:
+\begin{lstlisting}
+for i, b := range shmBuf {
+    if b != 0 && seen[i] == 0 {
+        seen[i] = 1; edges++ } }
+\end{lstlisting}
+    Crucially, the SHM bitmap is \emph{never reset between individual requests} in this mode. The .NET runtime writes cumulatively; Void tracks what it has already observed via \texttt{seen[]}. The bitmap is only zeroed (and \texttt{seen[]} cleared) when global bitmap occupancy exceeds 85\%, indicating that hash collisions have made the novelty signal unreliable.
+    \item \textbf{HTTP coverage mode} (\texttt{HTTPCoverageReader}): The patched ASP.NET Core \texttt{Program.cs} exposes three in-process HTTP endpoints---\texttt{/shm/create}, \texttt{/shm/coverage}, \texttt{/shm/reset}---that manage a per-application SHM bitmap. Void calls \texttt{Reset()} before the target request, and \texttt{GetEdges()} after, obtaining a reliable per-request coverage count. This mode is used in Docker bridge-network deployments where Docker volume file sharing is unavailable.
 \end{enumerate}
 
-\textbf{Per-request edge attribution.} A key design decision is to attribute coverage to individual HTTP requests rather than polling the global bitmap in batches. Void injects a unique identifier into every outbound request:
+\subsection{Attribution Accuracy: HTTP Mode vs.\ Direct SHM Mode}
+\label{sec:attribution}
+
+The two transport modes differ fundamentally in their ability to attribute coverage to specific requests, particularly under concurrent execution (Figure~\ref{fig:attribution}).
+
+\textbf{HTTP mode (exact attribution).} The ASP.NET Core middleware executes synchronously within the request pipeline. The sequence is strictly:
+\begin{enumerate}
+  \item Middleware intercepts the request, calls \texttt{SharpFuzz.ResetCoverage()}.
+  \item The controller executes; SharpFuzz writes branch hits into the SHM bitmap.
+  \item Before closing the response, middleware counts the set bytes: \texttt{delta = bitmap.CountNonZero()}.
+  \item Delta is written into the \texttt{X-Coverage-Delta} response header.
+  \item Void receives the response and records: \emph{this exact} \texttt{(METHOD, path, body)} produced \texttt{delta} new edges.
+\end{enumerate}
+This attribution is correct even under high concurrency because each HTTP request gets its own middleware invocation; the \texttt{Reset}/\texttt{Count} pair brackets exactly one controller execution.
+
+\textbf{Direct SHM mode (approximate, interval-based attribution).} With many worker goroutines running concurrently, up to \texttt{MaxConcurrency} requests execute in parallel in the .NET process. All write into the same shared bitmap simultaneously. When Void later reads a coverage delta via \texttt{GetEdges()}, it cannot determine which of the concurrent requests triggered the new edges:
 \begin{lstlisting}
-req.Header.Set("X-Fuzz-Request-Id", "fz-"+id)
+// After CoverageInterval completions:
+delta = GetEdges() - previousEdges
+if delta > 0 {
+    // Attribute delta to the most recently
+    // completed request -- an approximation
+    addOrBoostSeed(lastCompletedItem) }
 \end{lstlisting}
-The .NET middleware captures this header, resets the local thread's SharpFuzz coverage context, and after the controller returns, serializes the delta of newly hit edges into a response header:
+This heuristic attribution is a deliberate engineering trade-off: direct SHM avoids middleware patching and HTTP round-trips, but produces noisy seed--coverage correlation. The corpus evolution mechanism (Section~\ref{sec:corpus}) remains effective because even approximate attribution preserves the relative ranking of productive vs.\ unproductive endpoints over many observations.
+
+In practice, HTTP mode is preferred when the target application's middleware can be patched (i.e., when \texttt{fuzz-prep-multi.py} succeeds in injecting the coverage shim). Direct SHM is the fallback for third-party applications or Docker configurations that prohibit middleware injection.
+
+\textbf{Void's dual-path result handler} implements the decision transparently:
 \begin{lstlisting}
-X-Coverage-Delta: 42
+if res.CoverageDelta > 0 {
+    // HTTP mode: exact per-request attribution
+    edgeShare = res.CoverageDelta
+} else if completedSinceCV >= CoverageInterval {
+    // Direct SHM: batch-interval approximation
+    delta := GetEdges() - currentEdges
+    edgeShare = max(1, delta)
+    completedSinceCV = 0
+}
+if edgeShare > 0 { addOrBoostSeed(item, edgeShare) }
 \end{lstlisting}
-Upon receiving the response, Void's \texttt{handleResult()} first checks for this header; if present, it attributes the delta directly to the request (\texttt{edgeShare = coverageDelta}). Only when the header is absent (e.g., the middleware layer was bypassed by an exception handler that marks the response as already-started) does Void fall back to a batch poll of the SHM reader every \texttt{CoverageInterval} requests. This dual-path design gives exact per-request coverage attribution without the overhead of a synchronous SHM read on every request.
 
 \subsection{Endpoint-Level Coverage Statistics and Request Prioritization}
 \label{sec:endpoint_stats}
