@@ -1,0 +1,557 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// sequence.go — Stateful sequences: producer→consumer chain discovery,
+// runtime value extraction from requests/responses, followup prioritization.
+
+func (f *Fuzzer) enqueueSequenceFollowups(source WorkItem, respBody string, respHeaders map[string]string) int {
+	if source.SeqDepth >= maxInt(1, f.cfg.SequenceMaxDepth) {
+		return 0
+	}
+	info := f.depIndex[source.TemplateID]
+	producedDeps := mapKeys(info.Writes)
+	producedIDKeys := mapKeys(info.IDWrites)
+	entityIDs := extractEntityIDs(respBody, respHeaders)
+	if rid := inferResourceIDKeyFromPath(source.Path); rid != "" {
+		for _, eid := range entityIDs {
+			_ = f.runtime.addValue(rid, eid)
+			_ = f.runtime.addValue("id", eid)
+		}
+	}
+
+	// Bind known write dependencies to discovered entity IDs.
+	if len(entityIDs) > 0 {
+		for _, dep := range producedDeps {
+			f.runtime.addDepValue(dep, entityIDs[0])
+		}
+	}
+
+	if len(producedDeps) == 0 && len(entityIDs) == 0 {
+		meta := f.meta[source.TemplateID]
+		if meta.Method != "POST" && meta.Method != "PUT" && meta.Method != "PATCH" {
+			return 0
+		}
+	}
+
+	followups := f.findFollowups(source.TemplateID, source.Method, normalizePath(source.Path), producedDeps, producedIDKeys)
+	if len(followups) == 0 {
+		return 0
+	}
+	fanout := minInt(maxInt(1, f.cfg.SequenceFanout), len(followups))
+	enqueued := 0
+	for _, tid := range followups[:fanout] {
+		mode := "none"
+		if rand.Float64() >= 0.75 {
+			mode = "mutate"
+		}
+		item, err := f.renderTemplate(tid, mode, 1, -1)
+		if err != nil {
+			continue
+		}
+		if len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
+			item.Path = rePathParam.ReplaceAllString(item.Path, entityIDs[0])
+		}
+		item.SeqDepth = source.SeqDepth + 1
+		item.EpochName = "Sequence"
+		item.EpochIdx = source.EpochIdx
+		item.Identity = source.Identity
+		seqLabel := fmt.Sprintf("sequence(d%d:%s %s->%s)", item.SeqDepth, source.Method, normalizePath(source.Path), item.Method)
+		if item.MutationLabel != "seed" {
+			seqLabel += "+" + item.MutationLabel
+		}
+		item.MutationLabel = seqLabel
+		item.MutationName = "sequence"
+		item.Trace = f.extendTrace(source.Trace, item)
+
+		if len(f.sequenceQueue) >= sequenceQueueMax {
+			f.sequenceQueue = f.sequenceQueue[1:]
+		}
+		f.sequenceQueue = append(f.sequenceQueue, item)
+		enqueued++
+	}
+	return enqueued
+}
+
+func (f *Fuzzer) findFollowups(sourceID int, sourceMethod, sourceNorm string, producedDeps, producedIDKeys []string) []int {
+	seen := map[int]struct{}{}
+	out := make([]int, 0, 16)
+	for _, dep := range producedDeps {
+		for _, tid := range f.depConsumers[dep] {
+			if tid == sourceID {
+				continue
+			}
+			if f.isTemplateBlocked(tid) {
+				continue
+			}
+			if _, ok := seen[tid]; ok {
+				continue
+			}
+			seen[tid] = struct{}{}
+			out = append(out, tid)
+		}
+	}
+	for _, idk := range producedIDKeys {
+		for _, tid := range f.idConsumers[canonicalKey(idk)] {
+			if tid == sourceID {
+				continue
+			}
+			if f.isTemplateBlocked(tid) {
+				continue
+			}
+			if _, ok := seen[tid]; ok {
+				continue
+			}
+			seen[tid] = struct{}{}
+			out = append(out, tid)
+		}
+	}
+	for _, tid := range f.activeIDs {
+		if tid == sourceID {
+			continue
+		}
+		if f.isTemplateBlocked(tid) {
+			continue
+		}
+		if _, ok := seen[tid]; ok {
+			continue
+		}
+		m := f.meta[tid]
+		sameFamily := m.Norm == sourceNorm || strings.HasPrefix(m.Norm, sourceNorm+"/") || strings.HasPrefix(sourceNorm, m.Norm+"/")
+		if !sameFamily {
+			continue
+		}
+		if m.Method == sourceMethod && m.Norm == sourceNorm {
+			continue
+		}
+		seen[tid] = struct{}{}
+		out = append(out, tid)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		a := f.meta[out[i]]
+		b := f.meta[out[j]]
+		return followupPriority(sourceMethod, sourceNorm, a.Method, a.Norm) < followupPriority(sourceMethod, sourceNorm, b.Method, b.Norm)
+	})
+	return out
+}
+
+func followupPriority(sourceMethod, sourceNorm, candMethod, candNorm string) int {
+	s := strings.ToUpper(sourceMethod)
+	c := strings.ToUpper(candMethod)
+	score := 100
+	if s == "POST" {
+		switch c {
+		case "GET":
+			score -= 40
+		case "PUT", "PATCH":
+			score -= 25
+		case "DELETE":
+			score -= 12
+		}
+	} else if s == "PUT" || s == "PATCH" {
+		switch c {
+		case "GET":
+			score -= 35
+		case "DELETE":
+			score -= 18
+		}
+	} else if s == "GET" {
+		switch c {
+		case "PUT", "PATCH":
+			score -= 20
+		case "DELETE":
+			score -= 10
+		}
+	}
+	if candNorm == sourceNorm && c == "GET" {
+		score -= 8
+	}
+	if len(candNorm) > len(sourceNorm) {
+		score -= 5
+	}
+	if strings.Contains(candNorm, "{") && strings.Contains(candNorm, "}") {
+		score -= 3
+	}
+	return score
+}
+
+func (f *Fuzzer) learnFromRequestContext(path, body string) int {
+	learned := 0
+	vals := make([][2]string, 0, 32)
+	rels := make([][4]string, 0, 64)
+
+	pathVals := extractPathTokens(path)
+	vals = append(vals, pathVals...)
+	if rid := inferResourceIDKeyFromPath(path); rid != "" && len(pathVals) > 0 {
+		vals = append(vals, [2]string{rid, pathVals[len(pathVals)-1][1]})
+	}
+
+	bodyVals := make([][2]string, 0, 32)
+	bodyRels := make([][4]string, 0, 64)
+	if reJSONStartAny.MatchString(body) {
+		var js any
+		if err := json.Unmarshal([]byte(body), &js); err == nil {
+			extractJSONRuntimeValues(js, &bodyVals, &bodyRels, 0)
+		}
+	} else if strings.Contains(body, "=") {
+		if valsQ, err := url.ParseQuery(body); err == nil {
+			for k, arr := range valsQ {
+				if strings.TrimSpace(k) == "" || len(arr) == 0 {
+					continue
+				}
+				v := normalizeValue(arr[0])
+				if !isUsefulValue(v) {
+					continue
+				}
+				bodyVals = append(bodyVals, [2]string{k, v})
+			}
+		}
+	}
+	vals = append(vals, bodyVals...)
+	rels = append(rels, bodyRels...)
+
+	pathIDs := filterIDLikePairs(pathVals)
+	bodyIDs := filterIDLikePairs(bodyVals)
+	for i := 0; i < minInt(8, len(pathIDs)); i++ {
+		for j := 0; j < minInt(12, len(bodyIDs)); j++ {
+			rels = append(rels, [4]string{pathIDs[i][0], pathIDs[i][1], bodyIDs[j][0], bodyIDs[j][1]})
+		}
+	}
+
+	for _, kv := range vals {
+		if f.runtime.addValue(kv[0], kv[1]) {
+			learned++
+		}
+	}
+	for _, rr := range rels {
+		if f.runtime.addRelation(rr[0], rr[1], rr[2], rr[3]) {
+			learned++
+		}
+	}
+	return learned
+}
+
+func (f *Fuzzer) learnFromResponse(body string, headers map[string]string) int {
+	learned := 0
+	vals := make([][2]string, 0, 32)
+	rels := make([][4]string, 0, 64)
+
+	location := headers["Location"]
+	if location == "" {
+		location = headers["location"]
+	}
+	if location != "" {
+		if u, err := url.Parse(location); err == nil {
+			vals = append(vals, extractPathTokens(u.Path)...)
+		} else {
+			vals = append(vals, extractPathTokens(location)...)
+		}
+	}
+
+	if reJSONStartAny.MatchString(body) {
+		var js any
+		if err := json.Unmarshal([]byte(body), &js); err == nil {
+			extractJSONRuntimeValues(js, &vals, &rels, 0)
+		}
+	}
+	for _, kv := range vals {
+		if f.runtime.addValue(kv[0], kv[1]) {
+			learned++
+		}
+	}
+	for _, rr := range rels {
+		if f.runtime.addRelation(rr[0], rr[1], rr[2], rr[3]) {
+			learned++
+		}
+	}
+	return learned
+}
+var (
+	depNameNoise = map[string]struct{}{
+		"v1": {}, "v2": {}, "v3": {}, "api": {}, "exchange": {}, "post": {}, "put": {}, "get": {}, "delete": {},
+		"patch": {}, "query": {}, "header": {}, "body": {}, "path": {}, "data": {}, "audit": {}, "created": {},
+		"updated": {}, "writer": {}, "reader": {}, "response": {}, "request": {}, "status": {}, "name": {},
+		"primary": {}, "reverse": {}, "notes": {}, "revision": {}, "true": {}, "false": {},
+	}
+	pathTokenNoise = map[string]struct{}{
+		"v1": {}, "v2": {}, "v3": {}, "api": {}, "exchange": {}, "pairs": {}, "pair": {}, "rates": {}, "rate": {},
+		"currencies": {}, "currency": {}, "users": {}, "user": {}, "accounts": {}, "account": {},
+	}
+	resourcePathNoise = map[string]struct{}{"v1": {}, "v2": {}, "v3": {}, "api": {}, "exchange": {}}
+	runtimeLearnKeys  = []string{"id", "code", "name", "externalid", "status", "type", "revision", "key", "slug"}
+)
+
+func inferDependencyKeys(depName string) []string {
+	dep := strings.ToLower(depName)
+	tokens := splitNonAlnum(dep)
+	keys := []string{}
+	hasAnyID := false
+	for _, t := range tokens {
+		if t == "id" || strings.HasSuffix(t, "id") {
+			hasAnyID = true
+			break
+		}
+	}
+	for _, m := range reWordID.FindAllStringSubmatch(dep, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		base := m[1]
+		if _, bad := depNameNoise[base]; !bad && base != "" {
+			keys = append(keys, base+"Id")
+		}
+	}
+	for i, t := range tokens {
+		if _, bad := depNameNoise[t]; bad || t == "" {
+			continue
+		}
+		if strings.HasSuffix(t, "id") && len(t) > 2 {
+			base := t[:len(t)-2]
+			if _, bad := depNameNoise[base]; !bad && base != "" {
+				keys = append(keys, base+"Id")
+			}
+		}
+		if t == "id" {
+			if i > 0 {
+				prev := tokens[i-1]
+				if _, bad := depNameNoise[prev]; !bad && prev != "" {
+					keys = append(keys, singularize(prev)+"Id")
+				}
+			}
+			keys = append(keys, "id")
+		}
+	}
+	if hasAnyID {
+		for _, t := range tokens {
+			if _, bad := depNameNoise[t]; bad || t == "" {
+				continue
+			}
+			keys = append(keys, singularize(t)+"Id")
+		}
+	}
+	if !hasAnyID && len(keys) == 0 {
+		return nil
+	}
+	keys = append(keys, "id")
+	keys = dedupStrings(keys)
+	if len(keys) > 10 {
+		keys = keys[:10]
+	}
+	return keys
+}
+
+func extractPathTokens(path string) [][2]string {
+	out := make([][2]string, 0, 16)
+	if path == "" {
+		return out
+	}
+	for _, token := range strings.Split(path, "/") {
+		t := strings.TrimSpace(token)
+		if t == "" {
+			continue
+		}
+		if _, bad := pathTokenNoise[strings.ToLower(t)]; bad {
+			continue
+		}
+		hasShape := strings.ContainsAny(t, "0123456789") || strings.Contains(t, "-") || strings.Contains(t, "_")
+		if !hasShape {
+			continue
+		}
+		if len(t) > 128 {
+			continue
+		}
+		out = append(out, [2]string{"id", t})
+	}
+	return out
+}
+
+func inferResourceIDKeyFromPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	tokens := []string{}
+	for _, token := range strings.Split(path, "/") {
+		t := strings.ToLower(strings.TrimSpace(token))
+		if t == "" {
+			continue
+		}
+		if _, bad := resourcePathNoise[t]; bad {
+			continue
+		}
+		if strings.Contains(t, "{") || strings.Contains(t, "}") || t == "-" {
+			continue
+		}
+		if _, err := strconv.Atoi(t); err == nil {
+			continue
+		}
+		if strings.ContainsAny(t, "0123456789") {
+			continue
+		}
+		tokens = append(tokens, t)
+	}
+	if len(tokens) == 0 {
+		return ""
+	}
+	return singularize(tokens[len(tokens)-1]) + "Id"
+}
+
+func extractJSONRuntimeValues(node any, outVals *[][2]string, outRels *[][4]string, depth int) {
+	if depth > 6 {
+		return
+	}
+	switch tv := node.(type) {
+	case map[string]any:
+		locals := make([][2]string, 0, len(tv))
+		for k, v := range tv {
+			kn := canonicalKey(k)
+			isLearnable := strings.HasSuffix(kn, "id")
+			if !isLearnable {
+				for _, rk := range runtimeLearnKeys {
+					if kn == rk || strings.HasSuffix(kn, rk) {
+						isLearnable = true
+						break
+					}
+				}
+			}
+			if isLearnable {
+				if scalar, ok := toUsefulScalar(v); ok {
+					*outVals = append(*outVals, [2]string{k, scalar})
+					locals = append(locals, [2]string{k, scalar})
+				}
+			}
+			if m, ok := v.(map[string]any); ok {
+				if nested, ok := m["id"]; ok {
+					if scalar, ok := toUsefulScalar(nested); ok {
+						nk := k + "Id"
+						*outVals = append(*outVals, [2]string{nk, scalar})
+						locals = append(locals, [2]string{nk, scalar})
+					}
+				} else if nested, ok := m["Id"]; ok {
+					if scalar, ok := toUsefulScalar(nested); ok {
+						nk := k + "Id"
+						*outVals = append(*outVals, [2]string{nk, scalar})
+						locals = append(locals, [2]string{nk, scalar})
+					}
+				}
+			}
+			extractJSONRuntimeValues(v, outVals, outRels, depth+1)
+		}
+		if len(locals) > 1 {
+			if len(locals) > 10 {
+				locals = locals[:10]
+			}
+			for i := 0; i < len(locals); i++ {
+				for j := i + 1; j < len(locals); j++ {
+					*outRels = append(*outRels, [4]string{locals[i][0], locals[i][1], locals[j][0], locals[j][1]})
+				}
+			}
+		}
+	case []any:
+		limit := minInt(100, len(tv))
+		for i := 0; i < limit; i++ {
+			extractJSONRuntimeValues(tv[i], outVals, outRels, depth+1)
+		}
+	}
+}
+
+func extractEntityIDs(body string, headers map[string]string) []string {
+	out := []string{}
+	if reJSONStartAny.MatchString(body) {
+		var js any
+		if err := json.Unmarshal([]byte(body), &js); err == nil {
+			if m, ok := js.(map[string]any); ok {
+				if id, ok := m["id"]; ok {
+					if s, ok := toUsefulScalar(id); ok {
+						out = append(out, s)
+					}
+				} else if id, ok := m["Id"]; ok {
+					if s, ok := toUsefulScalar(id); ok {
+						out = append(out, s)
+					}
+				}
+				if data, ok := m["data"].([]any); ok {
+					for _, el := range data {
+						if mm, ok := el.(map[string]any); ok {
+							if id, ok := mm["id"]; ok {
+								if s, ok := toUsefulScalar(id); ok {
+									out = append(out, s)
+								}
+							} else if id, ok := mm["Id"]; ok {
+								if s, ok := toUsefulScalar(id); ok {
+									out = append(out, s)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	loc := headers["Location"]
+	if loc == "" {
+		loc = headers["location"]
+	}
+	if loc != "" {
+		parts := strings.Split(strings.TrimRight(loc, "/"), "/")
+		if len(parts) > 0 {
+			last := strings.TrimSpace(parts[len(parts)-1])
+			if isUsefulValue(last) {
+				out = append(out, last)
+			}
+		}
+	}
+	return uniqStrings(filterUsefulStrings(out))
+}
+// enqueueCrashReplay queues n follow-up work items after a unique crash is found.
+// It re-renders the crashing template with varying mutation modes to find bug variants.
+func (f *Fuzzer) enqueueCrashReplay(item WorkItem, n int) {
+	if n <= 0 || f.isTemplateBlocked(item.TemplateID) {
+		return
+	}
+	epKey := endpointKey(item.Method, normalizePath(item.Path))
+	if f.cfg.CrashReplayPerEndpoint > 0 {
+		remaining := f.cfg.CrashReplayPerEndpoint - f.replayByEndpoint[epKey]
+		if remaining <= 0 {
+			return
+		}
+		n = minInt(n, remaining)
+	}
+	queueMax := maxInt(1, f.cfg.CrashReplayQueueMax)
+	added := 0
+	modes := []string{"mutate", "havoc", "mutate", "havoc", "havoc"}
+	for i := 0; i < n; i++ {
+		if len(f.replayQueue) >= queueMax {
+			break
+		}
+		mode := modes[i%len(modes)]
+		depth := 1 + (i / len(modes))
+		rendered, err := f.renderTemplate(item.TemplateID, mode, depth, -1)
+		if err != nil {
+			// Fall back to replaying the exact crashing item.
+			replay := item
+			replay.MutationLabel = fmt.Sprintf("crash_replay_%d", i)
+			replay.MutationName = "crash_replay"
+			replay.EpochName = "Replay"
+			f.replayQueue = append(f.replayQueue, replay)
+			added++
+			continue
+		}
+		rendered.MutationLabel = "crash_replay+" + rendered.MutationLabel
+		rendered.MutationName = "crash_replay"
+		rendered.EpochName = "Replay"
+		f.replayQueue = append(f.replayQueue, rendered)
+		added++
+	}
+	if added > 0 {
+		f.replayByEndpoint[epKey] += added
+	}
+}
