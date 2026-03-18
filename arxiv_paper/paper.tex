@@ -312,7 +312,10 @@ Seeds are sampled proportionally to their energy for mutation using a \emph{Fenw
 \begin{table}[htbp]
 \caption{Void Fuzzing Campaign Epochs}
 \label{tab:epochs}
-\begin{center}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{llrl}
 \toprule
 \textbf{Epoch} & \textbf{Mode} & \textbf{Budget} & \textbf{Purpose} \\
@@ -324,7 +327,7 @@ Havoc        & Havoc      & 35\% & Random multi-mutation combinations \\
 Splicing     & Havoc      & 10\% & Cross-seed payload recombination \\
 \bottomrule
 \end{tabular}
-\end{center}
+}
 \end{table}
 
 At each epoch transition, Void measures the edge discovery rate (edges found per request) achieved during the completed epoch. If the rate falls below $10^{-3}$ edges/request after more than 200 requests, 30\% of that epoch's remaining budget is transferred to the Havoc epoch, which has consistently higher exploration yield for large, multi-structured APIs.
