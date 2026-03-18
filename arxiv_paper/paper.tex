@@ -407,8 +407,10 @@ In addition to the 24-hour campaigns, we executed a short, fully reproducible Do
 \begin{table}[htbp]
 \caption{Reproducible 20-Minute Docker Benchmark. Bug discovery is reported as distinct HTTP 500-producing method+endpoint pairs. RESTler reports specification coverage; Void reports SHM-guided edge gains.}
 \label{tab:dockerbench}
-\begin{center}
+\centering
 \footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{llrrrl}
 \toprule
 \textbf{Target} & \textbf{Tool} & \textbf{Endp.} & \textbf{Requests} & \textbf{500 M+E} & \textbf{Coverage} \\
@@ -430,7 +432,7 @@ In addition to the 24-hour campaigns, we executed a short, fully reproducible Do
   & Void & 309 & \textbf{4,941,012} & \textbf{97} & 152,567 edges \\
 \bottomrule
 \end{tabular}
-\end{center}
+}
 \end{table}
 
 This endpoint-normalized comparison still isolates operational throughput under identical Dockerized deployments. On \texttt{eShopOnWeb}, Void issued $4{,}920.1\times$ more requests than RESTler within the same 20-minute budget; on \texttt{CustomerLoyalty}, it issued $39.2\times$ more requests; on \texttt{Catalog.API}, it issued $44.5\times$ more requests; and on \texttt{Jellyfin}, it issued $84.6\times$ more requests. With \texttt{--skip-endpoint-on-500} enabled, the HTTP 500 endpoint-level results now favor Void on three of the four targets: it exposes more 500-producing method+endpoint pairs on \texttt{eShopOnWeb} ($2$ vs.\ $1$), ties on \texttt{CustomerLoyalty} ($1$ vs.\ $1$), remains behind RESTler on \texttt{Catalog.API} ($8$ vs.\ $12$), and substantially exceeds RESTler on \texttt{Jellyfin} ($97$ vs.\ $18$). Aggregated over the four Docker targets, Void exposes $108$ distinct HTTP 500 method+endpoint pairs versus $32$ for RESTler. The two coverage columns are intentionally reported in different units: RESTler exposes endpoint-level specification coverage, whereas Void reports edge gains observed through the instrumented runtime. For \texttt{Catalog.API}, this comparison remains restricted to the shared 12-endpoint sanitized benchmark subset with the version query parameter fixed to the literal \texttt{1.0} in the copied Void grammar artifacts. For \texttt{Jellyfin}, both tools use the same authenticated 309-operation sanitized subset, and the table counts only HTTP 500 observations; the later degraded-state 503 responses are intentionally excluded from the reported bug metric.
