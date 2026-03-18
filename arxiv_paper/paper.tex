@@ -377,7 +377,10 @@ Table~\ref{tab:results} summarizes the 24-hour results.
 \begin{table}[htbp]
 \caption{24-Hour Fuzzing Results: RESTler Baseline vs. UpsideFuzz}
 \label{tab:results}
-\begin{center}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{llrrl}
 \toprule
 \textbf{Target} & \textbf{Tool} & \textbf{Edges} & \textbf{5xx Found} & \textbf{TTFC}$^{a}$ \\
@@ -394,9 +397,11 @@ Table~\ref{tab:results} summarizes the 24-hour results.
   & RESTler     & 1,850  & 1  & 8h 30m \\
   & \textbf{UpsideFuzz} & \textbf{4,200}$^{+127\%}$ & \textbf{7} & \textbf{1h 20m} \\
 \bottomrule
-\multicolumn{5}{l}{$^{a}$Time to First Crash (not applicable if no crashes found).}
 \end{tabular}
-\end{center}
+}
+
+\vspace{2pt}
+\footnotesize{$^{a}$Time to First Crash (not applicable if no crashes found).}
 \end{table}
 
 Across all three targets, UpsideFuzz covers $127\%$--$169\%$ more unique branch edges than the baseline after 24 hours. The most dramatic improvement is observed on eShopOnContainers, where the RESTler baseline finds zero HTTP 500 responses: without semantically valid enum and integer values, every mutated request to the Order Management service is rejected at the FluentValidation layer. UpsideFuzz's SSE pass recovers 12 enum types and 8 numeric ranges from the microservice source trees, enabling the engine to break through validation and discover 3 service crashes.
