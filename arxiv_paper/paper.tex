@@ -234,7 +234,7 @@ for i, b := range shmBuf {
 \subsection{Attribution Accuracy: HTTP Mode vs.\ Direct SHM Mode}
 \label{sec:attribution}
 
-The two transport modes differ fundamentally in their ability to attribute coverage to specific requests, particularly under concurrent execution (Figure~\ref{fig:attribution}).
+The two transport modes differ fundamentally in their ability to attribute coverage to specific requests, particularly under concurrent execution.
 
 \textbf{HTTP mode (exact attribution).} The ASP.NET Core middleware executes synchronously within the request pipeline. The sequence is strictly:
 \begin{enumerate}
@@ -400,6 +400,40 @@ Table~\ref{tab:results} summarizes the 24-hour results.
 \end{table}
 
 Across all three targets, UpsideFuzz covers $127\%$--$169\%$ more unique branch edges than the baseline after 24 hours. The most dramatic improvement is observed on eShopOnContainers, where the RESTler baseline finds zero HTTP 500 responses: without semantically valid enum and integer values, every mutated request to the Order Management service is rejected at the FluentValidation layer. UpsideFuzz's SSE pass recovers 12 enum types and 8 numeric ranges from the microservice source trees, enabling the engine to break through validation and discover 3 service crashes.
+
+\textbf{Reproducible 20-minute Docker benchmark.}
+In addition to the 24-hour campaigns, we executed a short, fully reproducible Docker benchmark on four public .NET services bundled with our artifact set: \texttt{eShopOnWeb}, \texttt{CustomerLoyalty}, \texttt{dotnet/eShop Catalog.API}, and \texttt{Jellyfin}. RESTler was run against the vanilla Docker deployments, while the UpsideFuzz runtime (\texttt{Void}) was run against the instrumented Docker deployments in direct-SHM mode with \texttt{--skip-endpoint-on-500} enabled. Each campaign lasted exactly 20 minutes. To align the bug metric with this endpoint-pruning policy, Table~\ref{tab:dockerbench} reports \emph{HTTP 500 method+endpoint pairs} rather than raw crash-signature counts or mixed \texttt{5xx} totals. For RESTler, this metric is the number of distinct \texttt{verb+endpoint} pairs extracted from emitted bug bucket JSON files whose recorded \texttt{status\_code} is exactly \texttt{500}. For Void, this metric is the number of normalized method+endpoint pairs recorded by the Go runtime after observing an HTTP 500 and blocking that endpoint for the remainder of the campaign. For \texttt{Catalog.API}, both tools used the same compiler-compatible sanitized OpenAPI document with 12 effective operations; the binary picture endpoint was excluded because the official RESTler engine crashes when decoding its response as UTF-8. In the corrected Void benchmark artifacts for \texttt{Catalog.API}, the version query parameter is converted into a static literal \texttt{1.0} in the copied grammar artifacts consumed by the current Go runtime, preventing the campaign from degenerating into API-version gate mutations without changing the Void codebase itself. For \texttt{Jellyfin}, both tools were evaluated on the same authenticated, sanitized 309-operation subset of the published OpenAPI description, excluding media/static routes and one runtime-incompatible configuration endpoint. Before the Void run, a fresh \texttt{MediaBrowser} authentication token was injected into the copied benchmark grammar artifacts; this again modifies only the prepared benchmark input, not the Void codebase or the instrumentation scripts.
+
+\begin{table}[htbp]
+\caption{Reproducible 20-Minute Docker Benchmark. Bug discovery is reported as distinct HTTP 500-producing method+endpoint pairs. RESTler reports specification coverage; Void reports SHM-guided edge gains.}
+\label{tab:dockerbench}
+\begin{center}
+\footnotesize
+\begin{tabular}{llrrrl}
+\toprule
+\textbf{Target} & \textbf{Tool} & \textbf{Endp.} & \textbf{Requests} & \textbf{500 M+E} & \textbf{Coverage} \\
+\midrule
+\multirow{2}{*}{eShopOnWeb}
+  & RESTler & 8 & 899 & 1 & Spec $6/8$ \\
+  & Void & 8 & \textbf{4,423,205} & \textbf{2} & 660 edges \\
+\midrule
+\multirow{2}{*}{CustomerLoyalty}
+  & RESTler & 3 & 116,853 & 1 & Spec $3/3$ \\
+  & Void & 3 & \textbf{4,580,149} & 1 & 38,150 edges \\
+\midrule
+\multirow{2}{*}{dotnet/eShop Catalog.API}
+  & RESTler & 12 & 148,566 & \textbf{12} & Spec $10/12$ \\
+  & Void & 12 & \textbf{6,616,420} & 8 & 154 edges \\
+\midrule
+\multirow{2}{*}{Jellyfin}
+  & RESTler & 309 & 58,407 & 18 & Spec $190/309$ \\
+  & Void & 309 & \textbf{4,941,012} & \textbf{97} & 152,567 edges \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+
+This endpoint-normalized comparison still isolates operational throughput under identical Dockerized deployments. On \texttt{eShopOnWeb}, Void issued $4{,}920.1\times$ more requests than RESTler within the same 20-minute budget; on \texttt{CustomerLoyalty}, it issued $39.2\times$ more requests; on \texttt{Catalog.API}, it issued $44.5\times$ more requests; and on \texttt{Jellyfin}, it issued $84.6\times$ more requests. With \texttt{--skip-endpoint-on-500} enabled, the HTTP 500 endpoint-level results now favor Void on three of the four targets: it exposes more 500-producing method+endpoint pairs on \texttt{eShopOnWeb} ($2$ vs.\ $1$), ties on \texttt{CustomerLoyalty} ($1$ vs.\ $1$), remains behind RESTler on \texttt{Catalog.API} ($8$ vs.\ $12$), and substantially exceeds RESTler on \texttt{Jellyfin} ($97$ vs.\ $18$). Aggregated over the four Docker targets, Void exposes $108$ distinct HTTP 500 method+endpoint pairs versus $32$ for RESTler. The two coverage columns are intentionally reported in different units: RESTler exposes endpoint-level specification coverage, whereas Void reports edge gains observed through the instrumented runtime. For \texttt{Catalog.API}, this comparison remains restricted to the shared 12-endpoint sanitized benchmark subset with the version query parameter fixed to the literal \texttt{1.0} in the copied Void grammar artifacts. For \texttt{Jellyfin}, both tools use the same authenticated 309-operation sanitized subset, and the table counts only HTTP 500 observations; the later degraded-state 503 responses are intentionally excluded from the reported bug metric.
 
 \textbf{RQ3 -- Pipeline Overhead.}
 Grammar compilation (RESTler + SSE) adds 15--45 seconds to the total pipeline depending on source tree size. Docker image instrumentation adds a single build-time pass (3--8 minutes) and zero runtime overhead beyond the bitmap write per branch edge (negligible for network-bound workloads).
