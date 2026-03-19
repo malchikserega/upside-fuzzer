@@ -36,7 +36,7 @@
     {
       "target": "eShopOnWeb",
       "tool": "Void",
-      "project": "UpsideFuzz",
+      "project": "UpsideFuzzer",
       "endpoints": 8,
       "openapi_covered": 6,
       "openapi_total": 8,
@@ -67,7 +67,7 @@
     {
       "target": "CustomerLoyalty",
       "tool": "Void",
-      "project": "UpsideFuzz",
+      "project": "UpsideFuzzer",
       "endpoints": 3,
       "openapi_covered": 3,
       "openapi_total": 3,
@@ -98,7 +98,7 @@
     {
       "target": "dotnet/eShop Catalog.API",
       "tool": "Void",
-      "project": "UpsideFuzz",
+      "project": "UpsideFuzzer",
       "endpoints": 12,
       "openapi_covered": 11,
       "openapi_total": 12,
@@ -129,7 +129,7 @@
     {
       "target": "Jellyfin",
       "tool": "Void",
-      "project": "UpsideFuzz",
+      "project": "UpsideFuzzer",
       "endpoints": 309,
       "openapi_covered": 309,
       "openapi_total": 309,
