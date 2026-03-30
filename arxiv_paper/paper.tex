@@ -2,6 +2,8 @@
 
 \usepackage{cite}
 \usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
 \usepackage{graphicx}
 \usepackage{textcomp}
 \usepackage{xcolor}
@@ -10,6 +12,8 @@
 \usepackage{multirow}
 \usepackage{url}
 \usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric,backgrounds}
 
 \hypersetup{hidelinks}
 
@@ -252,35 +256,130 @@ Void is a multi-goroutine HTTP fuzzing engine implemented in Go ($\sim$3,500 lin
 
 \subsection{Coverage-Guided Feedback Loop}
 \label{sec:feedback_loop}
-Void does not use coverage as a passive metric. It uses it to decide what to try next. In simple terms, each request goes through the following loop:
+The central mechanism in Void is a closed loop that connects structured HTTP requests to coverage observations and uses those observations to change what the fuzzer tries next. Unlike byte-level coverage-guided fuzzers such as AFL, Void mutates \emph{typed grammar slots}, so the feedback signal can be attributed to concrete choices: which endpoint was selected, which field value was substituted, and which mutation category was used.
+
+\subsubsection{Loop Overview}
+Each iteration of the main loop performs the following steps:
 \begin{enumerate}
-    \item \textbf{Choose a seed and a template.} Void picks an existing seed and a grammar template using the current seed energy and endpoint weights.
-    \item \textbf{Render a valid request.} It fills the template with concrete values for path, query, header, and body slots.
-    \item \textbf{Send the request and read coverage.} The runtime sends the request to the instrumented service and records the HTTP result and the edge delta.
-    \item \textbf{Update the search state.} If the request reaches new code, Void keeps it as a useful seed, updates endpoint and mutation statistics, and stores any new IDs or tokens learned from the response.
+    \item \textbf{Seed and template selection.} Pick a seed from the corpus using energy-weighted sampling (Fenwick tree, $O(\log N)$). The seed determines both the grammar template and a known-useful payload to mutate from.
+    \item \textbf{Template rendering.} Walk the template segment list. Copy \texttt{static} segments verbatim. Fill \texttt{custom\_payload} segments from runtime-learned values (or dictionary fallback). Fill \texttt{fuzzable} segments from typed defaults, then optionally apply a mutation selected by MOpt-weighted category sampling.
+    \item \textbf{HTTP execution.} Send the rendered request. Record the response status, body, latency, and any \texttt{X-Coverage-Delta} response header injected by the .NET coverage middleware.
+    \item \textbf{Coverage measurement.} If the response contains a per-request coverage delta (HTTP mode), use it directly. Otherwise, after every $N$ completed requests, poll the shared-memory bitmap and compute the global edge delta.
+    \item \textbf{State update.} If new edges were found: promote the request into the seed corpus with energy proportional to the surprise factor; boost the parent seed energy; record a hit on the mutation category; reset the endpoint stall counter. If no new edges: increment the stall counter; if stagnation persists, escalate havoc depth and redistribute endpoint weights.
 \end{enumerate}
 
-The important point is that the loop works over \emph{structured requests}, not raw bytes. Coverage does not tell Void to flip random bits in an HTTP packet. It tells Void which endpoint template, field values, and request sequence were worth keeping and mutating further.
+Figure~\ref{fig:feedbackloop} shows this cycle as a data-flow diagram. The critical insight is that no part of the loop works on raw bytes. Coverage tells Void which endpoint template, field values, and mutation family were worth keeping and mutating further.
 
-At the scheduling level, the corpus and template priorities are combined multiplicatively:
+\begin{figure}[t]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=0.9cm and 0.4cm,
+    block/.style={rectangle, draw, rounded corners, fill=blue!8,
+                  text width=2.8cm, minimum height=0.75cm, align=center,
+                  font=\scriptsize},
+    data/.style={rectangle, draw, fill=orange!10, text width=2.5cm,
+                 minimum height=0.6cm, align=center, font=\scriptsize},
+    decision/.style={diamond, draw, fill=green!8, aspect=2,
+                     text width=1.8cm, align=center, font=\scriptsize},
+    arr/.style={-{Stealth[length=2mm]}, thick},
+    lab/.style={font=\tiny, text=gray},
+]
+% Left column: inputs
+\node[data] (corpus) {Seed Corpus\\(Fenwick sampler)};
+\node[data, below=0.5cm of corpus] (grammar) {Grammar Templates\\+ dict.json};
+
+% Center column: processing
+\node[block, right=1.0cm of corpus] (select) {1. Pick seed\\by energy};
+\node[block, below=0.5cm of select] (render) {2. Render template\\(fill slots, mutate)};
+\node[block, below=0.5cm of render] (send) {3. Send HTTP\\to .NET target};
+\node[block, below=0.5cm of send] (measure) {4. Read coverage\\(SHM or header)};
+
+% Right column: feedback
+\node[decision, right=1.0cm of measure] (novel) {New\\edges?};
+\node[block, above=0.6cm of novel] (update) {5. Update state:\\boost seed, record\\mutation hit};
+\node[data, above=0.5cm of update] (learn) {Learned IDs,\\tokens, cookies};
+
+% Arrows: main flow
+\draw[arr] (corpus) -- (select);
+\draw[arr] (grammar) -| (render);
+\draw[arr] (select) -- (render);
+\draw[arr] (render) -- (send);
+\draw[arr] (send) -- (measure);
+\draw[arr] (measure) -- (novel);
+
+% Arrows: feedback path
+\draw[arr] (novel) -- node[right, lab] {yes} (update);
+\draw[arr] (update) -- (learn);
+\draw[arr, dashed] (learn) -| (corpus);
+\draw[arr, dashed] (update.west) -- ++(-0.4,0) |- (corpus.east);
+
+% No-edge path
+\draw[arr] (novel.south) -- ++(0,-0.35) -| node[below, lab, pos=0.25] {no: stall++} ([xshift=-0.8cm]select.south);
+
+\end{tikzpicture}
+}
+\caption{Void's coverage-guided feedback loop. Solid arrows show data flow within one iteration; dashed arrows show feedback that changes future iterations. A coverage gain promotes the request to the corpus, boosts parent seed energy, and records a mutation category hit. No gain increments a stall counter that escalates mutation depth.}
+\label{fig:feedbackloop}
+\end{figure}
+
+\subsubsection{Pseudocode}
+Algorithm~\ref{alg:feedback} gives the pseudocode for the main loop. The key decision points are: (a)~how seeds are sampled (energy-proportional via Fenwick tree), (b)~how coverage is measured (per-request header or interval-based bitmap poll), and (c)~how the result feeds back into corpus energy and mutation weights.
+
+\begin{algorithm}[t]
+\caption{Coverage-Guided Feedback Loop}
+\label{alg:feedback}
+\begin{algorithmic}[1]
+\REQUIRE Templates $\mathcal{T}$, dictionary $\mathcal{D}$, store $\mathcal{R}$, budget $B$
+\STATE $\mathcal{C} \leftarrow$ baseline rendering of all templates
+\STATE edges $\leftarrow 0$; stall $\leftarrow 0$; done $\leftarrow 0$
+\WHILE{elapsed $< B$}
+    \STATE epoch $\leftarrow$ currentEpoch(elapsed, $B$)
+    \IF{epoch is Mutate/Havoc and $|\mathcal{C}| > 0$}
+        \STATE $i \leftarrow$ FenwickPick($\mathcal{C}$)
+        \STATE $\mathcal{C}[i]$.energy $\leftarrow \mathcal{C}[i]$.energy $\times\, 0.995$
+    \ELSE
+        \STATE $t \leftarrow$ weightedTemplatePick($\mathcal{T}$)
+    \ENDIF
+    \STATE req $\leftarrow$ render($t$, epoch.mode, $\mathcal{D}$, $\mathcal{R}$)
+    \STATE resp $\leftarrow$ sendHTTP(req); done $\leftarrow$ done $+ 1$
+    \IF{resp.coverageDelta $> 0$}
+        \STATE $\delta \leftarrow$ resp.coverageDelta
+    \ELSIF{done mod interval $= 0$}
+        \STATE $\delta \leftarrow$ readSHM() $-$ edges
+    \ELSE
+        \STATE $\delta \leftarrow 0$
+    \ENDIF
+    \STATE edges $\leftarrow$ edges $+ \delta$
+    \IF{$\delta > 0$}
+        \STATE stall $\leftarrow 0$
+        \STATE surprise $\leftarrow (1 + \log_2$ ep.reqs$) \cdot \gamma_e$
+        \STATE addSeed($\mathcal{C}$, req, $\delta \cdot$ surprise)
+        \STATE boostParent($\mathcal{C}[i]$, $\delta \times 5$)
+        \STATE recordCategoryHit(req.label)
+    \ELSE
+        \STATE stall $\leftarrow$ stall $+ 1$
+    \ENDIF
+    \STATE updateMutWeights()
+    \STATE learnValues(resp, $\mathcal{R}$)
+    \IF{$|\mathcal{C}| > 500$}
+        \STATE minimizeCorpus($\mathcal{C}$)
+    \ENDIF
+\ENDWHILE
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Scheduling Priority}
+At the scheduling level, the probability of selecting a particular seed-template pair is proportional to:
 \begin{equation}
   \Pr(s, t) \propto E(s) \cdot w(t)
   \label{eq:loop_priority}
 \end{equation}
-where $E(s)$ is the current energy of seed $s$ (Equation~\ref{eq:seed_energy}) and $w(t)$ is the current weight of template $t$ (Equation~\ref{eq:template_weight}). Productive seeds become more likely to be chosen again, while endpoints that keep failing or have missing dependencies lose priority.
-
-Figure~\ref{fig:feedbackloop} shows this loop directly.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.96\columnwidth]{figures/feedback_loop_diagram.pdf}
-\caption{Void's coverage-guided feedback loop. Grammar artifacts provide typed request templates and placeholder metadata; the scheduler renders one concrete request, executes it against the SharpFuzz-instrumented .NET service, observes the response and SHM bitmap delta, and feeds edge novelty plus learned runtime values back into corpus energy, endpoint health, and mutation weights for the next iteration.}
-\label{fig:feedbackloop}
-\end{figure}
+where $E(s)$ is the current energy of seed $s$ (Equation~\ref{eq:seed_energy}) and $w(t)$ is the current weight of template $t$ (Equation~\ref{eq:template_weight}). Productive seeds become more likely to be chosen again. Seeds undergo a 0.5\% energy decay each time they are selected, preventing any single seed from monopolizing the budget.
 
 \subsection{From Endpoint Parameters to Coverage-Directed Mutation}
 \label{sec:param_to_cov}
-The key implementation detail is how one endpoint instance turns into a coverage gain and then into a new mutation choice. In the current Go runtime, that happens in four steps.
+The key implementation detail is how one endpoint instance turns into a coverage gain and then into a new mutation choice. In the current Go runtime, that happens in four stages.
 
 \textbf{Stage 1: fill the template.} The renderer walks through the template from left to right. \texttt{static} segments are copied as-is. \texttt{custom\_payload} segments first try to use IDs or tokens learned from earlier responses; if none are available, Void falls back to dictionary values. \texttt{fuzzable} segments are filled from typed defaults and may then be mutated. JSON bodies and ID-like path segments may also receive extra structured mutations depending on the current epoch.
 
@@ -305,9 +404,90 @@ if delta > 0 {
   w_{\text{cat}} = 1 + 4 \cdot \frac{\text{Hits}}{\max(1,\text{Attempts})}
   \label{eq:mutcat_weight}
 \end{equation}
-so a mutation family that repeatedly finds new edges can become much more likely than an unproductive one.
+so a mutation family that repeatedly finds new edges can become up to $5\times$ more likely than an unproductive one.
 
 This is the full endpoint-to-coverage-to-mutation chain. A useful request does not just increase a counter in a bitmap. It changes which seeds, endpoints, and mutation families are more likely to be used next.
+
+\subsection{Adaptive Mutation Scheduling (MOpt)}
+\label{sec:mopt}
+Void organizes string mutation payloads into 15 categories corresponding to common vulnerability classes: boundary, overflow, SQL injection, XSS, command injection, path traversal, SSRF, SSTI, CRLF injection, open redirect, Log4Shell, NoSQLi, LDAP injection, XXE, and Unicode tricks. Each category has a runtime weight that starts at a class-dependent baseline (typically 1.0--1.5) and is updated based on how often it discovers new edges.
+
+Algorithm~\ref{alg:mopt} shows the selection and weight update logic. The design follows MOpt~\cite{mopt}: categories that improve coverage become more likely to be selected in the future. Numbers and dates have separate type-aware mutators that do not use the category system.
+
+\begin{algorithm}[t]
+\caption{MOpt-Style Adaptive Mutation Selection}
+\label{alg:mopt}
+\begin{algorithmic}[1]
+\REQUIRE Categories $\{c_1, \ldots, c_K\}$ with weights $w_k$, payloads $P_k$
+\STATE \textbf{// Select category (weighted random):}
+\STATE Draw $r \sim \text{Uniform}(0, \sum w_k)$
+\STATE Pick $c_j$ such that $\sum_{k=1}^{j-1} w_k < r \le \sum_{k=1}^{j} w_k$
+\STATE Draw payload $p \sim \text{Uniform}(P_j)$
+\STATE $c_j$.Attempts $\leftarrow c_j$.Attempts $+ 1$
+\STATE \textbf{return} $p$, category label ``mcat\_$c_j$.name''
+\STATE
+\STATE \textbf{// On coverage gain (called from feedback loop):}
+\FORALL{$c_k$ where label contains ``mcat\_$c_k$.name''}
+    \STATE $c_k$.Hits $\leftarrow c_k$.Hits $+ 1$
+\ENDFOR
+\STATE
+\STATE \textbf{// Periodic weight recalculation:}
+\FORALL{$c_k$ with Attempts $> 0$}
+    \STATE $w_k \leftarrow 1.0 + 4.0 \times c_k$.Hits / $c_k$.Attempts
+\ENDFOR
+\end{algorithmic}
+\end{algorithm}
+
+Figure~\ref{fig:cov_influence} illustrates how coverage feedback influences three separate aspects of the mutation pipeline: seed energy (which seed to mutate from), endpoint weight (which API operation to target), and mutation category weight (which payload family to use).
+
+\begin{figure}[t]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=0.7cm,
+    box/.style={rectangle, draw, rounded corners, text width=3.5cm,
+                minimum height=0.65cm, align=center, font=\scriptsize},
+    signal/.style={rectangle, draw, fill=red!10, text width=3.0cm,
+                   minimum height=0.6cm, align=center, font=\scriptsize},
+    effect/.style={rectangle, draw, fill=blue!8, text width=3.5cm,
+                   minimum height=0.6cm, align=center, font=\scriptsize},
+    arr/.style={-{Stealth[length=2mm]}, thick},
+]
+% Central signal
+\node[signal] (delta) {Coverage $\delta > 0$\\(new edges found)};
+
+% Three effects
+\node[effect, above right=0.8cm and 0.5cm of delta] (seed)
+    {Seed energy $\uparrow$\\$E += \delta \times 5 \times$ surprise};
+\node[effect, right=0.5cm of delta] (endpoint)
+    {Endpoint weight $\uparrow$\\ep.NewEdges $+= \delta$\\ep.ReqsSinceEdge $= 0$};
+\node[effect, below right=0.8cm and 0.5cm of delta] (mopt)
+    {Mutation category weight $\uparrow$\\$w = 1 + 4 \times$ Hits/Attempts};
+
+% Downstream effects
+\node[box, right=0.5cm of seed] (fenwick) {Fenwick sampler picks\\this seed more often};
+\node[box, right=0.5cm of endpoint] (tmpl) {Template sampler picks\\this endpoint more often};
+\node[box, right=0.5cm of mopt] (cat) {pickMutationCategory()\\selects this family more};
+
+% Anti-stagnation
+\node[signal, below=0.8cm of delta] (stall)
+    {Coverage $\delta = 0$\\(stall counter $\uparrow$)};
+\node[effect, right=2.5cm of stall] (havoc) {havocDepth $= 1 +$ stall$/8$\\(more stacked mutations)};
+
+% Arrows
+\draw[arr] (delta) -- (seed);
+\draw[arr] (delta) -- (endpoint);
+\draw[arr] (delta) -- (mopt);
+\draw[arr] (seed) -- (fenwick);
+\draw[arr] (endpoint) -- (tmpl);
+\draw[arr] (mopt) -- (cat);
+\draw[arr] (stall) -- (havoc);
+
+\end{tikzpicture}
+}
+\caption{How coverage feedback influences the mutation pipeline. A positive edge delta boosts three independent weights: seed energy (how often the parent seed is reused), endpoint health (how often the template is selected), and mutation category weight (how often the payload family is used). Persistent lack of new edges escalates the havoc depth, applying more stacked mutations per request.}
+\label{fig:cov_influence}
+\end{figure}
 
 \subsection{Structured Mutation Operators}
 \label{sec:mut_operators}
@@ -603,6 +783,10 @@ Fuzzapi, ``API Fuzzer,'' \url{https://github.com/Fuzzapi/API-fuzzer}, 2020.
 
 \bibitem{schemathesis}
 D. Tsoy et al., ``Schemathesis: An API Testing Tool Based on Hypothesis and Property-Based Testing,'' \url{https://github.com/schemathesis/schemathesis}, 2020.
+
+\bibitem{mopt}
+C. Lyu, S. Ji, C. Zhang, Y. Li, W.-H. Lee, Y. Song, and R. Beyah, ``MOpt: Optimized Mutation Scheduling for Fuzzers,'' in \textit{Proc. 28th USENIX Security Symposium}, 2019.
+
 \end{thebibliography}
 
 \end{document}
