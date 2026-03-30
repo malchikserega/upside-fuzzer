@@ -14,8 +14,9 @@
 \usepackage{hyperref}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric,backgrounds}
-
-\hypersetup{hidelinks}
+\usepackage{etoolbox}
+% Ensure algorithm text is always black (not white-on-white)
+\AtBeginEnvironment{algorithmic}{\color{black}}
 
 \lstset{
   basicstyle=\ttfamily\scriptsize,
@@ -256,19 +257,19 @@ Void is a multi-goroutine HTTP fuzzing engine implemented in Go ($\sim$3,500 lin
 
 \subsection{Coverage-Guided Feedback Loop}
 \label{sec:feedback_loop}
-The central mechanism in Void is a closed loop that connects structured HTTP requests to coverage observations and uses those observations to change what the fuzzer tries next. Unlike byte-level coverage-guided fuzzers such as AFL, Void mutates \emph{typed grammar slots}, so the feedback signal can be attributed to concrete choices: which endpoint was selected, which field value was substituted, and which mutation category was used.
+The main idea behind Void is simple: send a request, check if it reached new code, and if it did, remember what worked and do more of it. The difference from traditional byte-level fuzzers like AFL is that Void mutates \emph{typed grammar slots} instead of random bytes, so it always knows which endpoint, which field, and which kind of mutation led to new coverage.
 
 \subsubsection{Loop Overview}
 Each iteration of the main loop performs the following steps:
 \begin{enumerate}
-    \item \textbf{Seed and template selection.} Pick a seed from the corpus using energy-weighted sampling (Fenwick tree, $O(\log N)$). The seed determines both the grammar template and a known-useful payload to mutate from.
-    \item \textbf{Template rendering.} Walk the template segment list. Copy \texttt{static} segments verbatim. Fill \texttt{custom\_payload} segments from runtime-learned values (or dictionary fallback). Fill \texttt{fuzzable} segments from typed defaults, then optionally apply a mutation selected by MOpt-weighted category sampling.
+    \item \textbf{Pick a seed.} Choose one of the previously successful requests from the corpus. Seeds that found more coverage get picked more often.
+    \item \textbf{Build a request.} Take the grammar template, fill in the blanks: copy static parts, plug in learned IDs for \texttt{custom\_payload} slots, pick or mutate values for \texttt{fuzzable} slots.
     \item \textbf{HTTP execution.} Send the rendered request. Record the response status, body, latency, and any \texttt{X-Coverage-Delta} response header injected by the .NET coverage middleware.
     \item \textbf{Coverage measurement.} If the response contains a per-request coverage delta (HTTP mode), use it directly. Otherwise, after every $N$ completed requests, poll the shared-memory bitmap and compute the global edge delta.
-    \item \textbf{State update.} If new edges were found: promote the request into the seed corpus with energy proportional to the surprise factor; boost the parent seed energy; record a hit on the mutation category; reset the endpoint stall counter. If no new edges: increment the stall counter; if stagnation persists, escalate havoc depth and redistribute endpoint weights.
+    \item \textbf{Update state.} If new edges were found: save this request as a new seed, give it more weight so it gets picked again, and note which mutation type worked. If nothing new: bump a stall counter. After enough stalls, Void tries harder mutations.
 \end{enumerate}
 
-Figure~\ref{fig:feedbackloop} shows this cycle as a data-flow diagram. The critical insight is that no part of the loop works on raw bytes. Coverage tells Void which endpoint template, field values, and mutation family were worth keeping and mutating further.
+Figure~\ref{fig:feedbackloop} shows this cycle visually. The key point: Void never touches raw bytes. It always knows which endpoint and which mutation led to new coverage, so the feedback is actionable.
 
 \begin{figure}[t]
 \centering
@@ -324,7 +325,7 @@ Figure~\ref{fig:feedbackloop} shows this cycle as a data-flow diagram. The criti
 \end{figure}
 
 \subsubsection{Pseudocode}
-Algorithm~\ref{alg:feedback} gives the pseudocode for the main loop. The key decision points are: (a)~how seeds are sampled (energy-proportional via Fenwick tree), (b)~how coverage is measured (per-request header or interval-based bitmap poll), and (c)~how the result feeds back into corpus energy and mutation weights.
+Algorithm~\ref{alg:feedback} shows the pseudocode. The three key decisions are: (a)~which seed to pick (weighted by past success), (b)~how to read coverage (per-request header when available, or periodic bitmap check), and (c)~how to reward successful mutations.
 
 \begin{algorithm}[t]
 \caption{Coverage-Guided Feedback Loop}
@@ -370,12 +371,12 @@ Algorithm~\ref{alg:feedback} gives the pseudocode for the main loop. The key dec
 \end{algorithm}
 
 \subsubsection{Scheduling Priority}
-At the scheduling level, the probability of selecting a particular seed-template pair is proportional to:
+The chance of picking a seed-template pair depends on two things:
 \begin{equation}
-  \Pr(s, t) \propto E(s) \cdot w(t)
+  \text{pick\_chance}(s, t) \;\propto\; \text{seed\_energy}(s) \;\times\; \text{template\_weight}(t)
   \label{eq:loop_priority}
 \end{equation}
-where $E(s)$ is the current energy of seed $s$ (Equation~\ref{eq:seed_energy}) and $w(t)$ is the current weight of template $t$ (Equation~\ref{eq:template_weight}). Productive seeds become more likely to be chosen again. Seeds undergo a 0.5\% energy decay each time they are selected, preventing any single seed from monopolizing the budget.
+Seeds that found more coverage have higher energy, so they get picked more often. Templates for endpoints that keep failing lose weight. Every time a seed is picked, its energy drops by 0.5\%, so no single seed can dominate forever.
 
 \subsection{From Endpoint Parameters to Coverage-Directed Mutation}
 \label{sec:param_to_cov}
@@ -399,12 +400,12 @@ if delta > 0 {
 }
 \end{lstlisting}
 
-\textbf{Stage 4: change future choices.} The search policy is then updated in three ways. First, requests that find new edges are added to the seed corpus with higher energy (Equation~\ref{eq:seed_energy}). Second, endpoints that keep returning 4xx or 5xx without new edges lose weight; with \texttt{--skip-endpoint-on-500}, a method+endpoint pair is removed after the first observed HTTP~500. Third, mutation categories that often lead to new edges get sampled more often. In the current runtime, each category weight is updated as
+\textbf{Stage 4: change future choices.} The result updates three things at once. First, requests that find new edges become seeds with higher energy, so they get picked more often. Second, endpoints that keep failing lose weight (and with \texttt{--skip-endpoint-on-500}, a method+endpoint pair is removed after the first HTTP~500). Third, mutation categories that find new edges get their weight bumped:
 \begin{equation}
-  w_{\text{cat}} = 1 + 4 \cdot \frac{\text{Hits}}{\max(1,\text{Attempts})}
+  \text{category\_weight} = 1 + 4 \times \frac{\text{hits}}{\text{attempts}}
   \label{eq:mutcat_weight}
 \end{equation}
-so a mutation family that repeatedly finds new edges can become up to $5\times$ more likely than an unproductive one.
+In practice, a mutation family that keeps finding new edges can become up to $5\times$ more likely to be selected than one that never does.
 
 This is the full endpoint-to-coverage-to-mutation chain. A useful request does not just increase a counter in a bitmap. It changes which seeds, endpoints, and mutation families are more likely to be used next.
 
@@ -498,12 +499,7 @@ For larger bodies, Void uses \emph{structured body havoc} instead of blind text 
 \subsection{SharpFuzz Instrumentation and Coverage Transport}
 \label{sec:coverage_transport}
 
-\textbf{SHM bitmap layout.} At build time, SharpFuzz rewrites the compiled IL and inserts a counter on each branch edge. For each edge $(u \to v)$ in the control-flow graph, it assigns a random 16-bit identifier $l_u$ to the source block and updates the shared-memory bitmap as:
-\begin{equation}
-  \text{shm}\bigl[(l_u \oplus l_v) \gg 1\bigr] \mathrel{+}= 1
-  \label{eq:shm_edge}
-\end{equation}
-where $l_u$ is the block ID of the previous basic block and $l_v$ is the ID of the target block. This gives a 65,536-byte shared-memory bitmap in the same style as AFL~\cite{afl}.
+\textbf{SHM bitmap layout.} SharpFuzz inserts a counter on each branch edge in the compiled code. When execution crosses an edge between two blocks, it XORs the block identifiers and uses the result as an index into a 65,536-byte shared-memory bitmap --- the same approach as AFL~\cite{afl}. Each byte in the bitmap counts how many times that particular edge was hit.
 
 \textbf{Two coverage transport modes.} The instrumented .NET process exposes this bitmap in two modes:
 
@@ -541,22 +537,22 @@ For each \texttt{(method, path)} pair, Void maintains an \texttt{EndpointStats} 
 
 Template selection during the \emph{Mutate} and \emph{Havoc} epochs uses weighted sampling that combines three factors:
 \begin{equation}
-  w(t) = w_{\text{health}}(t) \cdot w_{\text{dep}}(t) \cdot w_{\text{src}}(t)
+  \text{template\_weight}(t) = \text{health}(t) \times \text{deps\_ready}(t) \times \text{sse\_boost}(t)
   \label{eq:template_weight}
 \end{equation}
-where $w_{\text{health}}(t)$ downweights endpoints with many recent errors, $w_{\text{dep}}(t)$ upweights endpoints whose dependencies are already available at runtime, and $w_{\text{src}}(t)$ gives extra weight to templates that came from SSE-enhanced grammar regions.
+Here, \texttt{health} is lower for endpoints with many recent errors, \texttt{deps\_ready} is higher when the endpoint's dependencies (like IDs from other requests) are already available, and \texttt{sse\_boost} gives extra weight to endpoints whose grammar was enhanced by SSE.
 
 \textbf{Coverage stagnation detection.} If no new edge appears for several minutes, Void treats the current search as stale and gives more attention to endpoints that have not been explored enough. If the bitmap becomes too full, it is reset so hash collisions do not hide new behavior.
 
 \subsection{Seed Energy and Corpus Evolution}
 \label{sec:corpus}
 
-Every request that produces \texttt{edgeShare > 0} is promoted into the seed corpus. The energy of a seed estimates how useful it is likely to be in future mutations:
+Every request that finds new edges is saved into the seed corpus. Its energy (priority for future selection) is calculated as:
 \begin{equation}
-  E(s) = \Delta_{\text{edge}} \cdot \max\!\bigl(1,\; 1 + \log_2(\text{Reqs}(e))\bigr) \cdot \gamma_e
+  \text{energy} = \text{new\_edges} \;\times\; (1 + \log_2 \text{endpoint\_reqs}) \;\times\; \text{bonus}
   \label{eq:seed_energy}
 \end{equation}
-where $\Delta_{\text{edge}}$ is the number of new edges found by $s$, $\text{Reqs}(e)$ is the total number of requests sent to endpoint $e$ at the time of discovery, and $\gamma_e = 3.0$ if that endpoint had never produced a new edge before. In plain terms, a seed gets more energy when it reaches new code on an endpoint that had already been hard to crack.
+The idea is simple: finding new code on an endpoint that has already received many requests is a bigger surprise than finding it on a fresh endpoint. The \texttt{bonus} is $3.0$ when the endpoint had never produced a new edge before. In plain terms, hard-won discoveries get more energy.
 
 Seeds are sampled in proportion to their energy using a \emph{Fenwick tree} sampler. When the corpus grows too large, low-value seeds that have been retried many times without finding new edges are pruned.
 
