@@ -68,6 +68,8 @@ swagger*.json
 prepared-*/
 *-prepared/
 loyalty-prep/
+eshprep/
+crashes/
 
 # ── Target project source clones (large, not part of this tool) ──────────────
 mpt-helpdesk/
