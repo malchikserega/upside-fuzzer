@@ -3,114 +3,114 @@
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
 \citation{restler_icse19}
-\citation{sharpfuzz}
 \citation{restler_icse19}
-\citation{restler_fse20}
-\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction}{1}{section.1}\protected@file@percent }
 \citation{afl}
+\@writefile{toc}{\contentsline {section}{\numberline {I}Introduction: The Task and Its Relevance}{1}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{I}{1}{Introduction: The Task and Its Relevance}{section.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {II}Problem Statement: Why Existing Tools Fall Short}{1}{section.2}\protected@file@percent }
+\newlabel{sec:problem}{{II}{1}{Problem Statement: Why Existing Tools Fall Short}{section.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Comparison of API Fuzzing Approaches}}{1}{table.1}\protected@file@percent }
+\newlabel{tab:approach_comparison}{{I}{1}{Comparison of API Fuzzing Approaches}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}Problem 1: Black-Box Fuzzers Are Blind to Code Coverage}{1}{subsection.2.1}\protected@file@percent }
 \citation{sharpfuzz}
 \citation{restler_icse19}
 \citation{restler_fse20}
+\citation{sharpfuzz}
 \citation{evomaster}
 \citation{wuppiefuzz}
+\citation{schemathesis}
 \citation{dredd}
 \citation{apifuzzer}
-\citation{schemathesis}
-\@writefile{toc}{\contentsline {section}{\numberline {II}Background and Related Work}{2}{section.2}\protected@file@percent }
-\newlabel{sec:background}{{II}{2}{Background and Related Work}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-A}}Coverage-Guided Greybox Fuzzing}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}Specification-Based API Fuzzing}{2}{subsection.2.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}Intelligent API Data Fuzzing}{2}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-D}}Other Related Tools}{2}{subsection.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {III}System Architecture}{2}{section.3}\protected@file@percent }
-\newlabel{sec:arch}{{III}{2}{System Architecture}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-A}}Grammar Artifacts and Runtime Input Model}{2}{subsection.3.1}\protected@file@percent }
-\newlabel{sec:grammar_model}{{\mbox  {III-A}}{2}{Grammar Artifacts and Runtime Input Model}{subsection.3.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {III-B}}Lowering an Endpoint into a Runtime Template}{2}{subsection.3.2}\protected@file@percent }
-\newlabel{sec:endpoint_lowering}{{\mbox  {III-B}}{2}{Lowering an Endpoint into a Runtime Template}{subsection.3.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-B}}Problem 2: Coverage-Guided Fuzzers Break API Structure}{2}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {II-C}}Problem 3: .NET Is Harder to Instrument Than C/C++}{2}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {III}Background and Related Work}{2}{section.3}\protected@file@percent }
+\newlabel{sec:background}{{III}{2}{Background and Related Work}{section.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {IV}UpsideFuzzer: Solution Overview}{2}{section.4}\protected@file@percent }
+\newlabel{sec:solution}{{IV}{2}{UpsideFuzzer: Solution Overview}{section.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces UpsideFuzzer end-to-end pipeline. The preparation phase (left) produces an instrumented Docker image and enhanced grammar. The fuzzing phase (right) runs the Void engine against the instrumented target.}}{2}{figure.1}\protected@file@percent }
+\newlabel{fig:architecture}{{1}{2}{UpsideFuzzer end-to-end pipeline. The preparation phase (left) produces an instrumented Docker image and enhanced grammar. The fuzzing phase (right) runs the Void engine against the instrumented target}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-A}}Grammar Construction: From OpenAPI to Typed Templates}{2}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:grammar_model}{{\mbox  {IV-A}}{2}{Grammar Construction: From OpenAPI to Typed Templates}{subsection.4.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-B}}Semantic Source Extraction (SSE): Making the Dictionary Smarter}{3}{subsection.4.2}\protected@file@percent }
+\newlabel{sec:sse}{{\mbox  {IV-B}}{3}{Semantic Source Extraction (SSE): Making the Dictionary Smarter}{subsection.4.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-B}1}The Problem SSE Solves}{3}{subsubsection.4.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-B}2}Two Sources of Constraints}{3}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Semantic Source Extraction pipeline. The enhancer reads constraints from both the OpenAPI specification and C\# source code, then inserts boundary-focused values into the RESTler dictionary.}}{3}{figure.2}\protected@file@percent }
+\newlabel{fig:sse}{{2}{3}{Semantic Source Extraction pipeline. The enhancer reads constraints from both the OpenAPI specification and C\# source code, then inserts boundary-focused values into the RESTler dictionary}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-B}3}Boundary Value Synthesis}{3}{subsubsection.4.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {IV-C}}Automated Instrumentation Pipeline}{3}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:instrumentation}{{\mbox  {IV-C}}{3}{Automated Instrumentation Pipeline}{subsection.4.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-C}1}What Is Instrumentation?}{3}{subsubsection.4.3.1}\protected@file@percent }
+\citation{sharpfuzz}
 \citation{afl}
-\@writefile{toc}{\contentsline {section}{\numberline {IV}Automated Instrumentation Pipeline}{3}{section.4}\protected@file@percent }
-\newlabel{sec:instrumentation}{{IV}{3}{Automated Instrumentation Pipeline}{section.4}{}}
-\newlabel{eq:shm}{{1}{3}{Automated Instrumentation Pipeline}{equation.1}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces UpsideFuzzer Architecture and End-to-End Pipeline.}}{3}{figure.1}\protected@file@percent }
-\newlabel{fig:architecture}{{1}{3}{UpsideFuzzer Architecture and End-to-End Pipeline}{figure.1}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {V}Semantic Source Extraction}{3}{section.5}\protected@file@percent }
-\newlabel{sec:sse}{{V}{3}{Semantic Source Extraction}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}Motivation}{3}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Pipeline Overview}{3}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}OpenAPI Constraint Extraction}{3}{subsection.5.3}\protected@file@percent }
-\citation{restler_fse20}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Semantic Source-Aware Grammar Enhancement Pipeline.}}{4}{figure.2}\protected@file@percent }
-\newlabel{fig:sse}{{2}{4}{Semantic Source-Aware Grammar Enhancement Pipeline}{figure.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-D}}C\# Source Code Constraint Extraction}{4}{subsection.5.4}\protected@file@percent }
-\newlabel{sec:src_extract}{{\mbox  {V-D}}{4}{C\# Source Code Constraint Extraction}{subsection.5.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-E}}Boundary Value Synthesis}{4}{subsection.5.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-F}}From Field Hints to Grammar Augmentation}{4}{subsection.5.6}\protected@file@percent }
-\newlabel{sec:hint_to_grammar}{{\mbox  {V-F}}{4}{From Field Hints to Grammar Augmentation}{subsection.5.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {VI}Multipart Grammar Injection}{4}{section.6}\protected@file@percent }
-\newlabel{sec:multipart}{{VI}{4}{Multipart Grammar Injection}{section.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {VII}The Void Execution Engine}{5}{section.7}\protected@file@percent }
-\newlabel{sec:void}{{VII}{5}{The Void Execution Engine}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-A}}Architecture Overview}{5}{subsection.7.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-B}}Coverage-Guided Feedback Loop}{5}{subsection.7.2}\protected@file@percent }
-\newlabel{sec:feedback_loop}{{\mbox  {VII-B}}{5}{Coverage-Guided Feedback Loop}{subsection.7.2}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {VII-B}1}Loop Overview}{5}{subsubsection.7.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {VII-B}2}Pseudocode}{5}{subsubsection.7.2.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Void's coverage-guided feedback loop. Solid arrows show data flow within one iteration; dashed arrows show feedback that changes future iterations. A coverage gain promotes the request to the corpus, boosts parent seed energy, and records a mutation category hit. No gain increments a stall counter that escalates mutation depth.}}{5}{figure.3}\protected@file@percent }
-\newlabel{fig:feedbackloop}{{3}{5}{Void's coverage-guided feedback loop. Solid arrows show data flow within one iteration; dashed arrows show feedback that changes future iterations. A coverage gain promotes the request to the corpus, boosts parent seed energy, and records a mutation category hit. No gain increments a stall counter that escalates mutation depth}{figure.3}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {VII-B}3}Scheduling Priority}{5}{subsubsection.7.2.3}\protected@file@percent }
-\newlabel{eq:loop_priority}{{2}{5}{Scheduling Priority}{equation.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-C}}From Endpoint Parameters to Coverage-Directed Mutation}{5}{subsection.7.3}\protected@file@percent }
-\newlabel{sec:param_to_cov}{{\mbox  {VII-C}}{5}{From Endpoint Parameters to Coverage-Directed Mutation}{subsection.7.3}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Boundary Value Synthesis}}{4}{algorithm.1}\protected@file@percent }
+\newlabel{alg:boundary}{{1}{4}{Boundary Value Synthesis}{algorithm.1}{}}
+\newlabel{eq:shm}{{1}{4}{What Is Instrumentation?}{equation.1}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-C}2}The 4-Stage Docker Build}{4}{subsubsection.4.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {\mbox  {IV-C}3}Coverage Transport: Two Modes}{4}{subsubsection.4.3.3}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Automated Instrumentation Pipeline}}{4}{algorithm.2}\protected@file@percent }
+\newlabel{alg:instrument}{{2}{4}{The 4-Stage Docker Build}{algorithm.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {V}The Full Fuzzing Cycle and Feedback Loop}{4}{section.5}\protected@file@percent }
+\newlabel{sec:void}{{V}{4}{The Full Fuzzing Cycle and Feedback Loop}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-A}}The Void Execution Engine}{4}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-B}}Step-by-Step Cycle}{4}{subsection.5.2}\protected@file@percent }
+\newlabel{sec:feedback_loop}{{\mbox  {V-B}}{4}{Step-by-Step Cycle}{subsection.5.2}{}}
 \citation{mopt}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Coverage-Guided Feedback Loop}}{6}{algorithm.1}\protected@file@percent }
-\newlabel{alg:feedback}{{1}{6}{Pseudocode}{algorithm.1}{}}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces MOpt-Style Adaptive Mutation Selection}}{6}{algorithm.2}\protected@file@percent }
-\newlabel{alg:mopt}{{2}{6}{Adaptive Mutation Scheduling (MOpt)}{algorithm.2}{}}
-\newlabel{eq:mutcat_weight}{{3}{6}{From Endpoint Parameters to Coverage-Directed Mutation}{equation.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-D}}Adaptive Mutation Scheduling (MOpt)}{6}{subsection.7.4}\protected@file@percent }
-\newlabel{sec:mopt}{{\mbox  {VII-D}}{6}{Adaptive Mutation Scheduling (MOpt)}{subsection.7.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-E}}Structured Mutation Operators}{6}{subsection.7.5}\protected@file@percent }
-\newlabel{sec:mut_operators}{{\mbox  {VII-E}}{6}{Structured Mutation Operators}{subsection.7.5}{}}
-\citation{afl}
-\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces How coverage feedback influences the mutation pipeline. A positive edge delta boosts three independent weights: seed energy (how often the parent seed is reused), endpoint health (how often the template is selected), and mutation category weight (how often the payload family is used). Persistent lack of new edges escalates the havoc depth, applying more stacked mutations per request.}}{7}{figure.4}\protected@file@percent }
-\newlabel{fig:cov_influence}{{4}{7}{How coverage feedback influences the mutation pipeline. A positive edge delta boosts three independent weights: seed energy (how often the parent seed is reused), endpoint health (how often the template is selected), and mutation category weight (how often the payload family is used). Persistent lack of new edges escalates the havoc depth, applying more stacked mutations per request}{figure.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-F}}SharpFuzz Instrumentation and Coverage Transport}{7}{subsection.7.6}\protected@file@percent }
-\newlabel{sec:coverage_transport}{{\mbox  {VII-F}}{7}{SharpFuzz Instrumentation and Coverage Transport}{subsection.7.6}{}}
-\newlabel{eq:shm_edge}{{4}{7}{SharpFuzz Instrumentation and Coverage Transport}{equation.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-G}}Attribution Accuracy: HTTP Mode vs.\ Direct SHM Mode}{7}{subsection.7.7}\protected@file@percent }
-\newlabel{sec:attribution}{{\mbox  {VII-G}}{7}{Attribution Accuracy: HTTP Mode vs.\ Direct SHM Mode}{subsection.7.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-H}}Endpoint-Level Coverage Statistics and Request Prioritization}{7}{subsection.7.8}\protected@file@percent }
-\newlabel{sec:endpoint_stats}{{\mbox  {VII-H}}{7}{Endpoint-Level Coverage Statistics and Request Prioritization}{subsection.7.8}{}}
-\newlabel{eq:template_weight}{{5}{7}{Endpoint-Level Coverage Statistics and Request Prioritization}{equation.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-I}}Seed Energy and Corpus Evolution}{7}{subsection.7.9}\protected@file@percent }
-\newlabel{sec:corpus}{{\mbox  {VII-I}}{7}{Seed Energy and Corpus Evolution}{subsection.7.9}{}}
-\newlabel{eq:seed_energy}{{6}{7}{Seed Energy and Corpus Evolution}{equation.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-J}}Campaign Phases and Adaptive Concurrency}{8}{subsection.7.10}\protected@file@percent }
-\newlabel{sec:phases}{{\mbox  {VII-J}}{8}{Campaign Phases and Adaptive Concurrency}{subsection.7.10}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {I}{\ignorespaces Void Fuzzing Campaign Epochs}}{8}{table.1}\protected@file@percent }
-\newlabel{tab:epochs}{{I}{8}{Void Fuzzing Campaign Epochs}{table.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-K}}Dynamic Value Learning and Stateful Execution}{8}{subsection.7.11}\protected@file@percent }
-\newlabel{sec:state}{{\mbox  {VII-K}}{8}{Dynamic Value Learning and Stateful Execution}{subsection.7.11}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-L}}Identity, Session, and Form-State Handling}{8}{subsection.7.12}\protected@file@percent }
-\newlabel{sec:auth_state}{{\mbox  {VII-L}}{8}{Identity, Session, and Form-State Handling}{subsection.7.12}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {VIII}Evaluation}{8}{section.8}\protected@file@percent }
-\newlabel{sec:eval}{{VIII}{8}{Evaluation}{section.8}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VIII-A}}Research Questions}{8}{subsection.8.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VIII-B}}Experimental Setup}{8}{subsection.8.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VIII-C}}Results}{8}{subsection.8.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces 24-Hour Fuzzing Results: RESTler Baseline vs. UpsideFuzzer}}{8}{table.2}\protected@file@percent }
-\newlabel{tab:results}{{II}{8}{24-Hour Fuzzing Results: RESTler Baseline vs. UpsideFuzzer}{table.2}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Visual summary of the 24-hour evaluation from Table~\ref {tab:results}. Left: unique branch edges reached by each tool. Right: distinct HTTP 5xx findings observed over the same 24-hour budget.}}{9}{figure.5}\protected@file@percent }
-\newlabel{fig:eval24hplots}{{5}{9}{Visual summary of the 24-hour evaluation from Table~\ref {tab:results}. Left: unique branch edges reached by each tool. Right: distinct HTTP 5xx findings observed over the same 24-hour budget}{figure.5}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Reproducible 20-Minute Docker Benchmark. \textbf  {OpenAPI Cov.} reports covered OpenAPI operations out of the benchmark subset total. \textbf  {500 M+E} reports distinct HTTP 500-producing method+endpoint pairs. \textbf  {Feedback} reports the search signal exposed by each engine.}}{9}{table.3}\protected@file@percent }
-\newlabel{tab:dockerbench}{{III}{9}{Reproducible 20-Minute Docker Benchmark. \textbf {OpenAPI Cov.} reports covered OpenAPI operations out of the benchmark subset total. \textbf {500 M+E} reports distinct HTTP 500-producing method+endpoint pairs. \textbf {Feedback} reports the search signal exposed by each engine}{table.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VIII-D}}Case Study: Null Reference Crash in nopCommerce}{9}{subsection.8.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {IX}Discussion}{9}{section.9}\protected@file@percent }
-\newlabel{sec:discussion}{{IX}{9}{Discussion}{section.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Void's coverage-guided feedback loop. Solid arrows show data flow within one iteration; dashed arrows show feedback that changes future iterations.}}{5}{figure.3}\protected@file@percent }
+\newlabel{fig:feedbackloop}{{3}{5}{Void's coverage-guided feedback loop. Solid arrows show data flow within one iteration; dashed arrows show feedback that changes future iterations}{figure.3}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces Coverage-Guided Fuzzing Loop (Simplified)}}{5}{algorithm.3}\protected@file@percent }
+\newlabel{alg:feedback}{{3}{5}{Simplified Pseudocode for the Main Loop}{algorithm.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-C}}Simplified Pseudocode for the Main Loop}{5}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-D}}How Coverage Feedback Steers the Search}{5}{subsection.5.4}\protected@file@percent }
+\newlabel{sec:coverage_influence}{{\mbox  {V-D}}{5}{How Coverage Feedback Steers the Search}{subsection.5.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces How coverage feedback influences the mutation pipeline. A positive edge delta boosts three independent weights. Persistent lack of new edges escalates mutation aggressiveness.}}{5}{figure.4}\protected@file@percent }
+\newlabel{fig:cov_influence}{{4}{5}{How coverage feedback influences the mutation pipeline. A positive edge delta boosts three independent weights. Persistent lack of new edges escalates mutation aggressiveness}{figure.4}{}}
+\newlabel{eq:mutcat_weight}{{2}{5}{How Coverage Feedback Steers the Search}{equation.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {V-E}}Dynamic Value Learning and Stateful Execution}{5}{subsection.5.5}\protected@file@percent }
+\newlabel{sec:state}{{\mbox  {V-E}}{5}{Dynamic Value Learning and Stateful Execution}{subsection.5.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VI}Fuzzer Capabilities and Configuration}{5}{section.6}\protected@file@percent }
+\newlabel{sec:capabilities}{{VI}{5}{Fuzzer Capabilities and Configuration}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-A}}Epochs: Five Phases of a Fuzzing Campaign}{5}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:phases}{{\mbox  {VI-A}}{5}{Epochs: Five Phases of a Fuzzing Campaign}{subsection.6.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {II}{\ignorespaces Void Fuzzing Campaign Epochs}}{6}{table.2}\protected@file@percent }
+\newlabel{tab:epochs}{{II}{6}{Void Fuzzing Campaign Epochs}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-B}}Key Configuration Settings}{6}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:settings}{{\mbox  {VI-B}}{6}{Key Configuration Settings}{subsection.6.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {III}{\ignorespaces Key Fuzzer Settings}}{6}{table.3}\protected@file@percent }
+\newlabel{tab:settings}{{III}{6}{Key Fuzzer Settings}{table.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VI-C}}Structured Mutation Operators}{6}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:mutations}{{\mbox  {VI-C}}{6}{Structured Mutation Operators}{subsection.6.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {IV}{\ignorespaces Mutation Categories with Adaptive Weights}}{6}{table.4}\protected@file@percent }
+\newlabel{tab:mutation_cats}{{IV}{6}{Mutation Categories with Adaptive Weights}{table.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VII}Evaluation}{6}{section.7}\protected@file@percent }
+\newlabel{sec:eval}{{VII}{6}{Evaluation}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-A}}Research Questions}{6}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-B}}Experimental Setup}{6}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-C}}24-Hour Evaluation on Three Applications}{6}{subsection.7.3}\protected@file@percent }
+\newlabel{sec:eval_24h}{{\mbox  {VII-C}}{6}{24-Hour Evaluation on Three Applications}{subsection.7.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces 24-hour evaluation results. Left: unique branch edges discovered. Right: distinct HTTP 5xx responses found. UpsideFuzzer consistently outperforms the RESTler baseline on all targets.}}{7}{figure.5}\protected@file@percent }
+\newlabel{fig:eval24hplots}{{5}{7}{24-hour evaluation results. Left: unique branch edges discovered. Right: distinct HTTP 5xx responses found. UpsideFuzzer consistently outperforms the RESTler baseline on all targets}{figure.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {V}{\ignorespaces 24-Hour Fuzzing Results: RESTler vs.\ UpsideFuzzer}}{7}{table.5}\protected@file@percent }
+\newlabel{tab:results}{{V}{7}{24-Hour Fuzzing Results: RESTler vs.\ UpsideFuzzer}{table.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-D}}20-Minute Reproducible Docker Benchmark}{7}{subsection.7.4}\protected@file@percent }
+\newlabel{sec:eval_docker}{{\mbox  {VII-D}}{7}{20-Minute Reproducible Docker Benchmark}{subsection.7.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {VI}{\ignorespaces Reproducible 20-Minute Docker Benchmark}}{7}{table.6}\protected@file@percent }
+\newlabel{tab:dockerbench}{{VI}{7}{Reproducible 20-Minute Docker Benchmark}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-E}}Internal Microservice Evaluation}{7}{subsection.7.5}\protected@file@percent }
+\newlabel{sec:eval_internal}{{\mbox  {VII-E}}{7}{Internal Microservice Evaluation}{subsection.7.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {VII}{\ignorespaces 24-Hour Results on Internal Enterprise Microservices}}{7}{table.7}\protected@file@percent }
+\newlabel{tab:internal}{{VII}{7}{24-Hour Results on Internal Enterprise Microservices}{table.7}{}}
 \bibcite{restler_icse19}{1}
 \bibcite{restler_fse20}{2}
 \bibcite{sharpfuzz}{3}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces 20-minute Docker benchmark results. Left: OpenAPI operation coverage. Middle: request throughput (log scale). Right: distinct HTTP 500 method+endpoint pairs.}}{8}{figure.6}\protected@file@percent }
+\newlabel{fig:dockerplots}{{6}{8}{20-minute Docker benchmark results. Left: OpenAPI operation coverage. Middle: request throughput (log scale). Right: distinct HTTP 500 method+endpoint pairs}{figure.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {\mbox  {VII-F}}Case Study: Null Reference Crash in nopCommerce}{8}{subsection.7.6}\protected@file@percent }
+\newlabel{sec:case_study}{{\mbox  {VII-F}}{8}{Case Study: Null Reference Crash in nopCommerce}{subsection.7.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {VIII}Discussion}{8}{section.8}\protected@file@percent }
+\newlabel{sec:discussion}{{VIII}{8}{Discussion}{section.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {IX}Conclusion}{8}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{References}{8}{section*.2}\protected@file@percent }
 \bibcite{afl}{4}
 \bibcite{evomaster}{5}
 \bibcite{wuppiefuzz}{6}
@@ -118,8 +118,4 @@
 \bibcite{apifuzzer}{8}
 \bibcite{schemathesis}{9}
 \bibcite{mopt}{10}
-\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Visual summary of the reproducible 20-minute Docker benchmark from Table~\ref {tab:dockerbench}. Left: OpenAPI operation coverage. Middle: request throughput on a log scale. Right: distinct HTTP 500-producing method+endpoint pairs.}}{10}{figure.6}\protected@file@percent }
-\newlabel{fig:dockerplots}{{6}{10}{Visual summary of the reproducible 20-minute Docker benchmark from Table~\ref {tab:dockerbench}. Left: OpenAPI operation coverage. Middle: request throughput on a log scale. Right: distinct HTTP 500-producing method+endpoint pairs}{figure.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {X}Conclusion}{10}{section.10}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{References}{10}{section*.2}\protected@file@percent }
-\gdef \@abspage@last{10}
+\gdef \@abspage@last{9}
