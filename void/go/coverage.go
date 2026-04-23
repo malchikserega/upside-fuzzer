@@ -1,14 +1,15 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -108,6 +109,7 @@ type SHMCoverageReader struct {
 	readBuf    []byte
 	activeMode string
 	seen       []byte
+	zeroBuf    []byte // pre-allocated for Reset() to avoid per-reset allocation
 	edges      int
 }
 
@@ -155,6 +157,7 @@ func (s *SHMCoverageReader) Init() error {
 		s.readBuf = make([]byte, mapSize)
 	}
 	s.seen = make([]byte, mapSize)
+	s.zeroBuf = make([]byte, mapSize)
 	s.edges = 0
 	return nil
 }
@@ -179,10 +182,30 @@ func (s *SHMCoverageReader) GetEdges() (int, error) {
 	}
 	if len(s.seen) != len(buf) {
 		s.seen = make([]byte, len(buf))
+		s.zeroBuf = make([]byte, len(buf))
 		s.edges = 0
 	}
-	for i, b := range buf {
-		if b != 0 && s.seen[i] == 0 {
+	// Word-level scan: read 8 bytes at a time as uint64 and skip zero words.
+	// Standard AFL optimization — ~8× fewer branches for sparse bitmaps.
+	n := len(buf)
+	i := 0
+	for ; i+8 <= n; i += 8 {
+		word := binary.LittleEndian.Uint64(buf[i:])
+		seenWord := binary.LittleEndian.Uint64(s.seen[i:])
+		newBits := word & ^seenWord
+		if newBits == 0 {
+			continue
+		}
+		for j := 0; j < 8; j++ {
+			if buf[i+j] != 0 && s.seen[i+j] == 0 {
+				s.seen[i+j] = 1
+				s.edges++
+			}
+		}
+	}
+	// Handle tail bytes.
+	for ; i < n; i++ {
+		if buf[i] != 0 && s.seen[i] == 0 {
 			s.seen[i] = 1
 			s.edges++
 		}
@@ -195,8 +218,7 @@ func (s *SHMCoverageReader) Reset() error {
 		return errors.New("shm not initialized")
 	}
 	// Zero the actual SHM file so the .NET side starts fresh too.
-	zeros := make([]byte, s.mapSize)
-	if _, err := s.f.WriteAt(zeros, 0); err != nil {
+	if _, err := s.f.WriteAt(s.zeroBuf, 0); err != nil {
 		return fmt.Errorf("shm file zero failed: %w", err)
 	}
 	_ = s.f.Sync()

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // utils.go — Generic utilities: string helpers, path normalization,
@@ -882,6 +883,13 @@ func weightedPick(weights []float64) int {
 func sanitizeText(v string, maxLen int) string {
 	if maxLen <= 0 {
 		maxLen = 1024
+	}
+	// Fast path: skip ToValidUTF8 allocation when input is already valid (common case).
+	if utf8.ValidString(v) {
+		if len(v) > maxLen {
+			return v[:maxLen]
+		}
+		return v
 	}
 	s := strings.ToValidUTF8(v, "?")
 	if len(s) > maxLen {

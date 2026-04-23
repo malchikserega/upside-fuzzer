@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,7 +181,6 @@ func parseFlags() Config {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
 	cfg := parseFlags()
 	f, err := NewFuzzer(cfg)
 	if err != nil {

@@ -628,11 +628,13 @@ func (f *Fuzzer) addEvent(text string) {
 	totalSec := int(elapsed.Seconds())
 	stamp := fmt.Sprintf("[%02d:%02d]", (totalSec/60)%60, totalSec%60)
 	line := stamp + " " + msg
-	if len(f.eventLog) > 0 && f.eventLog[0] == line {
+	if len(f.eventLog) > 0 && f.eventLog[len(f.eventLog)-1] == line {
 		return
 	}
-	f.eventLog = append([]string{line}, f.eventLog...)
+	f.eventLog = append(f.eventLog, line)
 	if len(f.eventLog) > 6 {
+		// Shift elements to avoid unbounded backing array growth from front-popping.
+		copy(f.eventLog, f.eventLog[len(f.eventLog)-6:])
 		f.eventLog = f.eventLog[:6]
 	}
 }
@@ -658,8 +660,9 @@ func (f *Fuzzer) maybeAddRequestSample(res SendResult) {
 		payload = "<empty>"
 	}
 	line := fmt.Sprintf("%-5s %-34s %3d  %s", res.Item.Method, truncate(normalizePath(res.Item.Path), 34), res.Status, payload)
-	f.requestSamples = append([]string{sanitizeText(line, 240)}, f.requestSamples...)
+	f.requestSamples = append(f.requestSamples, sanitizeText(line, 240))
 	if len(f.requestSamples) > 6 {
+		copy(f.requestSamples, f.requestSamples[len(f.requestSamples)-6:])
 		f.requestSamples = f.requestSamples[:6]
 	}
 	f.lastValueSampleTS = now
@@ -724,25 +727,25 @@ func (f *Fuzzer) pickWeightedTemplate() int {
 	if len(f.activeIDs) == 0 {
 		return -1
 	}
-	weights := make([]float64, 0, len(f.activeIDs))
-	tids := make([]int, 0, len(f.activeIDs))
+	f.weightsBuf = f.weightsBuf[:0]
+	f.tidsBuf = f.tidsBuf[:0]
 	for _, tid := range f.activeIDs {
 		w := f.templateHealthWeight(tid) * f.templateDependencyWeight(tid) * f.templateSourcePriorityWeight(tid)
-		weights = append(weights, math.Max(0.03, w))
-		tids = append(tids, tid)
+		f.weightsBuf = append(f.weightsBuf, math.Max(0.03, w))
+		f.tidsBuf = append(f.tidsBuf, tid)
 	}
-	idx := weightedPick(weights)
-	if idx < 0 || idx >= len(tids) {
-		return tids[rand.Intn(len(tids))]
+	idx := weightedPick(f.weightsBuf)
+	if idx < 0 || idx >= len(f.tidsBuf) {
+		return f.tidsBuf[rand.Intn(len(f.tidsBuf))]
 	}
-	return tids[idx]
+	return f.tidsBuf[idx]
 }
 
 func (f *Fuzzer) pickHarvestTemplate() int {
 	if len(f.activeIDs) == 0 {
 		return -1
 	}
-	weights := make([]float64, 0, len(f.activeIDs))
+	f.weightsBuf = f.weightsBuf[:0]
 	for _, tid := range f.activeIDs {
 		meta := f.meta[tid]
 		w := 1.0
@@ -766,9 +769,9 @@ func (f *Fuzzer) pickHarvestTemplate() int {
 		w *= f.templateHealthWeight(tid)
 		w *= f.templateDependencyWeight(tid)
 		w *= f.templateSourcePriorityWeight(tid)
-		weights = append(weights, math.Max(0.05, w))
+		f.weightsBuf = append(f.weightsBuf, math.Max(0.05, w))
 	}
-	idx := weightedPick(weights)
+	idx := weightedPick(f.weightsBuf)
 	if idx < 0 || idx >= len(f.activeIDs) {
 		return f.activeIDs[rand.Intn(len(f.activeIDs))]
 	}

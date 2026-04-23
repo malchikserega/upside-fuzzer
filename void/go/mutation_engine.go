@@ -25,47 +25,45 @@ func mutateJSONBody(body string, havocDepth int) (string, string) {
 	if !ok {
 		return body, ""
 	}
-	ops := []func(map[string]any) (bool, string){
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+	// Pre-compute keys once to avoid repeated mapKeysAny allocations per operation.
+	keys := mapKeysAny(obj)
+	ops := []func(map[string]any, []string) (bool, string){
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			delete(m, k)
 			return true, "json_del_key"
 		},
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			m[k] = nil
 			return true, "json_null_key"
 		},
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			sv := flipJSONScalar(m[k])
 			m[k] = sv
 			return true, "json_flip_scalar"
 		},
 		// Type confusion: change a value's type (string→number, number→string, etc.)
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			m[k] = jsonTypeConfuse(m[k])
 			return true, "json_type_confuse"
 		},
 		// Mass assignment: inject privilege-escalation keys
-		func(m map[string]any) (bool, string) {
+		func(m map[string]any, _ []string) (bool, string) {
 			injections := []struct {
 				k string
 				v any
@@ -81,12 +79,11 @@ func mutateJSONBody(body string, havocDepth int) (string, string) {
 			return true, "json_mass_assign"
 		},
 		// Deep nesting: wrap a value in nested objects to trigger stack overflow
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			depth := []int{10, 50, 100}[rand.Intn(3)]
 			inner := map[string]any{"v": m[k]}
 			for i := 0; i < depth; i++ {
@@ -96,12 +93,11 @@ func mutateJSONBody(body string, havocDepth int) (string, string) {
 			return true, "json_deep_nest"
 		},
 		// Array overflow: replace a value with a large array
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			sz := []int{100, 1000, 10000}[rand.Intn(3)]
 			arr := make([]any, sz)
 			for i := range arr {
@@ -111,17 +107,16 @@ func mutateJSONBody(body string, havocDepth int) (string, string) {
 			return true, "json_array_overflow"
 		},
 		// Duplicate key with different type (JSON spec allows, parsers differ)
-		func(m map[string]any) (bool, string) {
-			if len(m) == 0 {
+		func(m map[string]any, ks []string) (bool, string) {
+			if len(ks) == 0 {
 				return false, ""
 			}
-			keys := mapKeysAny(m)
-			k := keys[rand.Intn(len(keys))]
+			k := ks[rand.Intn(len(ks))]
 			m[k+""] = jsonTypeConfuse(m[k])
 			return true, "json_dup_key"
 		},
 		// .NET deserialization $type injection into existing object
-		func(m map[string]any) (bool, string) {
+		func(m map[string]any, _ []string) (bool, string) {
 			gadgets := []string{
 				"System.IO.FileInfo, System.IO.FileSystem",
 				"System.Diagnostics.Process, System",
@@ -137,8 +132,10 @@ func mutateJSONBody(body string, havocDepth int) (string, string) {
 	for i := 0; i < rounds; i++ {
 		perm := rand.Perm(len(ops))
 		for _, idx := range perm {
-			if ok, name := ops[idx](obj); ok {
+			if ok, name := ops[idx](obj, keys); ok {
 				labels = append(labels, name)
+				// Re-extract keys after mutation since the map may have changed.
+				keys = mapKeysAny(obj)
 				break
 			}
 		}

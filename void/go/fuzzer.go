@@ -117,6 +117,10 @@ type Fuzzer struct {
 	lastCoverageReset time.Time
 	// Monotonic request id sequence for low-overhead per-request attribution.
 	requestIDSeq uint64
+
+	// Reusable buffers for weighted template selection to avoid per-call allocations.
+	weightsBuf []float64
+	tidsBuf    []int
 }
 
 func NewFuzzer(cfg Config) (*Fuzzer, error) {

@@ -24,7 +24,7 @@ type MutationCategory struct {
 // which are accessed concurrently from worker goroutines and the main scheduling loop.
 var (
 	mutationCategories []*MutationCategory
-	mutCatMu           sync.Mutex
+	mutCatMu           sync.RWMutex
 )
 func init() {
 	mutationCategories = []*MutationCategory{
@@ -137,8 +137,8 @@ func init() {
 // pickMutationCategory selects a category using MOpt-style weighted random.
 // Categories that find more coverage edges get higher selection probability.
 func pickMutationCategory() *MutationCategory {
-	mutCatMu.Lock()
-	defer mutCatMu.Unlock()
+	mutCatMu.RLock()
+	defer mutCatMu.RUnlock()
 	total := 0.0
 	for _, c := range mutationCategories {
 		total += c.Weight

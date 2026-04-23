@@ -441,8 +441,9 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 	lines = append(lines, dashHLine(width, f.cfg.ASCIIUI))
 	lines = append(lines, dashRow("  RECENT REQUEST VALUES", width, f.cfg.ASCIIUI))
 	for i := 0; i < maxSampleRows; i++ {
-		if i < len(f.requestSamples) {
-			lines = append(lines, dashRow("  "+dashTruncate(f.requestSamples[i], width-6), width, f.cfg.ASCIIUI))
+		ri := len(f.requestSamples) - 1 - i
+		if ri >= 0 {
+			lines = append(lines, dashRow("  "+dashTruncate(f.requestSamples[ri], width-6), width, f.cfg.ASCIIUI))
 		} else {
 			lines = append(lines, dashRow("", width, f.cfg.ASCIIUI))
 		}
@@ -452,8 +453,10 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 	lines = append(lines, dashHLine(width, f.cfg.ASCIIUI))
 	lines = append(lines, dashRow("  RECENT EVENTS", width, f.cfg.ASCIIUI))
 	for i := 0; i < maxEventRows; i++ {
-		if i < len(f.eventLog) {
-			lines = append(lines, dashRow("  "+dashTruncate(f.eventLog[i], width-6), width, f.cfg.ASCIIUI))
+		// Events are appended (newest at end), so read backwards for most-recent-first display.
+		ri := len(f.eventLog) - 1 - i
+		if ri >= 0 {
+			lines = append(lines, dashRow("  "+dashTruncate(f.eventLog[ri], width-6), width, f.cfg.ASCIIUI))
 		} else {
 			lines = append(lines, dashRow("", width, f.cfg.ASCIIUI))
 		}
