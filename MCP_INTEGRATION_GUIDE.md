@@ -1,20 +1,20 @@
-# Использование MCP для обогащения словаря фаззера
+# Using MCP to Enrich the Fuzzer Dictionary
 
-Model Context Protocol (MCP) — это отличный способ передать ИИ-агенту доступ к реальным данным вашего приложения (базе данных, внутренним REST API или логам), чтобы агент мог автоматически извлечь валидные идентификаторы, токены и бизнес-значения для фаззинга. 
+Model Context Protocol (MCP) is an excellent way to provide an AI agent with access to your application's real data (database, internal REST API, or logs). This allows the agent to automatically extract valid identifiers, tokens, and business values for fuzzing.
 
-В UpsideFuzzer словарь загружается из файла `dict.json`, и движок (в `store.go`) активно использует секции `restler_custom_payload*` для подстановки значений в параметры запросов. Если наполнить этот словарь реальными данными, эффективность фаззера (особенно для GET, PUT и DELETE запросов) многократно возрастет, так как он перестанет получать ошибки `404 Not Found`.
+In UpsideFuzzer, the dictionary is loaded from the `dict.json` file, and the engine (in `store.go`) actively uses the `restler_custom_payload*` sections to inject values into request parameters. By populating this dictionary with real data, the fuzzer's effectiveness (especially for GET, PUT, and DELETE requests) increases dramatically, as it stops hitting `404 Not Found` errors.
 
-Вот пошаговая инструкция, как организовать этот процесс.
+Here is a step-by-step guide on how to set up this process.
 
-## Шаг 1: Подключение MCP сервера
+## Step 1: Connect an MCP Server
 
-Вам понадобится MCP сервер, который умеет читать данные из вашей целевой системы. Возможные варианты:
+You need an MCP server that can read data from your target system. Possible options:
 
-1. **База данных напрямую:** Вы можете использовать стандартные MCP серверы для PostgreSQL, MySQL или SQLite. Агент сможет выполнять SQL-запросы для извлечения данных.
-2. **Внутренний REST API:** Если у вас есть админский API, можно написать простой MCP сервер (на Python или TypeScript), который делает запросы к этому API и отдает агенту JSON с данными.
-3. **Логи / ELK / Splunk:** MCP сервер может искать недавние успешные запросы в логах и извлекать оттуда валидные параметры.
+1. **Direct Database Access:** You can use standard MCP servers for PostgreSQL, MySQL, or SQLite. The agent will be able to execute SQL queries to extract data.
+2. **Internal REST API:** If you have an administrative API, you can write a simple MCP server (in Python or TypeScript) that queries this API and provides the agent with the resulting JSON data.
+3. **Logs / ELK / Splunk:** An MCP server can search for recent successful requests in logs and extract valid parameters from them.
 
-*Пример подключения Postgres MCP в Cursor или Claude Desktop:*
+*Example of connecting the Postgres MCP in Cursor or Claude Desktop:*
 ```json
 {
   "mcpServers": {
@@ -26,20 +26,20 @@ Model Context Protocol (MCP) — это отличный способ перед
 }
 ```
 
-## Шаг 2: Промпт для ИИ-агента
+## Step 2: AI Agent Prompt
 
-Когда MCP сервер подключен, вы можете дать ИИ-агенту задачу собрать данные и обновить словарь. Промпт должен выглядеть примерно так:
+Once the MCP server is connected, you can give the AI agent a task to gather data and update the dictionary. The prompt should look something like this:
 
-> "Используй инструмент `query_database` (или обратись к REST API через MCP), чтобы получить 50 реально существующих `ProductId`, 20 `CategoryId` и 10 валидных `UserEmail` из базы данных eShop. 
-> После этого открой файл `grammars/eshop/dict.json` и добавь эти значения в секцию `restler_custom_payload`."
+> "Use the `query_database` tool (or access the REST API via MCP) to retrieve 50 existing `ProductId`s, 20 `CategoryId`s, and 10 valid `UserEmail`s from the eShop database.
+> After that, open the `grammars/eshop/dict.json` file and add these values to the `restler_custom_payload` section."
 
-## Шаг 3: Как правильно заполнять `dict.json`
+## Step 3: How to Properly Populate `dict.json`
 
-В файле `dict.json` есть несколько секций для кастомных данных. Движок UpsideFuzzer (в файле `store.go`) читает их и использует для подстановки. 
+The `dict.json` file contains several sections for custom data. The UpsideFuzzer engine (in the `store.go` file) reads them and uses them for substitution.
 
-Формат добавления данных в `restler_custom_payload` должен представлять собой маппинг "имя параметра" -> "массив значений".
+The format for adding data to `restler_custom_payload` should be a mapping of "parameter name" -> "array of values".
 
-**Пример ДО обогащения:**
+**Example BEFORE enrichment:**
 ```json
 {
   "restler_fuzzable_string": ["fuzzstring"],
@@ -48,7 +48,7 @@ Model Context Protocol (MCP) — это отличный способ перед
 }
 ```
 
-**Пример ПОСЛЕ обогащения ИИ-агентом через MCP:**
+**Example AFTER enrichment by the AI agent via MCP:**
 ```json
 {
   "restler_fuzzable_string": ["fuzzstring"],
@@ -63,41 +63,41 @@ Model Context Protocol (MCP) — это отличный способ перед
 }
 ```
 
-### Разница между секциями:
-- `restler_custom_payload`: Значения будут использоваться в теле JSON как строки (в кавычках) или как параметры пути/запроса.
-- `restler_custom_payload_unquoted`: Значения будут вставляться в JSON без кавычек (полезно для чисел и булевых значений).
-- `restler_custom_payload_header`: Для специфичных HTTP заголовков (например, токены).
-- `restler_custom_payload_query`: Строго для параметров Query String.
+### Differences Between Sections:
+- `restler_custom_payload`: Values will be used in the JSON body as strings (in quotes) or as path/query parameters.
+- `restler_custom_payload_unquoted`: Values will be inserted into JSON without quotes (useful for numbers and booleans).
+- `restler_custom_payload_header`: For specific HTTP headers (e.g., authorization tokens).
+- `restler_custom_payload_query`: Strictly for Query String parameters.
 
-*Примечание: Go-движок UpsideFuzzer автоматически приводит ключи к каноничному виду (удаляет спецсимволы, приводит к нижнему регистру), поэтому `productId`, `ProductID` и `product_id` будут успешно заматчены.*
+*Note: The UpsideFuzzer Go engine automatically canonicalizes keys (removes special characters, converts to lowercase), so `productId`, `ProductID`, and `product_id` will all be matched successfully.*
 
-## Шаг 4: Экспорт и запуск
+## Step 4: Export and Run
 
-Поскольку Go-движок не читает `dict.json` напрямую, а использует скомпилированные шаблоны, после обновления словаря нужно пересобрать экспортный файл:
+Since the Go engine doesn't read `dict.json` directly but uses compiled templates, you must rebuild the export file after updating the dictionary:
 
 ```bash
-# Экспортируем обновленный словарь в формат fuzzer'а
+# Export the updated dictionary to the fuzzer format
 python3 void/export-templates.py \
   --grammar-dir grammars/eshop \
   --out grammars/eshop/templates.export.json
 ```
 
-Теперь при запуске fuzzer'а в логах вы увидите увеличенное количество загруженных значений:
+Now, when you start the fuzzer, you will see an increased number of loaded values in the logs:
 
 ```bash
 docker run ... void-fuzzer -grammar /grammar ...
-# В логах:
+# In logs:
 # Loaded dictionary: /grammar/dict.json
-# Bootstrap learned runtime values: 85  <-- Было 23, стало 85!
+# Bootstrap learned runtime values: 85  <-- Was 23, now 85!
 ```
 
-## Итог: Автоматизированный пайплайн (Advanced)
+## Conclusion: Automated Pipeline (Advanced)
 
-В будущем вы можете полностью автоматизировать этот процесс, написав небольшой Python-скрипт `mcp-dict-enricher.py`, который:
-1. Выступает как MCP-клиент.
-2. Соединяется с вашим MCP-сервером базы данных/REST API.
-3. Программно запрашивает нужные ключи (беря список ключей из swagger).
-4. Автоматически парсит ответы и модифицирует `dict.json`.
-5. Вызывает `export-templates.py`.
+In the future, you can fully automate this process by writing a small Python script, e.g., `mcp-dict-enricher.py`, that:
+1. Acts as an MCP client.
+2. Connects to your database/REST API MCP server.
+3. Programmatically requests the necessary keys (taking the list of keys from the swagger).
+4. Automatically parses the responses and modifies `dict.json`.
+5. Calls `export-templates.py`.
 
-Это позволит запускать фаззер в CI/CD пайплайнах, где словарь всегда будет свежим и релевантным текущему состоянию тестовой базы данных.
+This will allow you to run the fuzzer in CI/CD pipelines where the dictionary is always fresh and relevant to the current state of the test database.
