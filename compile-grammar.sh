@@ -237,11 +237,11 @@ EOF
 fi
 
 # 0. Ensure RESTler binaries exist (One-time setup)
-if [ ! -f "$ROOT_DIR/restler_bin/restler/Restler.dll" ]; then
+if [ ! -d "$ROOT_DIR/restler_bin/restler" ] || [ ! -d "$ROOT_DIR/restler_bin/compiler" ]; then
     echo "🔧 RESTler binaries not found. Extracting from Docker image (once)..."
-    mkdir -p "$ROOT_DIR/restler_bin"
+    rm -rf "$ROOT_DIR/restler_bin"
     container_id=$(docker create --platform linux/amd64 mcr.microsoft.com/restlerfuzzer/restler)
-    docker cp "$container_id:/RESTler/restler" "$ROOT_DIR/restler_bin/"
+    docker cp "$container_id:/RESTler/." "$ROOT_DIR/restler_bin/"
     docker rm "$container_id" > /dev/null
     echo "✅ Binaries extracted to ./restler_bin"
 fi
