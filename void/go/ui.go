@@ -321,7 +321,7 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 
 	lines := make([]string, 0, 96)
 	lines = append(lines, dashTopBorder(width, f.cfg.ASCIIUI))
-	title := fmt.Sprintf(" SmartFuzzer-Go ── %s ── stop: type 'stop' + Enter / Ctrl+C ", sanitizeText(f.target, 120))
+	title := fmt.Sprintf(" Void ── %s ── stop: type 'stop' + Enter / Ctrl+C ", sanitizeText(f.target, 120))
 	lines = append(lines, dashRow(title, width, f.cfg.ASCIIUI))
 	lines = append(lines, dashRow("", width, f.cfg.ASCIIUI))
 	bar := dashProgressBar(frac, 28, f.cfg.ASCIIUI)
