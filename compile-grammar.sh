@@ -271,7 +271,7 @@ EOF
 echo "🚀 Running RESTler Compiler via Docker..."
 mkdir -p "$ROOT_DIR/restler_output"
 
-docker run --rm \
+docker run --rm --platform linux/amd64 \
     -v "$ROOT_DIR":"$ROOT_DIR" \
     -w "$ROOT_DIR/restler_output" \
     mcr.microsoft.com/restlerfuzzer/restler \
