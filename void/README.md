@@ -12,8 +12,13 @@ The fuzzer reads target URL and auth from environment, **not** from flags:
 |----------|-------------|---------|
 | `TARGET_HOST` | Base URL of the instrumented API | `http://localhost:8080` |
 | `SHM_HOST` | URL of the SHM/coverage endpoint (usually same as TARGET_HOST) | `http://localhost:8080` |
-| `AUTH_TOKEN` | Bearer JWT token | `eyJhbGci...` |
-| `AUTH_IDENTITIES_JSON` | JSON array of `{token,weight}` for multi-identity mode | See below |
+| `AUTH_TOKEN` | Raw JWT only — **do not** include the `Bearer ` prefix; Void sends `Authorization: Bearer <value>` | `eyJhbGci...` |
+| `AUTH_HEADERS_JSON` | JSON object of header → value (use full `Bearer …` inside `Authorization` if you set it here) | `{"Authorization":"Bearer eyJ..."}` |
+| `AUTH_COOKIE` | Optional `Cookie` header for session auth | `sessionid=abc` |
+| `AUTH_URL` / `AUTH_METHOD` / `AUTH_BODY` / … | Login flow to obtain a token when `AUTH_TOKEN` is unset | See `auth.go` |
+| `AUTH_IDENTITIES_JSON` | Multi-identity weighted fuzzing | See below |
+
+Full table and edge cases: **[`INSTRUCTIONS.md`](../INSTRUCTIONS.md#authentication-jwt-custom-headers-and-cookies)**.
 
 ---
 
