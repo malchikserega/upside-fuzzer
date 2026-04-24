@@ -120,7 +120,7 @@ docker build -t void-fuzzer -f void/Dockerfile.go void/
 ```bash
 mkdir -p crashes
 
-docker run --rm \
+docker run -it --rm \
   --network eshprep_default \
   -v eshprep_coverage_shm:/coverage_shm \
   -v $(pwd)/grammars/eshop:/grammar:ro \
@@ -134,8 +134,7 @@ docker run --rm \
   -shm-read-mode file \
   -time-budget 5 \
   -concurrency 10 \
-  -sequence-prob 0.35 \
-  -no-ui
+  -sequence-prob 0.35
 ```
 
 **What happens:**
@@ -146,7 +145,7 @@ docker run --rm \
 ### Longer scan (recommended for thorough testing)
 
 ```bash
-docker run --rm \
+docker run -it --rm \
   --network eshprep_default \
   -v eshprep_coverage_shm:/coverage_shm \
   -v $(pwd)/grammars/eshop:/grammar:ro \
@@ -160,8 +159,7 @@ docker run --rm \
   -time-budget 30 \
   -concurrency 16 \
   -sequence-prob 0.40 \
-  -sequence-max-depth 4 \
-  -no-ui
+  -sequence-max-depth 4
 ```
 
 ---
@@ -212,7 +210,7 @@ cd .. && rm -rf eshprep
 | Start | `docker compose up -d && sleep 45` |
 | Verify | `curl -s -X POST http://localhost:5200/shm/create && curl -s http://localhost:5200/shm/coverage` |
 | Grammar | `./compile-grammar.sh swagger-eshop.json --src ./esh` |
-| Fuzz | `docker run --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm ... void-fuzzer -direct-shm -time-budget 5` |
+| Fuzz | `docker run -it --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm ... void-fuzzer -direct-shm -time-budget 5` |
 | Results | `cat crashes/unique-crashes-*.jsonl \| python3 -c "..."` |
 | Stop | `cd eshprep && docker compose down` |
 
