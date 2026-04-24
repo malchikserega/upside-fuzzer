@@ -238,7 +238,7 @@ class GrammarInterpreter:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export RESTler grammar.py to JSON templates for SmartFuzzer-Go"
+        description="Export RESTler grammar.py to JSON templates for Void-Go"
     )
     parser.add_argument("--grammar-dir", required=True,
                         help="Directory containing grammar.py")
