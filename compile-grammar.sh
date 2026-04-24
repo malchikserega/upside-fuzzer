@@ -236,16 +236,6 @@ if [ -z "$INPUT_DICTIONARY_PATH" ]; then
 EOF
 fi
 
-# 0. Ensure RESTler binaries exist (One-time setup)
-if [ ! -f "$ROOT_DIR/restler_bin/restler/Restler.dll" ]; then
-    echo "🔧 RESTler binaries not found. Extracting from Docker image (once)..."
-    mkdir -p "$ROOT_DIR/restler_bin"
-    container_id=$(docker create mcr.microsoft.com/restlerfuzzer/restler)
-    docker cp "$container_id:/RESTler/restler" "$ROOT_DIR/restler_bin/"
-    docker rm "$container_id" > /dev/null
-    echo "✅ Binaries extracted to ./restler_bin"
-fi
-
 COMPILER_CONFIG_PATH="$ROOT_DIR/restler_input/compiler_config.json"
 CUSTOM_DICT_FOR_CONFIG="$DEFAULT_DICTIONARY_PATH"
 if [ -n "$INPUT_DICTIONARY_PATH" ]; then
@@ -278,12 +268,14 @@ cat > "$COMPILER_CONFIG_PATH" <<EOF
 }
 EOF
 
-echo "🚀 Running RESTler Compiler..."
-export DOTNET_ROLL_FORWARD=Major
+echo "🚀 Running RESTler Compiler via Docker..."
 mkdir -p "$ROOT_DIR/restler_output"
-cd "$ROOT_DIR/restler_output"
 
-dotnet "$ROOT_DIR/restler_bin/restler/Restler.dll" compile "$COMPILER_CONFIG_PATH"
+docker run --rm \
+    -v "$ROOT_DIR":"$ROOT_DIR" \
+    -w "$ROOT_DIR/restler_output" \
+    mcr.microsoft.com/restlerfuzzer/restler \
+    dotnet /RESTler/restler/Restler.dll compile "$COMPILER_CONFIG_PATH"
 
 echo "🧠 Enhancing grammar and dictionary with swagger/source hints..."
 ENHANCER_CMD=(

@@ -10,7 +10,6 @@
 docker --version        # Docker 24+
 docker compose version  # Compose v2+
 python3 --version       # Python 3.9+
-dotnet --version        # .NET 8+ (only needed for grammar compilation)
 ```
 
 ---
