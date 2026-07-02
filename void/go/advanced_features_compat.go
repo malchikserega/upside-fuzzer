@@ -103,19 +103,23 @@ func (f *Fuzzer) initAuthIdentities() {
 	}
 
 	if len(ids) == 0 {
+		f.authMu.RLock()
 		ids = append(ids, AuthIdentity{
 			Name:    "default",
 			Token:   strings.TrimSpace(f.token),
 			Headers: cloneStringMap(f.authHeaders),
 			Weight:  1.0,
 		})
+		f.authMu.RUnlock()
 	} else if f.hasAuthContext() {
+		f.authMu.RLock()
 		ids = append(ids, AuthIdentity{
 			Name:    "default",
 			Token:   strings.TrimSpace(f.token),
 			Headers: cloneStringMap(f.authHeaders),
 			Weight:  1.0,
 		})
+		f.authMu.RUnlock()
 	}
 
 	hasGuest := false
@@ -230,6 +234,8 @@ func parseAuthIdentitiesJSON(raw string) []AuthIdentity {
 }
 
 func (f *Fuzzer) identityAuth(name string) (map[string]string, string) {
+	f.authMu.RLock()
+	defer f.authMu.RUnlock()
 	if strings.TrimSpace(name) == "" {
 		return cloneStringMap(f.authHeaders), strings.TrimSpace(f.token)
 	}
@@ -789,8 +795,13 @@ func (f *Fuzzer) resolvedCrashHeaders(item WorkItem) map[string]string {
 	}
 	if idToken != "" {
 		headers["Authorization"] = "Bearer " + idToken
-	} else if strings.TrimSpace(f.token) != "" {
-		headers["Authorization"] = "Bearer " + strings.TrimSpace(f.token)
+	} else {
+		f.authMu.RLock()
+		tok := strings.TrimSpace(f.token)
+		f.authMu.RUnlock()
+		if tok != "" {
+			headers["Authorization"] = "Bearer " + tok
+		}
 	}
 	if strings.TrimSpace(getHeaderCI(headers, "Content-Type")) == "" && strings.TrimSpace(item.Body) != "" {
 		setHeaderCI(headers, "Content-Type", "application/json")

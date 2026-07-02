@@ -15,7 +15,7 @@ The project is polyglot by design. Do not try to unify the languages. Each langu
 | `void/go/` | **Go** (1.21+) | The core execution engine. High-concurrency worker pool, coverage polling, seed mutations, and hit triage. | Keep it fast. Do NOT use heavy ORMs or blocking I/O in the main worker loop. Rely on `sync.RWMutex` sparingly. |
 | `fuzz-prep-multi.py` | **Python** | Docker build-time instrumentation. Injects `SharpFuzz` into .NET target images. | Must support arbitrary .NET `csproj` layouts. Do not hardcode project names. |
 | `enhance-grammar.py` | **Python** | Semantic Source Extraction (SSE). Parses C# (`.cs`) files to extract `[StringLength]`, `[Range]`, `FluentValidation` and Enums. | Uses regex for parsing C# to avoid a heavy Roslyn dependency. When improving this, stick to `re` modules, do not import .NET DLLs. |
-| `instrumentor/` | **C#** (.NET 8) | The SharpFuzz IL byte-code rewriter. | Leaves test `.dll`s alone. Binds SharpFuzz to API boundaries. |
+| `instrumentor/` | **C#** (.NET 8) | The generic config-driven SharpFuzz IL byte-code rewriter. | Reads `namespaces.json` to dynamically bind SharpFuzz to API boundaries. |
 
 ## 3. How the Pieces Fit Together (The Pipeline)
 When a user targets a new API, the exact flow is:

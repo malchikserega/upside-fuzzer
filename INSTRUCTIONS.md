@@ -176,10 +176,11 @@ python3 fuzz-prep-multi.py \
    | `*Logic.cs`, `*Manager.cs` | Domain logic |
    | Directories: `Controllers/`, `Features/`, `Handlers/` | Structural |
 
-4. **Generates** `instrumentor_src/Program.cs` — namespace-filtered SharpFuzz instrumentor
-5. **Generates** `Helpers/CoverageExtensions.cs` — SHM middleware + endpoints
-6. **Adapts** original Dockerfile with 2 injected build stages:
-   - `instrumentor-build` — compiles the SharpFuzz instrumentor tool
+4. **Copies** `instrumentor_src/Program.cs` — generic SharpFuzz instrumentor
+5. **Generates** `instrumentor_src/namespaces.json` — discovered namespace allowlist configuration
+6. **Generates** `Helpers/CoverageExtensions.cs` — SHM middleware + endpoints
+7. **Adapts** original Dockerfile with 2 injected build stages:
+   - `instrumentor-build` — compiles the SharpFuzz instrumentor tool and copies config
    - `instrumentation` — rewrites DLL IL in-place
 7. **Adapts** original `docker-compose.yml`:
    - Adds `/dev/shm:/dev/shm` volume mount
@@ -198,7 +199,8 @@ python3 fuzz-prep-multi.py \
 | `Program.cs` | +coverage initialization |
 | `*.csproj` | +`AllowUnsafeBlocks`, +`SharpFuzz` |
 | `Directory.Packages.props` | +SharpFuzz version (if CPVM) |
-| `instrumentor_src/Program.cs` | **New file** — SharpFuzz instrumentor |
+| `instrumentor_src/Program.cs` | **Copied file** — Generic SharpFuzz instrumentor |
+| `instrumentor_src/namespaces.json` | **New file** — Discovered namespaces configuration |
 | `Helpers/CoverageExtensions.cs` | **New file** — SHM middleware + endpoints |
 
 ---

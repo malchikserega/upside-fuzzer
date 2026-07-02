@@ -154,7 +154,7 @@ Uses file-name and directory heuristics to identify code worth fuzzing:
 | Root namespace | `<RootNamespace>` in `.csproj` | Project name |
 
 ### Namespace Aggregation
-Collects namespaces from identified files to create a **whitelist filter** for the instrumentor. Only code in these namespaces gets instrumented — not system libraries.
+Collects namespaces from identified files to create a **whitelist filter configuration** (`namespaces.json`) for the generic instrumentor. The instrumentor reads this config at runtime to only instrument code in these namespaces — skipping system libraries and generated code.
 
 ---
 
@@ -198,7 +198,7 @@ The adapted Dockerfile has 4 stages:
 3. **Shared Memory** — Injected code expects `SharpFuzz.Common.Trace.SharedMem` to point to valid memory
 
 ### Namespace-Filtered Instrumentation
-The instrumentor only instruments types whose full name matches the discovered namespaces. Explicitly excluded:
+The generic instrumentor only instruments types whose full name matches the discovered namespaces in `namespaces.json` (or passed via CLI). Explicitly excluded:
 - `Program`, `Startup` — entry points
 - `Migration`, `DesignTimeDbContext` — EF Core infrastructure
 - `CoverageExtensions` — our own coverage code
@@ -471,8 +471,7 @@ mvpsharpfuzznet/
 ├── README.md                   Overview, features, structure
 │
 ├── instrumentor/               Reference instrumentor source + build script
-│   ├── Program.cs              Standalone instrumentor (namespace-filtered)
-│   ├── Program.Generated.cs    Generated version
+│   ├── Program.cs              Standalone generic config-driven instrumentor
 │   ├── instrument.sh           Build + run script
 │   └── instrumentor.csproj     Project file
 │

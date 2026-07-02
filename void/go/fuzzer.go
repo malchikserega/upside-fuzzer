@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type Fuzzer struct {
 	shm            string
 	token          string
 	authHeaders    map[string]string
+	authMu         sync.RWMutex // protects token + authHeaders (read by workers, written by authenticate)
 	identities     []AuthIdentity
 	identityOrder  []string
 	identityCursor int
@@ -72,7 +74,7 @@ type Fuzzer struct {
 	blockedEndpoints     map[string]struct{}
 	forceFormEndpoints   map[string]struct{}
 	antiForgeryHarvestAt map[string]time.Time
-	antiForgeryLearned   int
+	antiForgeryLearned   int64 // atomic; read by main loop + UI, written by harvest goroutine
 	antiForgeryMu        sync.RWMutex
 	harvestMu            sync.Mutex
 	antiForgeryTokens    map[string]time.Time
@@ -93,6 +95,7 @@ type Fuzzer struct {
 	uiInline                 bool
 	uiWidthLocked            int
 	eventLog                 []string
+	eventMu                  sync.Mutex // protects eventLog (written by harvest goroutine + main loop)
 	requestSamples           []string
 	lastEdgeEvent            time.Time
 	coverageSaturationWarned bool

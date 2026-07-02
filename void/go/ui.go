@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -452,11 +453,15 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 
 	lines = append(lines, dashHLine(width, f.cfg.ASCIIUI))
 	lines = append(lines, dashRow("  RECENT EVENTS", width, f.cfg.ASCIIUI))
+	f.eventMu.Lock()
+	evSnap := make([]string, len(f.eventLog))
+	copy(evSnap, f.eventLog)
+	f.eventMu.Unlock()
 	for i := 0; i < maxEventRows; i++ {
 		// Events are appended (newest at end), so read backwards for most-recent-first display.
-		ri := len(f.eventLog) - 1 - i
+		ri := len(evSnap) - 1 - i
 		if ri >= 0 {
-			lines = append(lines, dashRow("  "+dashTruncate(f.eventLog[ri], width-6), width, f.cfg.ASCIIUI))
+			lines = append(lines, dashRow("  "+dashTruncate(evSnap[ri], width-6), width, f.cfg.ASCIIUI))
 		} else {
 			lines = append(lines, dashRow("", width, f.cfg.ASCIIUI))
 		}
@@ -496,7 +501,7 @@ func (f *Fuzzer) printFinalReport() {
 	}
 	fmt.Printf("Latency avg=%.1fms errors=%d crashes=%d uniq=%d\n", avgLat, f.totalErrors, f.totalCrashes, f.uniqueCrashes)
 	if f.cfg.AutoAntiForgery {
-		fmt.Printf("Anti-forgery tokens learned=%d pool=%d\n", f.antiForgeryLearned, f.antiForgeryTokenPoolSize())
+		fmt.Printf("Anti-forgery tokens learned=%d pool=%d\n", atomic.LoadInt64(&f.antiForgeryLearned), f.antiForgeryTokenPoolSize())
 	}
 
 	type epRow struct {
@@ -602,7 +607,7 @@ func (f *Fuzzer) printFinalReport() {
 		"done_req_per_sec":            doneRate,
 		"sent_req_per_sec":            sentRate,
 		"avg_latency_ms":              avgLat,
-		"antiforgery_tokens_learned":  f.antiForgeryLearned,
+		"antiforgery_tokens_learned":  atomic.LoadInt64(&f.antiForgeryLearned),
 		"antiforgery_token_pool_size": f.antiForgeryTokenPoolSize(),
 		"errors":                      f.totalErrors,
 		"crashes_total":               f.totalCrashes,

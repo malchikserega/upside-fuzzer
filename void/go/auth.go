@@ -18,6 +18,9 @@ import (
 // anti-forgery token harvesting, pruning, and rotation.
 
 func (f *Fuzzer) authenticate() error {
+	f.authMu.Lock()
+	defer f.authMu.Unlock()
+
 	f.authHeaders = parseAuthHeadersJSON(os.Getenv("AUTH_HEADERS_JSON"))
 	if cookie := strings.TrimSpace(os.Getenv("AUTH_COOKIE")); cookie != "" {
 		setHeaderCI(f.authHeaders, "Cookie", cookie)
@@ -27,7 +30,7 @@ func (f *Fuzzer) authenticate() error {
 		f.token = tok
 		return nil
 	}
-	if f.hasAuthContext() {
+	if f.hasAuthContextLocked() {
 		return nil
 	}
 
@@ -91,7 +94,7 @@ func (f *Fuzzer) authenticate() error {
 		f.token = text
 		return nil
 	}
-	if f.hasAuthContext() {
+	if f.hasAuthContextLocked() {
 		return nil
 	}
 	return errors.New("token/session not found")
@@ -109,6 +112,13 @@ func (f *Fuzzer) hasSessionCookies() bool {
 }
 
 func (f *Fuzzer) hasAuthContext() bool {
+	f.authMu.RLock()
+	defer f.authMu.RUnlock()
+	return f.hasAuthContextLocked()
+}
+
+// hasAuthContextLocked is for use when authMu is already held.
+func (f *Fuzzer) hasAuthContextLocked() bool {
 	if strings.TrimSpace(f.token) != "" {
 		return true
 	}
@@ -330,19 +340,26 @@ func (f *Fuzzer) reserveAntiForgeryHarvest(path string) (string, bool) {
 func (f *Fuzzer) harvestAntiForgeryForPathReserved(norm string) int {
 	total := 0
 	candidates := antiForgeryHarvestPaths(norm)
+
+	// Snapshot auth state under RLock to avoid racing with authenticate().
+	f.authMu.RLock()
+	authHdrs := cloneStringMap(f.authHeaders)
+	authToken := f.token
+	f.authMu.RUnlock()
+
 	for _, p := range candidates {
 		req, err := http.NewRequest(http.MethodGet, f.target+p, nil)
 		if err != nil {
 			continue
 		}
-		for k, v := range f.authHeaders {
+		for k, v := range authHdrs {
 			if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
 				continue
 			}
 			req.Header.Set(k, v)
 		}
-		if f.token != "" {
-			req.Header.Set("Authorization", "Bearer "+f.token)
+		if authToken != "" {
+			req.Header.Set("Authorization", "Bearer "+authToken)
 		}
 		resp, err := f.client.Do(req)
 		if err != nil {

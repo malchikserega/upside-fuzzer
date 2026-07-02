@@ -242,8 +242,14 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 	}
 	if idToken != "" {
 		req.Header.Set("Authorization", "Bearer "+idToken)
-	} else if f.token != "" {
-		req.Header.Set("Authorization", "Bearer "+f.token)
+	} else {
+		// Snapshot token under RLock — authenticate() may write it concurrently.
+		f.authMu.RLock()
+		tok := f.token
+		f.authMu.RUnlock()
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 
 	resp, err := httpClient.Do(req)
@@ -359,7 +365,7 @@ func (f *Fuzzer) handleResult(res SendResult) {
 	f.maybeAddRequestSample(res)
 	if f.cfg.AutoAntiForgery {
 		if gained := f.learnAntiForgeryFromResponse(res.Item.Path, res.Status, res.Headers, res.Body, false); gained > 0 {
-			f.antiForgeryLearned += gained
+			atomic.AddInt64(&f.antiForgeryLearned, int64(gained))
 		}
 	}
 
@@ -432,9 +438,7 @@ func (f *Fuzzer) handleResult(res SendResult) {
 			if normPath, ok := f.reserveAntiForgeryHarvest(res.Item.Path); ok {
 				go func(path string) {
 					if learned := f.harvestAntiForgeryForPathReserved(path); learned > 0 {
-						f.harvestMu.Lock()
-						f.antiForgeryLearned += learned
-						f.harvestMu.Unlock()
+						atomic.AddInt64(&f.antiForgeryLearned, int64(learned))
 					}
 				}(normPath)
 			}
@@ -619,15 +623,18 @@ func (f *Fuzzer) shouldEnqueueSequence(res SendResult, learned int) bool {
 	return f.learnSampleCounter%5 == 0
 }
 
-func (f *Fuzzer) addEvent(text string) {
-	msg := strings.TrimSpace(sanitizeText(text, 320))
-	if msg == "" {
+func (f *Fuzzer) addEvent(msg string) {
+	if strings.TrimSpace(msg) == "" {
 		return
 	}
 	elapsed := time.Since(f.startTime)
 	totalSec := int(elapsed.Seconds())
 	stamp := fmt.Sprintf("[%02d:%02d]", (totalSec/60)%60, totalSec%60)
 	line := stamp + " " + msg
+
+	f.eventMu.Lock()
+	defer f.eventMu.Unlock()
+
 	if len(f.eventLog) > 0 && f.eventLog[len(f.eventLog)-1] == line {
 		return
 	}

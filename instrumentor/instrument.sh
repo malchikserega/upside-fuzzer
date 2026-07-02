@@ -11,8 +11,12 @@ echo "🔧 SharpFuzz Instrumentation Pipeline"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
-DLL_PATH="${1:-/app/bin/Release/net8.0/FuzzApi.dll}"
-echo "📦 Target DLL: $DLL_PATH"
+DLL_PATH="${1:-}"
+if [ -z "$DLL_PATH" ]; then
+    echo "Usage: instrument.sh <path-to-dll>"
+    exit 1
+fi
+echo "Target DLL: $DLL_PATH"
 echo ""
 
 # Step 1: Verify original DLL
