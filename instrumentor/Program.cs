@@ -146,16 +146,6 @@ bool ShouldInstrument(string fullName)
         return false;
     }
 
-    // ── Always skip framework/system code ──
-    foreach (var prefix in frameworkPrefixes)
-    {
-        if (fullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            skippedFramework++;
-            return false;
-        }
-    }
-
     // ── Always skip migrations, entry points, coverage infrastructure ──
     if (fullName.Contains("Migration") ||
         fullName.Contains("DesignTimeDbContext") ||
@@ -167,27 +157,45 @@ bool ShouldInstrument(string fullName)
         return false;
     }
 
-    // ── instrument-all-user-code: accept everything that passed above filters ──
-    if (instrumentAll)
+    // ── Namespace allowlist check (takes precedence over framework prefix filter) ──
+    // This allows explicitly requested namespaces like Microsoft.eShopWeb.* to be
+    // instrumented even though they share the "Microsoft." prefix with framework code.
+    if (!instrumentAll && allowedNamespaces.Count > 0)
     {
-        instrumentedCount++;
-        Console.WriteLine($"[instrumentor]   + {fullName}");
-        return true;
+        foreach (var ns in allowedNamespaces)
+        {
+            if (fullName.Contains(ns))
+            {
+                instrumentedCount++;
+                Console.WriteLine($"[instrumentor]   + {fullName}");
+                return true;
+            }
+        }
+        // Not in allowlist — check if it's framework code (for accurate counters)
+        foreach (var prefix in frameworkPrefixes)
+        {
+            if (fullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                skippedFramework++;
+                return false;
+            }
+        }
+        skippedNoMatch++;
+        return false;
     }
 
-    // ── Namespace allowlist matching ──
-    foreach (var ns in allowedNamespaces)
+    // ── instrument-all-user-code: skip framework, accept everything else ──
+    foreach (var prefix in frameworkPrefixes)
     {
-        if (fullName.Contains(ns))
+        if (fullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
-            instrumentedCount++;
-            Console.WriteLine($"[instrumentor]   + {fullName}");
-            return true;
+            skippedFramework++;
+            return false;
         }
     }
-
-    skippedNoMatch++;
-    return false;
+    instrumentedCount++;
+    Console.WriteLine($"[instrumentor]   + {fullName}");
+    return true;
 }
 
 // ── Run instrumentation ────────────────────────────────────────────────────

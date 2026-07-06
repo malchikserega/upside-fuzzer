@@ -127,20 +127,25 @@ docker run -it --rm \
   -v $(pwd)/crashes:/fuzzer/crashes \
   -e TARGET_HOST=http://eshprep-eshoppublicapi-1:8080 \
   -e SHM_HOST=http://eshprep-eshoppublicapi-1:8080 \
+  -e AUTH_URL=/api/authenticate \
+  -e AUTH_BODY='{"username":"admin@microsoft.com","password":"Pass@word1"}' \
+  -e AUTH_TOKEN_FIELD=token \
   void-fuzzer \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
   -shm-read-mode file \
+  -skip-endpoint-on-500 \
   -time-budget 5 \
   -concurrency 10 \
   -sequence-prob 0.35
 ```
 
 **What happens:**
-- The fuzzer reads the coverage bitmap directly from the shared `coverage_shm` tmpfs volume
-- No HTTP overhead for coverage — maximum throughput
-- Runs for 5 minutes with 10 parallel workers
+- The fuzzer authenticates as admin and automatically attaches the JWT to all requests.
+- The fuzzer reads the coverage bitmap directly from the shared `coverage_shm` tmpfs volume.
+- No HTTP overhead for coverage — maximum throughput.
+- Runs for 5 minutes with 10 parallel workers.
 
 ### Longer scan (recommended for thorough testing)
 
@@ -152,10 +157,14 @@ docker run -it --rm \
   -v $(pwd)/crashes:/fuzzer/crashes \
   -e TARGET_HOST=http://eshprep-eshoppublicapi-1:8080 \
   -e SHM_HOST=http://eshprep-eshoppublicapi-1:8080 \
+  -e AUTH_URL=/api/authenticate \
+  -e AUTH_BODY='{"username":"admin@microsoft.com","password":"Pass@word1"}' \
+  -e AUTH_TOKEN_FIELD=token \
   void-fuzzer \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
+  -skip-endpoint-on-500 \
   -time-budget 30 \
   -concurrency 16 \
   -sequence-prob 0.40 \
@@ -210,7 +219,7 @@ cd .. && rm -rf eshprep
 | Start | `docker compose up -d && sleep 45` |
 | Verify | `curl -s -X POST http://localhost:5200/shm/create && curl -s http://localhost:5200/shm/coverage` |
 | Grammar | `./compile-grammar.sh swagger-eshop.json --src ./esh` |
-| Fuzz | `docker run -it --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm ... void-fuzzer -direct-shm -time-budget 5` |
+| Fuzz | `docker run -it --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm ... -e AUTH_URL=/api/authenticate ... void-fuzzer -direct-shm -time-budget 5` |
 | Results | `cat crashes/unique-crashes-*.jsonl \| python3 -c "..."` |
 | Stop | `cd eshprep && docker compose down` |
 
