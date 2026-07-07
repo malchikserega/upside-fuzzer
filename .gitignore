@@ -72,10 +72,14 @@ eshprep/
 crashes/
 
 # ── Target project source clones (large, not part of this tool) ──────────────
-mpt-helpdesk/
-mpt-currency/
+
+btcpayserver/
+btcpayserver_prep/
+examples/
+fix_swagger_paths.py
+simplcommerce_prep/
 nopCommerce/
-mpt-prepared/
+
 
 # ── Docker build cache ────────────────────────────────────────────────────────
 *.tar

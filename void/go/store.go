@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"strings"
@@ -377,9 +378,13 @@ func (r *RuntimeStore) pickCustomPayloadValue(key string, dict *DictStore, fallb
 		return cands[rand.Intn(len(cands))]
 	}
 	if fallback != "" {
-		return fallback
+		if !strings.HasPrefix(fallback, "CUSTOM_PAYLOAD") {
+			return fallback
+		}
 	}
-	return "CUSTOM_PAYLOAD"
+	// Instead of returning the literal "CUSTOM_PAYLOAD", return a random fuzzed string
+	// so the endpoint at least receives a correctly formatted unique string.
+	return fmt.Sprintf("fuzz-%016x", rand.Uint64())
 }
 
 func (r *RuntimeStore) pickDynamic(depName string, dict *DictStore) (string, string) {

@@ -25,6 +25,16 @@ func (f *Fuzzer) authenticate() error {
 	if cookie := strings.TrimSpace(os.Getenv("AUTH_COOKIE")); cookie != "" {
 		setHeaderCI(f.authHeaders, "Cookie", cookie)
 	}
+	// AUTH_HEADER: plain "HeaderName: value" string (written by get_apikey.py).
+	if ah := strings.TrimSpace(os.Getenv("AUTH_HEADER")); ah != "" {
+		if idx := strings.Index(ah, ":"); idx > 0 {
+			k := strings.TrimSpace(ah[:idx])
+			v := strings.TrimSpace(ah[idx+1:])
+			if k != "" && v != "" {
+				setHeaderCI(f.authHeaders, k, v)
+			}
+		}
+	}
 	f.seedAuthContextValues()
 	if tok := strings.TrimSpace(os.Getenv("AUTH_TOKEN")); tok != "" {
 		f.token = tok

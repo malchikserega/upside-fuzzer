@@ -288,6 +288,26 @@ func (f *FenwickSampler) Pick() int {
 	return picked
 }
 
+type SequenceStep struct {
+	TemplateID    int               `json:"template_id"`
+	Method        string            `json:"method"`
+	Path          string            `json:"path"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Body          string            `json:"body,omitempty"`
+	Status        int               `json:"status"`
+	CoverageDelta int               `json:"coverage_delta"`
+	MutationLabel string            `json:"mutation_label,omitempty"`
+}
+
+type SequenceState struct {
+	ID         string            `json:"id"`
+	Depth      int               `json:"depth"`
+	Values     map[string]string `json:"values"`
+	Provenance map[string]string `json:"provenance"`
+	History    []SequenceStep    `json:"history"`
+	Energy     float64           `json:"energy"`
+}
+
 type WorkItem struct {
 	TemplateID    int
 	Method        string
@@ -303,6 +323,7 @@ type WorkItem struct {
 	EpochName     string
 	EpochIdx      int
 	SeqDepth      int
+	SeqState      *SequenceState
 }
 
 type SendResult struct {

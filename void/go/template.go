@@ -322,6 +322,10 @@ func (f *Fuzzer) havocDepth(mode string) int {
 }
 
 func (f *Fuzzer) renderTemplate(templateID int, mutateMode string, havocDepth int, seedIdx int) (WorkItem, error) {
+	return f.renderTemplateContext(templateID, mutateMode, havocDepth, seedIdx, nil)
+}
+
+func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocDepth int, seedIdx int, ctx *WorkItem) (WorkItem, error) {
 	t := f.tmplByID[templateID]
 	if t == nil {
 		return WorkItem{}, fmt.Errorf("template not found: %d", templateID)
@@ -352,15 +356,35 @@ func (f *Fuzzer) renderTemplate(templateID int, mutateMode string, havocDepth in
 			b.WriteString(s.Value)
 		case "custom_payload":
 			val := s.Default
-			if useCorr {
-				if cv, ok := corr[s.PayloadKey]; ok {
-					val = cv
-					mutParts = append(mutParts, "corr_"+s.PayloadKey)
+			// Check Sequence Context first
+			seqVal := ""
+			if ctx != nil && ctx.SeqState != nil {
+				if v, ok := ctx.SeqState.Values[s.PayloadKey]; ok {
+					seqVal = v
+				} else {
+					for _, idk := range inferDependencyKeys(s.PayloadKey) {
+						if v, ok := ctx.SeqState.Values[idk]; ok {
+							seqVal = v
+							break
+						}
+					}
 				}
 			}
-			if val == "" || strings.HasPrefix(val, "CUSTOM_PAYLOAD") {
-				val = f.runtime.pickCustomPayloadValue(s.PayloadKey, f.dict, s.Default)
-				mutParts = append(mutParts, "dict_"+s.PayloadKey)
+			
+			if seqVal != "" {
+				val = seqVal
+				mutParts = append(mutParts, "seq_"+s.PayloadKey)
+			} else {
+				if useCorr {
+					if cv, ok := corr[s.PayloadKey]; ok {
+						val = cv
+						mutParts = append(mutParts, "corr_"+s.PayloadKey)
+					}
+				}
+				if val == "" || strings.HasPrefix(val, "CUSTOM_PAYLOAD") {
+					val = f.runtime.pickCustomPayloadValue(s.PayloadKey, f.dict, s.Default)
+					mutParts = append(mutParts, "dict_"+s.PayloadKey)
+				}
 			}
 			if mutateMode == "mutate" && rand.Float64() < 0.15 {
 				val, _ = mutateAny(val, "string")
@@ -397,10 +421,30 @@ func (f *Fuzzer) renderTemplate(templateID int, mutateMode string, havocDepth in
 				b.WriteString(val)
 			}
 		case "dynamic":
-			v, m := f.runtime.pickDynamic(s.Name, f.dict)
-			b.WriteString(v)
-			if m != "" {
-				mutParts = append(mutParts, m)
+			// Check Sequence Context first
+			seqVal := ""
+			if ctx != nil && ctx.SeqState != nil {
+				if v, ok := ctx.SeqState.Values[s.Name]; ok {
+					seqVal = v
+				} else {
+					for _, idk := range inferDependencyKeys(s.Name) {
+						if v, ok := ctx.SeqState.Values[idk]; ok {
+							seqVal = v
+							break
+						}
+					}
+				}
+			}
+			
+			if seqVal != "" {
+				b.WriteString(seqVal)
+				mutParts = append(mutParts, "seq_dyn")
+			} else {
+				v, m := f.runtime.pickDynamic(s.Name, f.dict)
+				b.WriteString(v)
+				if m != "" {
+					mutParts = append(mutParts, m)
+				}
 			}
 		default:
 			b.WriteString(s.Value)

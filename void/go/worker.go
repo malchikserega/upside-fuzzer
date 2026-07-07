@@ -457,8 +457,8 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		if learned > 0 {
 			f.learnedByEndpoint[epKey] += learned
 		}
-		if f.shouldEnqueueSequence(res, learned) {
-			if n := f.enqueueSequenceFollowups(res.Item, res.Body, res.Headers); n > 0 {
+		if res.Item.SeqState != nil || f.shouldEnqueueSequence(res, learned) {
+			if n := f.enqueueSequenceFollowups(res); n > 0 {
 				// no-op, queue updated
 			}
 		}

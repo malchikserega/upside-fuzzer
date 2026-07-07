@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,26 +15,81 @@ import (
 // sequence.go — Stateful sequences: producer→consumer chain discovery,
 // runtime value extraction from requests/responses, followup prioritization.
 
-func (f *Fuzzer) enqueueSequenceFollowups(source WorkItem, respBody string, respHeaders map[string]string) int {
+func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
+	source := res.Item
 	if source.SeqDepth >= maxInt(1, f.cfg.SequenceMaxDepth) {
+		f.maybePersistSequence(res)
 		return 0
 	}
+
+	state := source.SeqState
+	if state == nil {
+		// Start a new sequence state
+		state = &SequenceState{
+			ID:         fmt.Sprintf("seq-%d", rand.Int63()),
+			Depth:      0,
+			Values:     make(map[string]string),
+			Provenance: make(map[string]string),
+			History:    []SequenceStep{},
+		}
+	}
+
+	// Record this step in the history
+	// Clone headers to prevent mutation
+	clonedHeaders := make(map[string]string)
+	for k, v := range source.Headers {
+		clonedHeaders[k] = v
+	}
+
+	step := SequenceStep{
+		TemplateID:    source.TemplateID,
+		Method:        source.Method,
+		Path:          source.Path,
+		Headers:       clonedHeaders,
+		Body:          source.Body,
+		Status:        res.Status,
+		CoverageDelta: res.CoverageDelta,
+		MutationLabel: source.MutationLabel,
+	}
+	state.History = append(state.History, step)
+
+	if res.CoverageDelta > 0 {
+		state.Energy += float64(res.CoverageDelta)
+	}
+
+	// Extract values and bind to this sequence context
 	info := f.depIndex[source.TemplateID]
 	producedDeps := mapKeys(info.Writes)
 	producedIDKeys := mapKeys(info.IDWrites)
-	entityIDs := extractEntityIDs(respBody, respHeaders)
+	entityIDs := extractEntityIDs(res.Body, res.Headers)
+	
+	provKey := fmt.Sprintf("%s %s", source.Method, source.Path)
+	
 	if rid := inferResourceIDKeyFromPath(source.Path); rid != "" {
 		for _, eid := range entityIDs {
+			state.Values[rid] = eid
+			state.Values["id"] = eid
+			state.Provenance[rid] = provKey
+			state.Provenance["id"] = provKey
+			
+			// Also add to global runtime store for baseline epoch (fallback)
 			_ = f.runtime.addValue(rid, eid)
 			_ = f.runtime.addValue("id", eid)
 		}
 	}
 
-	// Bind known write dependencies to discovered entity IDs.
 	if len(entityIDs) > 0 {
 		for _, dep := range producedDeps {
+			state.Values[dep] = entityIDs[0]
+			state.Provenance[dep] = provKey
 			f.runtime.addDepValue(dep, entityIDs[0])
 		}
+	}
+
+	// If the step failed (4xx/5xx), we might still persist if we reached depth, but we don't branch further
+	if res.Status >= 400 {
+		f.maybePersistSequence(res)
+		return 0
 	}
 
 	if len(producedDeps) == 0 && len(entityIDs) == 0 {
@@ -44,27 +101,52 @@ func (f *Fuzzer) enqueueSequenceFollowups(source WorkItem, respBody string, resp
 
 	followups := f.findFollowups(source.TemplateID, source.Method, normalizePath(source.Path), producedDeps, producedIDKeys)
 	if len(followups) == 0 {
+		f.maybePersistSequence(res)
 		return 0
 	}
+	
 	fanout := minInt(maxInt(1, f.cfg.SequenceFanout), len(followups))
 	enqueued := 0
 	for _, tid := range followups[:fanout] {
+		// Clone state for branching
+		nextState := &SequenceState{
+			ID:         state.ID,
+			Depth:      state.Depth + 1,
+			Values:     make(map[string]string, len(state.Values)),
+			Provenance: make(map[string]string, len(state.Provenance)),
+			History:    make([]SequenceStep, len(state.History)),
+			Energy:     state.Energy,
+		}
+		for k, v := range state.Values {
+			nextState.Values[k] = v
+		}
+		for k, v := range state.Provenance {
+			nextState.Provenance[k] = v
+		}
+		copy(nextState.History, state.History)
+
+		// We need a dummy item to pass the SeqState to renderTemplate so it prioritizes it
+		dummy := &WorkItem{SeqState: nextState}
 		mode := "none"
 		if rand.Float64() >= 0.75 {
 			mode = "mutate"
 		}
-		item, err := f.renderTemplate(tid, mode, 1, -1)
+		
+		item, err := f.renderTemplateContext(tid, mode, 1, -1, dummy)
 		if err != nil {
 			continue
 		}
+		
 		if len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
 			item.Path = rePathParam.ReplaceAllString(item.Path, entityIDs[0])
 		}
-		item.SeqDepth = source.SeqDepth + 1
+		
+		item.SeqDepth = nextState.Depth
+		item.SeqState = nextState
 		item.EpochName = "Sequence"
 		item.EpochIdx = source.EpochIdx
 		item.Identity = source.Identity
-		seqLabel := fmt.Sprintf("sequence(d%d:%s %s->%s)", item.SeqDepth, source.Method, normalizePath(source.Path), item.Method)
+		seqLabel := fmt.Sprintf("seq(d%d:%s %s->%s)", item.SeqDepth, source.Method, normalizePath(source.Path), item.Method)
 		if item.MutationLabel != "seed" {
 			seqLabel += "+" + item.MutationLabel
 		}
@@ -78,7 +160,78 @@ func (f *Fuzzer) enqueueSequenceFollowups(source WorkItem, respBody string, resp
 		f.sequenceQueue = append(f.sequenceQueue, item)
 		enqueued++
 	}
+	
+	if enqueued == 0 {
+		f.maybePersistSequence(res)
+	}
+	
 	return enqueued
+}
+
+func (f *Fuzzer) maybePersistSequence(res SendResult) {
+	state := res.Item.SeqState
+	if state == nil || state.Depth < 2 { // Depth is 0-indexed, so 2 means length 3
+		return
+	}
+	
+	// Must have produced some coverage overall
+	if state.Energy <= 0 {
+		return
+	}
+	
+	// Must be mostly successful
+	successCount := 0
+	for _, step := range state.History {
+		if step.Status >= 200 && step.Status < 400 {
+			successCount++
+		}
+	}
+	if float64(successCount)/float64(len(state.History)) < 0.5 {
+		return
+	}
+	
+	// Save to disk
+	f.persistWorkflow(state)
+}
+
+func (f *Fuzzer) persistWorkflow(state *SequenceState) {
+	if f.cfg.TimelineDir == "" {
+		return
+	}
+	outDir := filepath.Join(filepath.Dir(f.cfg.TimelineDir), "workflows")
+	_ = os.MkdirAll(outDir, 0o755)
+	
+	fnameBase := fmt.Sprintf("workflow_d%d_%s", state.Depth+1, state.ID)
+	fpathJSON := filepath.Join(outDir, fnameBase+".json")
+	fpathSH := filepath.Join(outDir, fnameBase+".sh")
+	
+	buf, err := json.MarshalIndent(state, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(fpathJSON, buf, 0o644)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("#!/bin/bash\n")
+	sb.WriteString(fmt.Sprintf("# Auto-generated Deep Workflow Reproduction Script (Depth: %d, Energy: %.0f)\n\n", state.Depth+1, state.Energy))
+	sb.WriteString(fmt.Sprintf("TARGET=\"%s\"\n\n", f.target))
+	
+	for i, step := range state.History {
+		sb.WriteString(fmt.Sprintf("# Step %d: %s %s (Expected Status: %d, Mut: %s)\n", i+1, step.Method, step.Path, step.Status, step.MutationLabel))
+		sb.WriteString(fmt.Sprintf("curl -i -X %s \"$TARGET%s\" \\\n", step.Method, step.Path))
+		
+		for k, v := range step.Headers {
+			sb.WriteString(fmt.Sprintf("  -H '%s: %s' \\\n", k, strings.ReplaceAll(v, "'", "'\\''")))
+		}
+		
+		if step.Body != "" {
+			sb.WriteString(fmt.Sprintf("  -d '%s'\n", strings.ReplaceAll(step.Body, "'", "'\\''")))
+		} else {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+	
+	_ = os.WriteFile(fpathSH, []byte(sb.String()), 0o755)
 }
 
 func (f *Fuzzer) findFollowups(sourceID int, sourceMethod, sourceNorm string, producedDeps, producedIDKeys []string) []int {

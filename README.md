@@ -57,6 +57,15 @@ graph TD
 
 ---
 
+## Quickstarts
+
+Check out our step-by-step guides for instrumenting and fuzzing real-world applications from scratch:
+
+- [eShopOnWeb Quickstart](QUICKSTART_ESHOP.md) (Standard REST API, basic setup)
+- [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) (Modular Monolith, Anti-forgery + Identity Auth injection)
+
+---
+
 ## Features
 
 | Category | What it does |
@@ -81,13 +90,20 @@ graph TD
 ├── void/
 │   ├── go/
 │   │   ├── main.go             CLI flags and app bootstrap
-│   │   ├── fuzzer.go           Main lifecycle hooks
-│   │   ├── worker.go           Core fuzzing loop
-│   │   ├── store.go            Knowledge extraction & dedup
-│   │   ├── crash.go            Triage, dedup, and severity scoring
+│   │   ├── fuzzer.go           Main lifecycle hooks and epoch scheduling
+│   │   ├── worker.go           Core HTTP fuzzing loop and coverage tracking
+│   │   ├── coverage.go         SHM bitmap parsing and HTTP coverage reader
 │   │   ├── sequence.go         Stateful producer/consumer chains
+│   │   ├── store.go            Knowledge extraction, ID harvesting, and dedup
+│   │   ├── template.go         RESTler grammar parsing and payload rendering
+│   │   ├── mutation_engine.go  MOpt-style mutation scheduler and weights
 │   │   ├── mutations.go        MOpt payload mutation categories
-│   │   └── ui.go               Live terminal dashboard
+│   │   ├── crash.go            Triage, dedup, minimization, and PoC generation
+│   │   ├── auth.go             JWT extraction and authentication state
+│   │   ├── ui.go               Live terminal dashboard
+│   │   ├── utils.go            HTTP and string utility functions
+│   │   ├── types.go            Core data structures
+│   │   └── advanced_features_compat.go Race condition probing, multi-identity
 │   ├── export-templates.py     RESTler grammar.py → JSON templates
 │   └── Dockerfile.go           Docker image for Go sidecar
 │

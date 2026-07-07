@@ -43,7 +43,12 @@ def seg_payload(name: str, quoted: bool = False) -> dict:
 def _make_prim_ns():
     """Return a SimpleNamespace with all restler_* callables."""
 
-    def restler_static_string(s="", *a, **kw):       return [seg_static(str(s) if s is not None else "")]
+    def restler_static_string(s="", *a, **kw):
+        # If arg is not a plain string/None (e.g. a _DepRef sentinel), pass it through
+        # so _flatten/_extract_dep_refs can detect and classify it.
+        if s is None or isinstance(s, str):
+            return [seg_static(str(s) if s is not None else "")]
+        return [s]  # _DepRef or other sentinel — _flatten handles it
     def restler_basepath(s="", *a, **kw):             return [seg_static(str(s) if s is not None else "")]
     def restler_fuzzable_string(d="fuzzstring", *a, quoted=False, examples=None, **kw): return [seg_fuzzable("string", d, quoted=quoted)]
     def restler_fuzzable_int(d=0, *a, quoted=False, examples=None, **kw):               return [seg_fuzzable("int", d, quoted=quoted)]
@@ -117,6 +122,20 @@ class GrammarInterpreter:
         # ── engine.dependencies ────────────────────────────────────────────────
         _dyn: dict = {}
 
+        # Pattern: RESTler dep var names start with "_api_" or match _<method>_ convention.
+        # We tag them via a sentinel wrapper so _flatten can classify reads vs writes.
+        import re as _re
+        _DEP_RE = _re.compile(r'^_[a-z]')
+
+        class _DepRef:
+            """Wraps a dependency variable name so _flatten can detect it."""
+            __slots__ = ("name", "is_write")
+            def __init__(self, name: str, is_write: bool = False):
+                self.name = name
+                self.is_write = is_write
+            def __str__(self):
+                return self.name
+
         class DynamicVariable:
             def __init__(self, name: str):
                 self._name = name
@@ -124,28 +143,31 @@ class GrammarInterpreter:
             def __repr__(self):
                 return f"DynamicVariable({self._name!r})"
             def writer(self, *a, **kw):
-                # grammar.py calls this to mark a write-dependency; return self name as placeholder
-                return self._name
+                # Called inside post_send.dependencies — marks this template as a PRODUCER.
+                return _DepRef(self._name, is_write=True)
             def reader(self, *a, **kw):
-                # grammar.py calls this to read a previously written value; return placeholder string
-                return self._name
+                # Called inside restler_static_string — marks this template as a CONSUMER.
+                return _DepRef(self._name, is_write=False)
 
         deps_mod = types.ModuleType("engine.dependencies")
         deps_mod.DynamicVariable = DynamicVariable      # type: ignore[attr-defined]
         deps_mod.set_variable    = lambda n, v=None: _dyn.update({n: v})  # type: ignore[attr-defined]
         deps_mod.get_variable    = lambda n: _dyn.get(n)                  # type: ignore[attr-defined]
-        deps_mod.writer          = lambda name, *a, **kw: name            # type: ignore[attr-defined]
-        deps_mod.reader          = lambda name, *a, **kw: name            # type: ignore[attr-defined]
+        deps_mod.writer          = lambda name, *a, **kw: _DepRef(name, True)   # type: ignore[attr-defined]
+        deps_mod.reader          = lambda name, *a, **kw: _DepRef(name, False)  # type: ignore[attr-defined]
 
         # ── engine.core.requests ───────────────────────────────────────────────
         class _Request:
             def __init__(self, definition=None, *a, **kw):
                 try:
+                    reads, writes = interp._extract_dep_refs(definition or [])
                     segs = interp._flatten(definition or [])
                     interp.templates.append({
                         "id": interp._next_id,
                         "request_id": interp._extract_path(segs),
-                        "segments": segs, "reads": [], "writes": [],
+                        "segments": segs,
+                        "reads":  list(reads),
+                        "writes": list(writes),
                     })
                     interp._next_id += 1
                 except Exception:
@@ -194,11 +216,42 @@ class GrammarInterpreter:
         # `from engine.errors import ResponseParsingException` works
         sys.modules["engine.errors"].ResponseParsingException = ResponseParsingException  # type: ignore[attr-defined]
 
+    # ── Dependency extraction ─────────────────────────────────────────────────
+
+    def _extract_dep_refs(self, obj, reads=None, writes=None):
+        """Walk raw definition recursively, collecting _DepRef objects."""
+        if reads is None:
+            reads = set()
+            writes = set()
+        if obj is None:
+            return reads, writes
+        # Check if obj is a _DepRef (identified by duck-typing — it has .is_write attr)
+        if hasattr(obj, 'is_write') and hasattr(obj, 'name'):
+            if obj.is_write:
+                writes.add(obj.name)
+            else:
+                reads.add(obj.name)
+            return reads, writes
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                self._extract_dep_refs(item, reads, writes)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                self._extract_dep_refs(v, reads, writes)
+        return reads, writes
+
     # ── Segment helpers ───────────────────────────────────────────────────────
 
     def _flatten(self, obj) -> list[dict]:
         if obj is None:
             return []
+        # _DepRef (reader/writer sentinel): render as a static string with the dep name.
+        if hasattr(obj, 'is_write') and hasattr(obj, 'name'):
+            # Writer refs appear in post_send.dependencies — skip them from segments.
+            if obj.is_write:
+                return []
+            # Reader refs appear inside restler_static_string — emit as custom_payload so they are fuzzed if missing.
+            return [seg_payload(obj.name)]
         if isinstance(obj, dict):
             # Verify all values are JSON-safe primitives; skip bad ones
             clean = {k: v for k, v in obj.items()
@@ -216,7 +269,7 @@ class GrammarInterpreter:
             return []
         if isinstance(obj, str):
             return [seg_static(obj)]
-        # Skip anything else (DynamicVariable instances etc.)
+        # Skip anything else
         return []
 
     def _extract_path(self, segs: list[dict]) -> str:

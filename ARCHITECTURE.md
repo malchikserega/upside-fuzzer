@@ -268,10 +268,18 @@ This works regardless of how many project DLLs were instrumented — they all ge
 - Zeroes the 64KB bitmap
 - Used between fuzzing sessions or before per-request measurement
 
-### `GET /shm/coverage/traces` — Per-Request Attribution
-- Middleware records `edgesBefore` → executes request → records `edgesAfter`
-- Delta stored in `ConcurrentDictionary` keyed by Trace ID
+### `GET /shm/coverage/traces` — Legacy
+- Maintained for legacy compatibility but largely superseded by header-based injection.
 
+### Per-Request Exact Attribution (`X-Coverage-Delta`)
+To achieve zero-overhead tracking in a highly concurrent environment (1,000+ req/s), UpsideFuzz relies on the .NET middleware to calculate coverage inline:
+1. Middleware records global edge count *before* the pipeline executes.
+2. The pipeline executes the API business logic.
+3. Middleware records global edge count *after* execution.
+4. The delta is injected directly into the HTTP response header: `X-Coverage-Delta: <number>`.
+
+**The "Coverage Smearing" Trade-off:**
+In parallel execution, multiple requests might run simultaneously. If Request A and Request B execute concurrently and 5 new edges are found, *both* responses will report a delta and the fuzzer will assign "Energy" to both payloads. While this breaks perfect thread-isolation, it is a deliberate and highly beneficial trade-off. It avoids the catastrophic performance penalty of copying a 256KB SHM array per-request (which would crash ASP.NET throughput) and instead occasionally over-rewards a seed, which the Fenwick tree and evolutionary decay gracefully filter out over time.
 ---
 
 ## 6. Grammar Generation (RESTler + Enhancement)
@@ -311,12 +319,23 @@ The production fuzzer is the Go runtime (`void/go/main.go` + `advanced_features.
 
 ```
 void/go/
-├── main.go              Core engine: Config, worker pool, epoch scheduler,
-│                        mutation engine, SHM reader, corpus, TUI dashboard
-├── advanced_features.go Crash triage, PoC generation, crash minimization,
-│                        race condition probing, multi-identity mode
-├── go.mod               Module: void, go 1.22
-└── void        Pre-built binary (Linux/amd64)
+├── main.go                CLI flags, config parsing, and bootstrap
+├── fuzzer.go              Main lifecycle loop, epochs, and corpus scheduling
+├── worker.go              Concurrent HTTP fuzzing loop and coverage attribution
+├── coverage.go            SHM bitmap parsing and HTTP coverage reader
+├── sequence.go            Stateful producer/consumer chain execution
+├── store.go               Knowledge extraction, ID harvesting, and dedup
+├── template.go            RESTler grammar parsing and payload rendering
+├── mutation_engine.go     MOpt-style mutation scheduler and weights
+├── mutations.go           Concrete mutation categories (sqli, xss, etc)
+├── crash.go               Triage, repro, minimization, and PoC generation
+├── auth.go                JWT extraction and authentication state
+├── ui.go                  Live terminal dashboard
+├── utils.go               HTTP and string utility functions
+├── types.go               Core data structures (Seed, Config, WorkItem)
+├── advanced_features_compat.go  Race probing and multi-identity logic
+├── go.mod                 Module: void, go 1.22
+└── void                   Pre-built binary (Linux/amd64)
 ```
 
 ### Epoch Architecture
@@ -359,6 +378,9 @@ Mutations are organized into categories with adaptive weights — categories tha
 | `ldap` | 1.0 | `*)(uid=*))(|(uid=*` |
 | `xxe` | 1.0 | `<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>` |
 | `unicode` | 1.0 | Zero-width chars, homoglyphs, BOM, RTL |
+| `json` | 1.0 | Mass assignment, deep nesting, array overflow, .NET type confusion |
+
+> **Mutation Stacking:** During the `Havoc` and `Splicing` epochs, the engine dynamically chains 2 to 4 mutations together on a single payload. For example, applying `json_dotnet_deser` (injecting `$type` for type confusion) followed by `json_deep_nest` (wrapping the newly injected `$type` in 100 levels of nested dictionaries) allows the fuzzer to organically synthesize highly complex exploits that would be impossible to hardcode in a static dictionary.
 
 Weight update: `weight = 1.0 + hitRate × 4.0` — up to 5× base weight for productive categories.
 
@@ -366,12 +388,13 @@ Weight update: `weight = 1.0 + hitRate × 4.0` — up to 5× base weight for pro
 
 A **seed** = saved (template + rendered payload) pair. Corpus = all seeds.
 
-**Lifecycle:**
+**Lifecycle & Energy Calculation:**
 1. **Baseline** → unmutated renderings populate initial corpus
 2. **Growth** → mutated requests that find new edges become new seeds
-3. **Selection** → Fenwick tree weighted random by **energy**
-4. **Boosting** → +5 energy per new edge discovered by a seed's mutations
-5. **Decay** → 0.5% energy decay per pick (prevents starvation)
+3. **Surprise Factor** → When a heavily-fuzzed endpoint (e.g., hit 10,000 times) suddenly yields a new edge, the assigned energy scales logarithmically: `1.0 + Log2(Requests)`. If it is the first new edge in a long time, the multiplier is multiplied by `3.0`. This heavily favors deep, rare business logic transitions over shallow API surface mapping.
+4. **Selection** → Fenwick tree weighted random by **energy**
+5. **Boosting** → +5 energy per new edge discovered by a seed's mutations
+6. **Decay & Minimization** → 0.5% energy decay per pick (`Energy * 0.995`) prevents starvation and local maximum traps. When the corpus exceeds 500 items, exhausted seeds are pruned to maintain Fenwick tree efficiency.
 
 ### Coverage-Guided Loop
 
@@ -412,6 +435,11 @@ for each batch (N = concurrency):
 | **Source-aware priority** | Boosts endpoints backed by detected business logic files from `--src` |
 | **Adaptive concurrency** | PID-style controller adjusts goroutine count based on error rate |
 | **Sequence fanout** | Builds producer→consumer chains using runtime-extracted response IDs |
+
+### Sequence Engine & Fallback Mechanics
+The Sequence Engine actively stitches complex API workflows (e.g., `POST /stores` → extracts ID → `PUT /stores/{id}`). 
+- **Trigger Rate:** Dictated by the `-sequence-prob` flag (e.g., `0.35` means 35% of all executions are actively stitched sequences).
+- **Fallback Validation:** If a producer request fails (e.g., validation error preventing store creation), the downstream consumer lacks a valid ID. Instead of failing or passing literal RESTler placeholders (e.g., `_api_v1_stores_post_id`), the engine dynamically falls back to generating fuzzed variables (e.g., randomly generated UUIDs, `NaN`, `-Infinity`). This ensures that even "failed" sequences result in robust Resource-Based Authorization and input validation testing against downstream endpoints.
 
 ---
 
