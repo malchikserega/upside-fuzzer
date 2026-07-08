@@ -45,6 +45,13 @@ When comparing BTCPay Server against SimplCommerce, a distinct pattern of "Epoch
 | **Unique Code Edges**| 32,800 | 33,062 | 177,299 | 170,314+ |
 | **Unique Vulnerabilities** | **3** | **5** | **15** | **44** |
 
+```mermaid
+xychart-beta
+    title "Unique Vulnerabilities Discovered (Baseline vs Pro)"
+    x-axis ["BTCPay (Base)", "BTCPay (Pro)", "Simpl (Base)", "Simpl (Pro)"]
+    bar [3, 5, 15, 44]
+```
+
 ### Insights on "Epoch Effectiveness"
 1. **Baseline Phase (Minutes 0-15):** The engine primarily finds shallow `NullReferenceException` errors. It hits a coverage plateau quickly (32k edges for BTCPay, 177k for SimplCommerce).
 2. **Professional Dictionary Phase:** Injecting targeted payloads immediately breaks deeper business logic, identifying SQLi and mass assignment vulnerabilities (Unique crashes jump to 44 on SimplCommerce).

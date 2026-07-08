@@ -51,6 +51,13 @@ We analyzed the progression of the fuzzer across both campaigns to understand *w
 | **Total 500 Responses** | 96,872 | 147,012+ |
 | **Unique Vulnerabilities** | **15** | **44** |
 
+```mermaid
+xychart-beta
+    title "Unique Vulnerabilities Discovered (Baseline vs Pro)"
+    x-axis ["BTCPay (Base)", "BTCPay (Pro)", "Simpl (Base)", "Simpl (Pro)"]
+    bar [3, 5, 15, 44]
+```
+
 ### Epoch Effectiveness (When do bugs trigger?)
 1. **Shallow Baseline (Minutes 0-15):** The fuzzer rapidly finds basic `NullReferenceException` and type mismatch errors. (Found 15 crashes).
 2. **Baseline Plateau (Minutes 18-60):** Coverage stops growing. The default dictionary is exhausted.
