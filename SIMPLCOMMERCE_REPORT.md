@@ -7,6 +7,19 @@ A comprehensive security audit of **SimplCommerce** was performed using two cons
 
 SimplCommerce is significantly larger and more modular than BTCPay Server, heavily relying on Entity Framework Core, strict Anti-Forgery (CSRF) tokens, and Cookie-based authentication.
 
+### Execution Command
+Both campaigns were executed with the following Sequence Engine configuration:
+```bash
+docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
+  -grammar /grammar \
+  -direct-shm \
+  -time-budget 3600 \
+  -sequence-prob 0.8 \
+  -sequence-max-depth 8 \
+  -sequence-fanout 10 \
+  -plain-ui
+```
+
 ## Authentication & CSRF Bypasses
 SimplCommerce strictly guards its state-mutating endpoints with `[ValidateAntiForgeryToken]` and `[Authorize]` attributes. 
 Before fuzzing, a valid administrative session was established (`get_cookie.py`), and the fuzzer was configured to automatically harvest and rotate anti-forgery tokens.

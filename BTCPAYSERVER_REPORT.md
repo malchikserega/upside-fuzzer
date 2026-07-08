@@ -53,6 +53,19 @@ When comparing BTCPay Server against SimplCommerce, a distinct pattern of "Epoch
 ## 1-Hour Extended Fuzzing Campaign
 A full 60-minute fuzzing campaign was executed to evaluate the Sequence Engine's sustained performance and the new payload fallback mechanisms.
 
+### Execution Command
+The campaign was executed using the following parameters:
+```bash
+docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
+  -grammar /grammar \
+  -direct-shm \
+  -time-budget 3600 \
+  -sequence-prob 0.8 \
+  -sequence-max-depth 8 \
+  -sequence-fanout 10 \
+  -plain-ui
+```
+
 ### Performance Metrics (at 57 minutes)
 - **Total Requests:** 4,370,151
 - **Throughput:** ~1,280 requests/second
