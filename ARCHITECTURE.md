@@ -382,7 +382,10 @@ Mutations are organized into categories with adaptive weights — categories tha
 
 > **Mutation Stacking:** During the `Havoc` and `Splicing` epochs, the engine dynamically chains 2 to 4 mutations together on a single payload. For example, applying `json_dotnet_deser` (injecting `$type` for type confusion) followed by `json_deep_nest` (wrapping the newly injected `$type` in 100 levels of nested dictionaries) allows the fuzzer to organically synthesize highly complex exploits that would be impossible to hardcode in a static dictionary.
 
-Weight update: `weight = 1.0 + hitRate × 4.0` — up to 5× base weight for productive categories.
+### Dynamic Mutation Weights (MOpt Feedback Loop)
+The engine does not just randomly pick mutations; it implements an MOpt-style scheduler. Every time a mutation category (e.g., `json` or `sqli`) discovers a **new coverage edge** (verified via the SHM bitmap), its `hitRate` increases. 
+- **Weight update formula:** `weight = 1.0 + (hitRate × 4.0)` (scaling up to a maximum 5× multiplier).
+This means that if the target application is heavily vulnerable to JSON manipulations but immune to SQLi, the engine will dynamically shift its statistical probability to fire significantly more JSON payloads over time.
 
 ### Seed Corpus & Energy Scheduling
 
@@ -427,7 +430,7 @@ for each batch (N = concurrency):
 
 | Feature | Description |
 |---------|-------------|
-| **Crash triage** | Re-probes 5xx with same payload; extracts exception type from `X-Exception-Type`; generates curl PoC |
+| **Crash triage** | Re-probes 5xx with same payload; calculates Triage Score; generates curl PoC |
 | **Crash minimization** | Binary search through request payload removing fields until crash fails to repro |
 | **Race condition probing** | Sends `--race-burst` parallel identical requests to probe TOCTOU conditions |
 | **Multi-identity** | Rotates through multiple auth tokens for authorization bypass testing |
@@ -435,6 +438,24 @@ for each batch (N = concurrency):
 | **Source-aware priority** | Boosts endpoints backed by detected business logic files from `--src` |
 | **Adaptive concurrency** | PID-style controller adjusts goroutine count based on error rate |
 | **Sequence fanout** | Builds producer→consumer chains using runtime-extracted response IDs |
+
+### Triage Scoring System
+UpsideFuzz assigns a heuristic **Triage Score (0.0 to 10.0)** to every discovered crash to filter noise and prioritize critical vulnerabilities.
+
+1. **Base Score (+4.0):** Automatically assigned for any `500 Internal Server Error`.
+2. **Dev Stack Leak (+1.5):** Added if the response body contains developer stack traces (e.g., `stack trace`, `exception:`).
+3. **Backend Exception (+1.6):** Added if the body reveals critical backend failures (e.g., `sql`, `deadlock`, `nullreferenceexception`).
+4. **Sensitive Path (Up to +1.1):** Boosts crashes on high-value endpoints (e.g., `/admin`, `/auth`) via `sensitivePathScore`.
+5. **Stateful Trigger (+0.9):** Added if the crash was triggered by a complex Sequence Engine mutation (indicating deep business logic failure).
+6. **Penalties:** 
+   - `-1.5` for crashes on purely synthetic/non-existent paths (`/api/fuzzstring`).
+   - `-2.0` for generic content-type mismatch noise.
+
+**Classification Labels:**
+- `>= 8.0` (**likely_vuln_high**): Critical vulnerabilities (e.g., 500 error + SQL exception on an admin path).
+- `>= 6.0` (**likely_vuln**): High confidence vulnerabilities.
+- `>= 4.0` (**needs_review**): Standard crashes requiring manual review.
+- `< 4.0` (**noise**): Ignored/Filtered.
 
 ### Sequence Engine & Fallback Mechanics
 The Sequence Engine actively stitches complex API workflows (e.g., `POST /stores` → extracts ID → `PUT /stores/{id}`). 
