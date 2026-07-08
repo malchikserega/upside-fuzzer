@@ -54,7 +54,9 @@ When comparing BTCPay Server against SimplCommerce, a distinct pattern of "Epoch
 A full 60-minute fuzzing campaign was executed to evaluate the Sequence Engine's sustained performance and the new payload fallback mechanisms.
 
 ### Execution Command
-The campaign was executed using the following parameters:
+The campaign was executed using the following parameters.
+
+**Using Docker Compose (Recommended):**
 ```bash
 docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
   -grammar /grammar \
@@ -64,6 +66,19 @@ docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
   -sequence-max-depth 8 \
   -sequence-fanout 10 \
   -plain-ui
+```
+
+**Using raw Docker (Equivalent):**
+```bash
+docker run -d --rm --name btcpay-fuzzer \
+  --network btcpayservertests_default \
+  -v $(pwd)/coverage_shm:/coverage_shm \
+  -v $(pwd)/../grammars/btcpay:/grammar \
+  --env-file fuzzer.env \
+  -e TARGET_HOST=http://instrumented:8080 \
+  -e SHM_HOST=http://instrumented:8080 \
+  void_smartfuzzer \
+  -grammar /grammar -direct-shm -time-budget 3600 -sequence-prob 0.8 -sequence-max-depth 8 -sequence-fanout 10 -plain-ui
 ```
 
 ### Performance Metrics (at 57 minutes)

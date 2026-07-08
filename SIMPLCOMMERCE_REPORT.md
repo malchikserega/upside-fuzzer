@@ -8,7 +8,9 @@ A comprehensive security audit of **SimplCommerce** was performed using two cons
 SimplCommerce is significantly larger and more modular than BTCPay Server, heavily relying on Entity Framework Core, strict Anti-Forgery (CSRF) tokens, and Cookie-based authentication.
 
 ### Execution Command
-Both campaigns were executed with the following Sequence Engine configuration:
+Both campaigns were executed with the following Sequence Engine configuration. 
+
+**Using Docker Compose (Recommended):**
 ```bash
 docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
   -grammar /grammar \
@@ -18,6 +20,19 @@ docker compose -f docker-compose.instrumented.yml run -d --rm smartfuzzer \
   -sequence-max-depth 8 \
   -sequence-fanout 10 \
   -plain-ui
+```
+
+**Using raw Docker (Equivalent):**
+```bash
+docker run -d --rm --name simplcommerce-fuzzer \
+  --network simplcommerce_prep_default \
+  -v $(pwd)/coverage_shm:/coverage_shm \
+  -v $(pwd)/../grammars/simplcommerce:/grammar \
+  --env-file fuzzer.env \
+  -e TARGET_HOST=http://instrumented:8080 \
+  -e SHM_HOST=http://instrumented:8080 \
+  void_smartfuzzer \
+  -grammar /grammar -direct-shm -time-budget 3600 -sequence-prob 0.8 -sequence-max-depth 8 -sequence-fanout 10 -plain-ui
 ```
 
 ## Authentication & CSRF Bypasses
