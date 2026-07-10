@@ -61,6 +61,7 @@ graph TD
 
 Check out our step-by-step guides for instrumenting and fuzzing real-world applications from scratch:
 
+- [BTCPayServer Quickstart](QUICKSTART_BTCPAYSERVER.md) (Complex multi-service app, Greenfield API, Greenfield Auth)
 - [eShopOnWeb Quickstart](QUICKSTART_ESHOP.md) (Standard REST API, basic setup)
 - [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) (Modular Monolith, Anti-forgery + Identity Auth injection)
 
@@ -98,12 +99,15 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── template.go         RESTler grammar parsing and payload rendering
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler and weights
 │   │   ├── mutations.go        MOpt payload mutation categories
-│   │   ├── crash.go            Triage, dedup, minimization, and PoC generation
+│   │   ├── triage.go           Source-aware priority and crash route scoring
+│   │   ├── poc.go              PoC shell script and timeline generation
+│   │   ├── report.go           Final JSON crash report and findings summary
+│   │   ├── minimize.go         Crash minimization and repro verification
+│   │   ├── identity.go         Auth identities, trace decoration, and utilities
 │   │   ├── auth.go             JWT extraction and authentication state
 │   │   ├── ui.go               Live terminal dashboard
 │   │   ├── utils.go            HTTP and string utility functions
-│   │   ├── types.go            Core data structures
-│   │   └── advanced_features_compat.go Race condition probing, multi-identity
+│   │   └── types.go            Core data structures
 │   ├── export-templates.py     RESTler grammar.py → JSON templates
 │   └── Dockerfile.go           Docker image for Go sidecar
 │

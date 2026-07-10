@@ -7,8 +7,9 @@ import (
 	"strings"
 )
 
-// triage.go — Source-aware endpoint priority loading and route scoring.
-// Crash triage scoring (triageCrash) lives in advanced_features_compat.go
+// triage.go — Crash classification and source-aware endpoint priority.
+//
+// Crash triage scoring (triageCrash) lives in identity.go
 // alongside the other Fuzzer methods it depends on.
 
 func (f *Fuzzer) templateSourcePriorityWeight(tid int) float64 {
