@@ -230,7 +230,11 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`template.go`**: Parsing of `templates.export.json` and rendering API request structures into raw HTTP bytes.
 - **`worker.go`**: Core fuzzing loop, concurrency management, and worker thread synchronization (`sync.WaitGroup`).
 - **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
-- **`crash.go`**: Unique crash detection, fingerprinting, deduplication, triage severity scoring, and reproduction queues.
+- **`triage.go`**: Source-aware priority and routing of crash severity scores.
+- **`poc.go`**: Generation of `curl` reproducer shell scripts and Markdown exploit timelines.
+- **`report.go`**: Assembly of the final JSON crash report and vulnerability findings.
+- **`minimize.go`**: Delta-debugging logic to binary-search and strip away unnecessary JSON fields from a crashing payload.
+- **`identity.go`**: Authentication state bridging, trace decoration, and race condition probes.
 - **`mutation_engine.go`**: Context-aware injection algorithms (JSON payload flipping, path traversal injection, query dropping, etc.).
 - **`ui.go`**: Rich terminal dashboard rendering, ASCII progress bars, and run reporting.
 - **`utils.go`**: General string manipulation, byte arrays, path parsers, and generic mathematical helpers.
@@ -365,7 +369,7 @@ MOpt-style weighted selection — categories that find more edges get higher pro
   "mutation": "sqli",
   "payload": "'{\"name\":\"' OR 1=1--\"}",
   "response_body": "An error occurred while processing your request.",
-  "triage": {"classification": "needs_review", "severity_score": 5},
+  "triage": {"classification": "needs_review", "severity_score": 5, "crash_layer": "model_binding"},
   "repro": {"stable_reproducible": true, "stability_pct": "100.0"},
   "minimized": {"path": "/v1/helpdesk/channels/0", "payload": ""},
   "poc_file": "./crashes/pocs/poc-7ecd321e718f5a26.sh",

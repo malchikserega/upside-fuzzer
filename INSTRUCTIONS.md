@@ -466,6 +466,8 @@ The following are **on by default** and only need explicit flags to *disable*:
 | Source-aware endpoint priority | ON | `-source-aware-priority=false` |
 | Multi-identity scheduling | ON | `-multi-identity=false` |
 
+> **Note on Crash Triage:** The `-crash-triage` feature (enabled by default) now detects the `crash_layer` (e.g., `model_binding`, `deserialization`, `controller`). Crashes that happen pre-authentication (like JSON parse errors) are automatically penalized in score and capped at `needs_review` severity, preventing noise from trivial 400-level-masked-as-500 errors.
+
 ### Flags worth tuning
 
 | Flag | Default | When to change |

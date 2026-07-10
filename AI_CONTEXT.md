@@ -39,11 +39,16 @@ When a user targets a new API, the exact flow is:
 * **Performance:** The target is 1000+ requests per second on a decent laptop. Do not introduce O(N^2) operations in the hot path of the Go worker pool.
 * **Logging:** When fixing bugs in Go, use the `ui.go` logger. Do not use `fmt.Println` directly as it will break the terminal dashboard UI.
 
-## 6. Where to find things
-* Want to change how inputs are mutated? -> `void/go/mutations.go`
-* Want to change how seeds are scheduled? -> `void/go/corpus.go` and `worker.go`
+## 6. Where to find things (The Split Go Engine)
+The Go engine (`void/go/`) was refactored into focused single-responsibility files:
+* Want to change how inputs are mutated? -> `mutations.go` and `mutation_engine.go`
+* Want to change how seeds are scheduled or coverage ceiling is set? -> `fuzzer.go` and `worker.go`
 * Want to add a new C# attribute support? -> `enhance-grammar.py`
-* Want to fix a coverage bug? -> `void/go/coverage.go`
+* Want to fix a coverage bug? -> `coverage.go`
+* Want to adjust crash triage rules (pre/post-auth)? -> `triage.go` (and `identity.go` for triageCrash payload construction)
+* Want to change crash minimization or repro logic? -> `minimize.go`
+* Want to modify PoC shell scripts or exploit timelines? -> `poc.go`
+* Want to alter the final JSON report structure? -> `report.go`
 * Writing the academic paper? -> `arxiv_paper/paper.tex`
 
 **If the user asks you to implement a feature, always cross-reference this document to ensure you are modifying the correct logical component.**
