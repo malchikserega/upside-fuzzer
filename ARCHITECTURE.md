@@ -328,12 +328,15 @@ void/go/
 ├── template.go            RESTler grammar parsing and payload rendering
 ├── mutation_engine.go     MOpt-style mutation scheduler and weights
 ├── mutations.go           Concrete mutation categories (sqli, xss, etc)
-├── crash.go               Triage, repro, minimization, and PoC generation
+├── triage.go              Source-aware priority and crash route scoring
+├── poc.go                 PoC shell script and timeline generation
+├── report.go              Final JSON crash report and findings summary
+├── minimize.go            Crash minimization and repro verification
+├── identity.go            Auth identities, trace decoration, race probing, and utilities
 ├── auth.go                JWT extraction and authentication state
 ├── ui.go                  Live terminal dashboard
 ├── utils.go               HTTP and string utility functions
 ├── types.go               Core data structures (Seed, Config, WorkItem)
-├── advanced_features_compat.go  Race probing and multi-identity logic
 ├── go.mod                 Module: void, go 1.22
 └── void                   Pre-built binary (Linux/amd64)
 ```
@@ -352,7 +355,7 @@ Time Budget
 
 | Epoch | Budget | Description |
 |-------|--------|-------------|
-| **Baseline** | 5% | Send every template **unmutated**. Populates seed corpus. Establishes coverage baseline. `batch_size=1` for accurate per-request attribution. |
+| **Baseline** | 5% | Send every template **unmutated**. Populates seed corpus. The maximum coverage reached at the end of this epoch is saved as the `coverage_baseline_ceiling` to act as the denominator for saturation (rather than the raw 64KB bitmap size). |
 | **Deterministic** | 30% | Pick seed by energy, apply **one mutation** per field. Systematic, methodical exploration. |
 | **Havoc** | 50% | Pick seed, apply **1-4 stacked mutations**. Depth starts at 1, escalates on coverage stall. |
 | **Splicing** | 15% | Pick **two** seeds, use one's template + havoc mutations. Cross-pollinates payloads. |
@@ -430,7 +433,7 @@ for each batch (N = concurrency):
 
 | Feature | Description |
 |---------|-------------|
-| **Crash triage** | Re-probes 5xx with same payload; calculates Triage Score; generates curl PoC |
+| **Crash triage** | Re-probes 5xx with same payload; calculates Triage Score (detects layer: pre-auth crashes like deserialization are capped at `needs_review`); generates curl PoC |
 | **Crash minimization** | Binary search through request payload removing fields until crash fails to repro |
 | **Race condition probing** | Sends `--race-burst` parallel identical requests to probe TOCTOU conditions |
 | **Multi-identity** | Rotates through multiple auth tokens for authorization bypass testing |
@@ -527,9 +530,13 @@ mvpsharpfuzznet/
 ├── void/
 │   ├── go/
 │   │   ├── main.go             ★ Go fuzzer: epochs, workers, mutations, SHM, TUI
-│   │   ├── advanced_features.go  Crash triage, race probing, multi-identity
+│   │   ├── triage.go           Source-aware triage and scoring logic
+│   │   ├── poc.go              PoC shell scripts and timelines
+│   │   ├── report.go           JSON bug report builder
+│   │   ├── minimize.go         Crash minimization and repro logic
+│   │   ├── identity.go         Auth identities and race probing
 │   │   ├── go.mod              Module file (go 1.22)
-│   │   └── void       Pre-built binary
+│   │   └── void                Pre-built binary
 │   ├── Dockerfile.go           ★ Container image for Go fuzzer sidecar
 │   ├── grammar.py              Active compiled grammar (deploy-grammar.sh target)
 │   ├── dict.json               Active dictionary

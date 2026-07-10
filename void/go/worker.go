@@ -112,6 +112,13 @@ func (f *Fuzzer) mainLoop() error {
 			}
 			epochEdgesAtStart[ep.Name] = f.currentEdges
 			epochReqsAtStart[ep.Name] = f.totalDone
+			// Snapshot the baseline ceiling once — the moment we leave the Baseline epoch
+			// (all templates sent unmutated), currentEdges is the best proxy for the
+			// total reachable surface of the application under normal traffic.
+			if lastEpoch == "Baseline" && f.baselineEdgesCeiling == 0 && f.currentEdges > 0 {
+				f.baselineEdgesCeiling = f.currentEdges
+				f.addEvent(fmt.Sprintf("BASELINE CEILING set: %d edges (real coverage ceiling)", f.baselineEdgesCeiling))
+			}
 			f.addEvent(fmt.Sprintf("EPOCH %d: %s", epIdx+1, ep.Name))
 			lastEpoch = ep.Name
 		}
@@ -519,10 +526,20 @@ func (f *Fuzzer) handleResult(res SendResult) {
 }
 
 func (f *Fuzzer) coverageSaturationPct() float64 {
-	if f.coverageCapacity <= 0 {
+	// Prefer baselineEdgesCeiling (set at end of Baseline epoch) as the denominator:
+	// this represents the reachable surface under normal traffic and gives a
+	// meaningful "% of application surface covered" reading.
+	// Fall back to raw bitmap capacity when the ceiling hasn't been set yet
+	// (i.e. we're still in the Baseline epoch itself).
+	ceiling := f.baselineEdgesCeiling
+	if ceiling <= 0 {
+		// Still in Baseline or ceiling never set — fall back to bitmap capacity.
+		ceiling = f.coverageCapacity
+	}
+	if ceiling <= 0 {
 		return 0
 	}
-	return clampFloat((float64(f.currentEdges)/math.Max(1.0, float64(f.coverageCapacity)))*100.0, 0.0, 100.0)
+	return clampFloat((float64(f.currentEdges)/math.Max(1.0, float64(ceiling)))*100.0, 0.0, 150.0)
 }
 
 func (f *Fuzzer) addOrBoostSeed(item WorkItem, newEdges int) {

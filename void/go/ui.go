@@ -494,8 +494,19 @@ func (f *Fuzzer) printFinalReport() {
 		avgLat = f.latencyTotalMS / float64(f.latencySamples)
 	}
 	fmt.Printf("Requests done=%d sent=%d done/s=%.1f sent/s=%.1f\n", f.totalDone, f.totalSent, doneRate, sentRate)
-	if f.coverageCapacity > 0 {
-		fmt.Printf("Coverage: %d -> %d (+%d) [sat=%.1f%% of %d]\n", f.startEdges, f.currentEdges, f.currentEdges-f.startEdges, f.coverageSaturationPct(), f.coverageCapacity)
+	if f.baselineEdgesCeiling > 0 {
+		aboveBaseline := f.currentEdges - f.baselineEdgesCeiling
+		abovePct := 0.0
+		if f.baselineEdgesCeiling > 0 {
+			abovePct = float64(aboveBaseline) / float64(f.baselineEdgesCeiling) * 100.0
+		}
+		if abovePct < 0 {
+			abovePct = 0
+		}
+		fmt.Printf("Coverage: %d baseline-ceiling=%d mutations-above=+%d (%.1f%% beyond baseline)\n",
+			f.currentEdges, f.baselineEdgesCeiling, aboveBaseline, abovePct)
+	} else if f.coverageCapacity > 0 {
+		fmt.Printf("Coverage: %d -> %d (+%d) [bitmap=%.1f%% of %d]\n", f.startEdges, f.currentEdges, f.currentEdges-f.startEdges, f.coverageSaturationPct(), f.coverageCapacity)
 	} else {
 		fmt.Printf("Coverage: %d -> %d (+%d)\n", f.startEdges, f.currentEdges, f.currentEdges-f.startEdges)
 	}

@@ -373,7 +373,7 @@ Void reads authentication from **environment variables** (not from CLI flags). T
 | **`AUTH_HEADERS_JSON`** | JSON object of header name → value, e.g. `{"Authorization":"Bearer eyJ...","X-Custom":"v"}`. Header values are sent as written (include `Bearer ` inside `Authorization` if you use this path). |
 | **`AUTH_COOKIE`** | Optional `Cookie` header value for cookie-based sessions. |
 | **`AUTH_URL`**, **`AUTH_METHOD`**, **`AUTH_BODY`**, **`AUTH_CONTENT_TYPE`**, **`AUTH_TOKEN_FIELD`** | If no token/headers/cookie are pre-set, Void can perform one login request against `TARGET_HOST` and parse a token (defaults in code: `POST` `/api/authenticate`, JSON field `token`). See `void/go/auth.go`. |
-| **`AUTH_IDENTITIES_JSON`** | Multiple weighted identities (advanced); see `void/go/advanced_features_compat.go`. |
+| **`AUTH_IDENTITIES_JSON`** | Multiple weighted identities (advanced); see `void/go/identity.go`. |
 
 Examples:
 

@@ -53,19 +53,25 @@ type Fuzzer struct {
 	authBlocked   map[string]*AuthBlockedState
 	clientSamples map[string][]string
 
-	startTime        time.Time
-	startEdges       int
-	currentEdges     int
-	coverageCapacity int
-	totalDone        int
-	totalSent        int
-	totalErrors      int
-	totalCrashes     int
-	uniqueCrashes    int
-	latencyTotalMS   float64
-	latencySamples   int
-	completedSinceCV int
-	stallCounter     int
+	startTime             time.Time
+	startEdges            int
+	currentEdges          int
+	coverageCapacity      int
+	// baselineEdgesCeiling is set once, at the end of the Baseline epoch, to the
+	// number of edges seen after every template was sent unmutated exactly once.
+	// It serves as a real coverage ceiling: it represents the reachable application
+	// surface under normal traffic, so (currentEdges - startEdges) / baselineEdgesCeiling
+	// tells us how much *additional* code we've reached via mutations vs. baseline.
+	baselineEdgesCeiling int
+	totalDone            int
+	totalSent            int
+	totalErrors          int
+	totalCrashes         int
+	uniqueCrashes        int
+	latencyTotalMS       float64
+	latencySamples       int
+	completedSinceCV     int
+	stallCounter         int
 
 	learnedByEndpoint    map[string]int
 	uniqueCrashKeys      map[string]struct{}
