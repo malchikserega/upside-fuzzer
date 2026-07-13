@@ -134,16 +134,35 @@ PY
 
 Мы автоматизировали этот процесс с помощью скрипта `populate_data.py`. Скрипт генерирует фейковые зашифрованные данные, соответствующие строгим требованиям валидации Bitwarden (правильные base64 IV и Ciphertext).
 
+Для access-control fuzzing лучше наполнять стенд под несколькими пользователями. Тогда в базе появляются объекты разных владельцев, а Void во время multi-auth fuzzing может эффективнее находить IDOR, cross-user и cross-tenant ошибки.
+
 **Как запустить:**
-Убедитесь, что у вас есть сгенерированный auth-материал (в файле `fuzzer.env`), и выполните:
+Если у вас есть `auth.identities.json`, выполните:
+```bash
+cd bitwarden_prep
+python3 populate_data.py --auth-file auth.identities.json
+```
+
+Если identity-файла нет, скрипт сохранит старое поведение и возьмет single-user auth из `fuzzer.env`:
 ```bash
 cd bitwarden_prep
 python3 populate_data.py
 ```
+
 Скрипт создаст:
-- Фейковые папки (Folders)
-- Фейковые записи (Ciphers) привязанные к папкам
+- Фейковые папки (Folders) для каждого authenticated identity
+- Фейковые записи (Ciphers), привязанные к папкам этого identity
 - Фейковые отправки (Sends)
+- `populated-objects.json` с созданными object IDs, сгруппированными по identity
+
+Guest/anonymous identities автоматически пропускаются, потому что они не могут создавать vault objects. Секреты и токены в `populated-objects.json` не сохраняются.
+
+Полезные опции:
+```bash
+python3 populate_data.py --auth-file auth.identities.json --identity bitwarden-admin
+python3 populate_data.py --auth-file auth.identities.json --folders 5 --ciphers 30 --sends 10
+python3 populate_data.py --auth-file auth.identities.json --dry-run
+```
 
 ---
 
