@@ -14,6 +14,8 @@ Targets:
 
 This guide is written for an AI agent working inside this repository. It assumes the repo root is the current working directory.
 
+> **Status note (2026-07-13):** This is a historical rerun playbook for the paper workflow. Some helper scripts and artifact directories referenced below are generated during benchmark reproduction and are not checked into this workspace by default.
+
 ## 1. Non-Negotiable Comparison Rules
 
 Follow these rules exactly. If any of them is violated, the run is not comparable to the paper.
@@ -29,21 +31,22 @@ Follow these rules exactly. If any of them is violated, the run is not comparabl
 6. The fair bug metric for the paper is:
    - `distinct HTTP 500 method+endpoint pairs`
 7. For `RESTler`, this metric must be extracted from bug bucket JSON files with `status_code == 500`.
-8. For `Void`, this metric must come from `buggy_method_endpoints_full` in `metrics.json`, produced by `benchmarks/collect_void_go_metrics.py`.
+8. For `Void`, this metric must come from `buggy_method_endpoints_full` in `metrics.json`, produced by the benchmark metrics collector used for the paper workflow (historically `benchmarks/collect_void_go_metrics.py`).
 9. Use the current repository checkout as-is. Do not change target code, instrumentation scripts, or benchmark methodology while reproducing.
 
 ## 2. What Is Already in This Repo
 
-The workspace already contains the materials needed to reproduce the exact paper runs:
+The benchmark workflow uses these standard locations in the current repo checkout. Some of them are generated during a rerun and may not exist yet in a fresh workspace:
 
-- Raw targets in [to_test](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/to_test)
-- Prepared instrumented copies in [benchmarks/prepared](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/prepared)
-- Temporary compose/Dockerfile helpers in [benchmarks/tmp](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/tmp)
+- Raw targets in `to_test/`
+- Prepared instrumented copies in `benchmarks/prepared/`
+- Temporary compose/Dockerfile helpers in `benchmarks/tmp/`
 - Final benchmark helpers:
-  - [compile-grammar.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/compile-grammar.sh)
-  - [sanitize-swagger-for-restler.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/sanitize-swagger-for-restler.sh)
-  - [collect_void_go_metrics.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/collect_void_go_metrics.py)
-  - [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/build_fair_endpoint_comparison.py)
+  - [compile-grammar.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/compile-grammar.sh)
+  - [sanitize-swagger-for-restler.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/sanitize-swagger-for-restler.sh)
+  - [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/build_fair_endpoint_comparison.py)
+
+The historical `benchmarks/collect_void_go_metrics.py` helper referenced later in this file is not currently present in this checkout. Restore or recreate an equivalent metrics collector before running the full paper workflow.
 
 If the prepared copies are missing, regenerate them with `fuzz-prep-multi.py`.
 
@@ -54,7 +57,7 @@ Run these commands once.
 ```bash
 set -euo pipefail
 
-ROOT="/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1"
+ROOT="/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer"
 RESULTS="$ROOT/benchmarks/results"
 TMP="$ROOT/benchmarks/tmp"
 PREP="$ROOT/benchmarks/prepared"
@@ -625,7 +628,7 @@ import json
 import re
 from pathlib import Path
 
-root = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/dotnet-eshop-catalog/void-go-main-skip-endpoint-rerun/grammar")
+root = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/results/dotnet-eshop-catalog/void-go-main-skip-endpoint-rerun/grammar")
 
 grammar = root / "grammar.py"
 text = grammar.read_text(encoding="utf-8")
@@ -819,7 +822,7 @@ import os
 import re
 from pathlib import Path
 token = os.environ["JELLYFIN_RESTLER_TOKEN"]
-grammar = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/jellyfin/restler-rerun/io/output/Compile/grammar.py")
+grammar = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/results/jellyfin/restler-rerun/io/output/Compile/grammar.py")
 text = grammar.read_text(encoding="utf-8")
 text = re.sub(r'Token=[0-9a-fA-F]+', f'Token={token}', text)
 grammar.write_text(text, encoding="utf-8")
@@ -881,7 +884,7 @@ import os
 import re
 from pathlib import Path
 token = os.environ["JELLYFIN_VOID_TOKEN"]
-root = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/jellyfin/void-go-main-skip-endpoint-rerun/grammar")
+root = Path("/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/results/jellyfin/void-go-main-skip-endpoint-rerun/grammar")
 for name in ("grammar.py", "templates.export.json"):
     p = root / name
     text = p.read_text(encoding="utf-8")
@@ -954,19 +957,19 @@ python3 "$ROOT/benchmarks/build_fair_endpoint_comparison.py"
 
 Important:
 
-- [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/build_fair_endpoint_comparison.py) currently hardcodes the authoritative paper directories from section `12`.
+- [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/build_fair_endpoint_comparison.py) currently hardcodes the authoritative paper directories from section `12`.
 - If you rerun into new directories such as `*-rerun`, either:
   - overwrite the authoritative paper directories with the fresh artifacts, or
   - update the `TARGETS` array in that script before regenerating the table.
 
 This updates:
 
-- [comparison_table.json](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/paper-results-20260313/comparison_table.json)
-- [paper_table.tex](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/paper-results-20260313/paper_table.tex)
+- [comparison_table.json](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/paper-results-20260313/comparison_table.json)
+- [paper_table.tex](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/paper-results-20260313/paper_table.tex)
 
 ## 11. Rebuild the Paper PDF
 
-The benchmark section in [paper.tex](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/arxiv_paper/paper.tex) is hardcoded and must match the regenerated table.
+The benchmark section in [paper.tex](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/arxiv_paper/paper.tex) is hardcoded and must match the regenerated table.
 
 After updating the text, rebuild:
 
@@ -981,25 +984,25 @@ docker run --rm \
 
 Outputs:
 
-- [paper.pdf](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/arxiv_paper/paper.pdf)
-- [build.log](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/arxiv_paper/build.log)
+- [paper.pdf](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/arxiv_paper/paper.pdf)
+- `arxiv_paper/build.log` (generated when you rebuild the paper locally)
 
 ## 12. Authoritative Final Run Directories From the Paper Session
 
 Use these as reference when validating a rerun:
 
 - `eShopOnWeb`
-  - RESTler: [restler-official-20260313-123628](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/eshop/restler-official-20260313-123628)
-  - Void current-main: [void-go-main-skip-endpoint-20260317-180545](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/eshop/void-go-main-skip-endpoint-20260317-180545)
+  - RESTler: `benchmarks/results/eshop/restler-official-20260313-123628`
+  - Void current-main: `benchmarks/results/eshop/void-go-main-skip-endpoint-20260317-180545`
 - `CustomerLoyalty`
-  - RESTler corrected baseline: [restler-official-20260313-141340](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/customer-loyalty/restler-official-20260313-141340)
-  - Void current-main: [void-go-main-skip-endpoint-20260317-182658](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/customer-loyalty/void-go-main-skip-endpoint-20260317-182658)
+  - RESTler corrected baseline: `benchmarks/results/customer-loyalty/restler-official-20260313-141340`
+  - Void current-main: `benchmarks/results/customer-loyalty/void-go-main-skip-endpoint-20260317-182658`
 - `dotnet/eShop Catalog.API`
-  - RESTler sanitized baseline: [restler-official-20260313-165426](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/dotnet-eshop-catalog/restler-official-20260313-165426)
-  - Void current-main fixed run: [void-go-main-skip-endpoint-static-version-20260317-231905](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/dotnet-eshop-catalog/void-go-main-skip-endpoint-static-version-20260317-231905)
+  - RESTler sanitized baseline: `benchmarks/results/dotnet-eshop-catalog/restler-official-20260313-165426`
+  - Void current-main fixed run: `benchmarks/results/dotnet-eshop-catalog/void-go-main-skip-endpoint-static-version-20260317-231905`
 - `Jellyfin`
-  - RESTler authenticated sanitized baseline: [restler-official-20260313-195526](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/jellyfin/restler-official-20260313-195526)
-  - Void current-main: [void-go-main-skip-endpoint-20260317-230418](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer-1/benchmarks/results/jellyfin/void-go-main-skip-endpoint-20260317-230418)
+  - RESTler authenticated sanitized baseline: `benchmarks/results/jellyfin/restler-official-20260313-195526`
+  - Void current-main: `benchmarks/results/jellyfin/void-go-main-skip-endpoint-20260317-230418`
 
 ## 13. Final Sanity Checks
 

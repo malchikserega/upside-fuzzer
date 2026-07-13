@@ -63,7 +63,7 @@ The platform automates transforming a standard .NET solution into a feedback-dri
                     │  ┌─────────────────┐ │
                     │  │  Web API Process │ │
                     │  │  DLL-A.dll ──┐  │ │
-                    │  │  DLL-B.dll ──┼─►│ │  SHM bitmap (64KB)
+                    │  │  DLL-B.dll ──┼─►│ │  SHM bitmap (256KB default)
                     │  │  DLL-C.dll ──┘  │ │  /coverage_shm/bitmap
                     │  │  [SyncSharpFuzz]─┼─┼─► (tmpfs mmap)
                     │  │  /shm/create    │ │
@@ -211,29 +211,29 @@ This prevents instrumenting framework code (which causes crashes) while covering
 
 ## 4. Runtime Synchronization (SHM Linking)
 
-When the application starts, multiple DLLs each have their own copy of SharpFuzz. They all need to write to the **same** 64KB coverage bitmap.
+When the application starts, multiple DLLs each have their own copy of SharpFuzz. They all need to write to the **same** shared coverage bitmap. The current default size is **256KB** (`262144` bytes), with a minimum supported size of **64KB**.
 
 ### SHM Allocation (Dual Mode)
 
 **Mode 1: File-Backed mmap** (when `coverage_shm` tmpfs volume is mounted)
 ```
-/coverage_shm/bitmap  ← tmpfs file, 64KB
+/coverage_shm/bitmap  ← tmpfs file, 256KB by default (configurable)
   ↑ written by ASP.NET (all DLLs via reflection linking)
   ↑ read by Go fuzzer sidecar (direct mmap, zero HTTP overhead)
 ```
 
 ```csharp
 var fs = new FileStream("/coverage_shm/bitmap", FileMode.OpenOrCreate, ...);
-fs.SetLength(65536);
-mmf = MemoryMappedFile.CreateFromFile(fs, null, 65536, ...);
-accessor = mmf.CreateViewAccessor(0, 65536);
+fs.SetLength(262144);
+mmf = MemoryMappedFile.CreateFromFile(fs, null, 262144, ...);
+accessor = mmf.CreateViewAccessor(0, 262144);
 accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
 globalShmAddr = (IntPtr)ptr;
 ```
 
 **Mode 2: Heap Allocation** (fallback when no tmpfs volume)
 ```csharp
-globalShmAddr = Marshal.AllocHGlobal(65536);
+globalShmAddr = Marshal.AllocHGlobal(262144);
 ```
 Coverage only accessible via HTTP endpoints (`GET /shm/coverage`).
 
@@ -245,7 +245,7 @@ The `/shm/create` response reports which mode is active: `"mode":"file-backed-mm
 AppDomain.CurrentDomain.GetAssemblies()
   → find all SharpFuzz.Common.Trace types
   → set SharedMem field to globalShmAddr
-  → all DLLs now write to the same 64KB bitmap
+  → all DLLs now write to the same shared bitmap
 ```
 
 This works regardless of how many project DLLs were instrumented — they all get linked to the same pointer at startup.
@@ -255,17 +255,17 @@ This works regardless of how many project DLLs were instrumented — they all ge
 ## 5. Coverage Reporting Protocol
 
 ### `POST /shm/create` — Initialize
-- Allocates 64KB SHM (or opens existing tmpfs file)
+- Allocates SHM using the current configured size (256KB by default; minimum 64KB), or opens the existing tmpfs file
 - Calls `SyncSharpFuzz()` to link all loaded DLLs
-- Returns `{"status": "synced", "mode": "...", "bitmap_size": 65536}`
+- Returns `{"status": "synced", "mode": "...", "bitmap_size": 262144}` (or the configured size)
 
 ### `GET /shm/coverage` — Global Stats
-- Reads the 64KB bitmap via pointer arithmetic
+- Reads the shared bitmap via pointer arithmetic
 - Counts bytes > 0 (`edges`) and sums all values (`hits`)
 - Returns `{"edges": 150, "hits": 5000}`
 
 ### `POST /shm/reset` — Reset Bitmap
-- Zeroes the 64KB bitmap
+- Zeroes the shared bitmap
 - Used between fuzzing sessions or before per-request measurement
 
 ### `GET /shm/coverage/traces` — Legacy
@@ -355,7 +355,7 @@ Time Budget
 
 | Epoch | Budget | Description |
 |-------|--------|-------------|
-| **Baseline** | 5% | Send every template **unmutated**. Populates seed corpus. The maximum coverage reached at the end of this epoch is saved as the `coverage_baseline_ceiling` to act as the denominator for saturation (rather than the raw 64KB bitmap size). |
+| **Baseline** | 5% | Send every template **unmutated**. Populates seed corpus. The maximum coverage reached at the end of this epoch is saved as the `coverage_baseline_ceiling` to act as the denominator for saturation (rather than the raw bitmap capacity). |
 | **Deterministic** | 30% | Pick seed by energy, apply **one mutation** per field. Systematic, methodical exploration. |
 | **Havoc** | 50% | Pick seed, apply **1-4 stacked mutations**. Depth starts at 1, escalates on coverage stall. |
 | **Splicing** | 15% | Pick **two** seeds, use one's template + havoc mutations. Cross-pollinates payloads. |
@@ -494,33 +494,37 @@ How file-backed mmap works across containers:
 
 ## 9. Verified Projects
 
-These projects were successfully instrumented and fuzzed using UpsideFuzz:
+These targets have current quickstarts, prepared trees, or active benchmark material in this workspace:
 
 | Project | Type | Services | Notes |
 |---------|------|---------|-------|
-| **mpt-helpdesk** | Internal SoftwareOne API | SQL Server, Azure Service Bus, Blob Storage, Worker | Multi-project; main project is `Mpt.Helpdesk.Api` |
-| **mpt-currency** | Internal SoftwareOne API | SQL Server | Single web project |
-| **nopCommerce** | OSS e-commerce (.NET) | SQL Server, multiple DLLs | Large solution; uses `prepare-nopcommerce.sh` bootstrap |
-| **eShopOnWeb** | OSS dev sample | SQL Server | `PublicApi` is main project |
-| **CustomerLoyalty** | OSS dev sample | PostgreSQL, Redis, PGAdmin | `WebAPI` is main project |
+| **Bitwarden** | OSS password manager backend | MSSQL, Identity service, Migrator | Multi-user auth, strict validation, multi-identity fuzzing |
+| **BTCPayServer** | OSS payment platform | PostgreSQL, NBXplorer, Bitcoin stack | Greenfield API, API-key auth, larger service graph |
+| **eShopOnWeb** | OSS sample store API | SQL Server | Smallest end-to-end target in the repo; `PublicApi` is main project |
+| **SimplCommerce** | OSS modular e-commerce | SQL Server, MVC/auth stack | Cookie auth and anti-forgery-heavy target |
 
 ---
 
 ## 10. Project File Map (Current State)
 
 ```
-mvpsharpfuzznet/
+upside-fuzzer/
 │
 ├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
 ├── compile-grammar.sh          ★ Compile swagger.json → RESTler grammar
 ├── enhance-grammar.py          ★ Post-process grammar/dict (OpenAPI + C# source constraints)
 ├── sanitize-swagger-for-restler.sh   Fix deepObject/nested arrays
-├── deploy-grammar.sh           Deploy grammar to void/
-├── prepare-nopcommerce.sh      Bootstrap nopCommerce end-to-end
 │
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
 ├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
 ├── README.md                   Overview, features, structure
+├── QUICKSTART_BITWARDEN.md     Target-specific setup for Bitwarden
+├── QUICKSTART_BTCPAYSERVER.md  Target-specific setup for BTCPayServer
+├── QUICKSTART_ESHOP.md         Target-specific setup for eShopOnWeb
+├── QUICKSTART_SIMPLCOMMERCE.md Target-specific setup for SimplCommerce
+├── docs/
+│   ├── FUZZER_AUTHENTICATION.md
+│   └── auth.identities.example.json
 │
 ├── instrumentor/               Reference instrumentor source + build script
 │   ├── Program.cs              Standalone generic config-driven instrumentor
@@ -528,35 +532,49 @@ mvpsharpfuzznet/
 │   └── instrumentor.csproj     Project file
 │
 ├── void/
+│   ├── export-templates.py     RESTler grammar.py → JSON templates
+│   ├── Dockerfile.go           Container image for the Go fuzzer sidecar
+│   ├── README.md               Go fuzzer reference (flags, startup fields, build)
 │   ├── go/
-│   │   ├── main.go             ★ Go fuzzer: epochs, workers, mutations, SHM, TUI
+│   │   ├── main.go             ★ CLI flags and bootstrap
+│   │   ├── fuzzer.go           Main lifecycle hooks and epoch scheduling
+│   │   ├── worker.go           Core HTTP fuzzing loop and coverage tracking
+│   │   ├── coverage.go         SHM bitmap parsing and HTTP coverage reader
+│   │   ├── sequence.go         Stateful producer/consumer chains
+│   │   ├── template.go         RESTler grammar parsing and rendering
+│   │   ├── store.go            Runtime value harvesting and deduplication
+│   │   ├── mutation_engine.go  MOpt-style mutation scheduler
+│   │   ├── mutations.go        Payload mutation categories
+│   │   ├── auth.go             JWT/header/cookie auth state and login fallback
+│   │   ├── identity.go         Multi-identity scheduling and race helpers
 │   │   ├── triage.go           Source-aware triage and scoring logic
 │   │   ├── poc.go              PoC shell scripts and timelines
 │   │   ├── report.go           JSON bug report builder
 │   │   ├── minimize.go         Crash minimization and repro logic
-│   │   ├── identity.go         Auth identities and race probing
-│   │   ├── go.mod              Module file (go 1.22)
-│   │   └── void                Pre-built binary
-│   ├── Dockerfile.go           ★ Container image for Go fuzzer sidecar
-│   ├── grammar.py              Active compiled grammar (deploy-grammar.sh target)
-│   ├── dict.json               Active dictionary
-│   ├── templates.helpdesk.json Pre-exported template JSON for helpdesk
-│   └── README.md               Go fuzzer reference (flags, modes)
+│   │   ├── ui.go               Terminal UI and plain logging
+│   │   ├── utils.go            Common helpers and constants
+│   │   ├── types.go            Core data structures
+│   │   ├── go.mod
+│   │   ├── identity_test.go
+│   │   └── poc_test.go
 │
 ├── grammars/
-│   ├── eshop/                  grammar.py + dict.json for eShopOnWeb
-│   ├── loyalty/                grammar.py + dict.json for CustomerLoyalty
-│   ├── helpdesk/               grammar.py + dict.json for mpt-helpdesk
-│   └── nopcommerce/            grammar.py + dict.json for nopCommerce
+│   ├── bitwarden/              Generated grammar, dict, templates, and security overlay
+│   ├── btcpay/                 Generated grammar, dict, and templates
+│   ├── eshop/                  Generated grammar, dict, and templates
+│   └── simplcommerce/          Generated grammar, dict, and templates
 │
-├── restler_bin/                RESTler compiler binaries
+├── restler_bin/                RESTler compiler binaries (generated / refreshable)
 ├── restler_input/              RESTler input (swagger)
 ├── restler_output/             RESTler compiler output (temporary)
 │
-├── mpt-helpdesk/               mpt-helpdesk source project
-├── mpt-currency/               mpt-currency source project
-├── prepared-helpdesk/          mpt-helpdesk instrumented (ready to run)
-├── mpt-prepared/               mpt-currency instrumented (ready to run)
-│
-└── softwareone-marketplace-currency-dictionary.json   Custom dict for currency API
+├── bitwarden_prep/             Target tree + helper scripts for Bitwarden
+├── btcpayserver/               Raw BTCPayServer checkout
+├── btcpayserver_prep/          Instrumented BTCPayServer tree
+├── eshprep/                    Instrumented eShopOnWeb tree
+├── simplcommerce_prep/         Instrumented SimplCommerce tree
+├── examples/
+│   └── simplcommerce/          SimplCommerce-specific helper scripts and namespace config
+├── benchmarks/                 Paper helpers and benchmark post-processing
+└── crashes/                    Fuzzer outputs, PoCs, timelines, and reports
 ```

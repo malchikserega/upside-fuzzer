@@ -22,8 +22,8 @@ git clone https://github.com/malchikserega/upside-fuzzer.git
 cd upside-fuzzer
 
 # Clone SimplCommerce (target application)
-git clone https://github.com/simplcommerce/SimplCommerce.git simplcommerce_prep
-cd simplcommerce_prep
+git clone https://github.com/simplcommerce/SimplCommerce.git simplcommerce
+cd simplcommerce
 git checkout 4b0d1e5 # Use a specific commit if necessary, or latest main
 cd ..
 ```
@@ -36,7 +36,7 @@ SimplCommerce is a highly modular application. We provide a `simpl_namespaces.js
 
 ```bash
 python3 fuzz-prep-multi.py \
-  --src ./simplcommerce_prep \
+  --src ./simplcommerce \
   --out ./simplcommerce_prep \
   --main src/SimplCommerce.WebHost \
   --namespaces examples/simplcommerce/simpl_namespaces.json
@@ -62,17 +62,18 @@ RUN dotnet /instrumentor/instrumentor.dll out out
 
 SimplCommerce's automatically generated Swagger definition contains some redundant or invalid path parameters that conflict with the RESTler compiler.
 
-Run the provided python script to automatically patch the `swagger.json`:
+Start the instrumented stack, download the swagger, then run the provided patch helper:
 
 ```bash
 cd simplcommerce_prep
+docker compose -f docker-compose.instrumented.yml up -d simpldb instrumented
+sleep 40
 curl -s http://localhost:7777/swagger/v1/swagger.json -o swagger-simplcommerce.json
-# (If SimplCommerce is not running, start it first to get the swagger, or get it from source)
 
 cd ..
 python3 examples/simplcommerce/fix_swagger_paths.py
 ```
-*(Ensure `fix_swagger_paths.py` points to the correct location of your downloaded swagger file)*.
+The checked-in helper rewrites the downloaded swagger into `simplcommerce_prep/swagger-sanitized.json`.
 
 ---
 
@@ -82,7 +83,7 @@ Compile the sanitized swagger file into the RESTler grammar and export it for th
 
 ```bash
 # Compile grammar (RESTler compiler + source-aware enhancement)
-./compile-grammar.sh simplcommerce_prep/swagger-sanitized.json --src ./simplcommerce_prep
+./compile-grammar.sh simplcommerce_prep/swagger-sanitized.json --src ./simplcommerce
 
 # Save grammar files
 mkdir -p grammars/simplcommerce
@@ -90,9 +91,8 @@ cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/s
 
 # Export templates for the Go fuzzer
 python3 void/export-templates.py \
-  --grammar grammars/simplcommerce/grammar.py \
-  --dict grammars/simplcommerce/dict.json \
-  --out grammars/simplcommerce/
+  --grammar-dir grammars/simplcommerce \
+  --out grammars/simplcommerce/templates.export.json
 ```
 
 ---
@@ -106,14 +106,7 @@ We use a Python script to perform an automated login and dump the session cookie
 ```bash
 cd simplcommerce_prep
 
-# Start the application first
-docker compose -f docker-compose.instrumented.yml up -d simpldb
-docker compose -f docker-compose.instrumented.yml up -d instrumented
-
-# Wait for the DB to initialize (~40 seconds)
-sleep 40
-
-# Run the authentication script
+# Reuse the running stack from Step 3 and generate the auth cookie
 python3 ../examples/simplcommerce/get_cookie.py
 ```
 

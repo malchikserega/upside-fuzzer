@@ -18,16 +18,15 @@ Step-by-step runbook for **any .NET 8+ web API** — from source code to coverag
    - [Void without Docker Compose (`docker run`)](#void-without-docker-compose-docker-run)
 8. [Go Fuzzer CLI Reference](#8-go-fuzzer-cli-reference)
 9. [Real-World Examples](#9-real-world-examples)
-   - [mpt-helpdesk](#mpt-helpdesk)
-   - [mpt-currency](#mpt-currency)
-   - [nopCommerce](#nopcommerce)
-   - [eShopOnWeb](#eshoponweb-dev-example)
-   - [CustomerLoyalty](#customerloyalty-dev-example)
+   - [Bitwarden](#bitwarden)
+   - [BTCPayServer](#btcpayserver)
+   - [eShopOnWeb](#eshoponweb)
+   - [SimplCommerce](#simplcommerce)
 10. [Custom Dictionary Format](#10-custom-dictionary-format)
 11. [Quality Gates](#11-quality-gates)
 12. [Troubleshooting](#12-troubleshooting)
 
-**Also:** [Helpdesk-style stack (SQL, bacpac, Void)](docs/SETUP_HELPDESK_STYLE_FUZZING.md) · [Documentation improvement plan](docs/DOCUMENTATION_IMPROVEMENT_PLAN.md)
+**Project quickstarts:** [Bitwarden](QUICKSTART_BITWARDEN.md) · [BTCPayServer](QUICKSTART_BTCPAYSERVER.md) · [eShopOnWeb](QUICKSTART_ESHOP.md) · [SimplCommerce](QUICKSTART_SIMPLCOMMERCE.md)
 
 ---
 
@@ -41,7 +40,7 @@ Install the following on any new system before running UpsideFuzz:
 | **Python** | 3.9+ | Run `fuzz-prep-multi.py` and `enhance-grammar.py` |
 | **.NET SDK** | 8+ | RESTler grammar compiler (`compile-grammar.sh`) |
 | **Go** (optional) | 1.22+ | Only if you build the Go fuzzer binary locally |
-| **sqlpackage** (optional) | Microsoft build | Import `.bacpac` into SQL Server from the host ([helpdesk-style setup](docs/SETUP_HELPDESK_STYLE_FUZZING.md)) |
+| **sqlpackage** (optional) | Microsoft build | Import `.bacpac` into SQL Server from the host for targets that require manual SQL Server restores |
 
 ```bash
 # Verify tooling
@@ -53,7 +52,7 @@ dotnet --version        # 8.0+
 
 > **Note:** The Go fuzzer runs as a Docker container, so Go itself is NOT required on the host unless you build locally.
 
-> **Apple Silicon / ARM hosts:** SQL Server in Docker is usually `linux/amd64` and runs under emulation unless your compose file sets `platform: linux/amd64` (as in `cleanprephelpdesk/docker-compose.yml`). Expect slower first-time pulls and DB startup.
+> **Apple Silicon / ARM hosts:** SQL Server in Docker is usually `linux/amd64` and often runs under emulation unless the target compose file pins that platform explicitly. Expect slower first-time pulls and DB startup on SQL Server-backed targets.
 
 ---
 
@@ -100,7 +99,7 @@ dotnet --version        # 8.0+
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Running Containers                                                     │
 │                                                                         │
-│  [App API]  ←─── SharpFuzz probes write to 64KB bitmap                │
+│  [App API]  ←─── SharpFuzz probes write to 256KB bitmap (default)     │
 │  [DB/Cache] ←─── seeded & migrated at startup                          │
 │                                                                         │
 │  Coverage bitmap:                                                       │
@@ -137,7 +136,7 @@ dotnet --version        # 8.0+
 ## 3. Step 1: Instrument the Project
 
 ```bash
-python3 /path/to/mvpsharpfuzznet/fuzz-prep-multi.py \
+python3 /path/to/upside-fuzzer/fuzz-prep-multi.py \
   --src <SOURCE_DIR> \
   --out <OUTPUT_DIR> \
   [--main <WEB_API_PROJECT_NAME>]
@@ -152,9 +151,9 @@ python3 /path/to/mvpsharpfuzznet/fuzz-prep-multi.py \
 **Example:**
 ```bash
 python3 fuzz-prep-multi.py \
-  --src ./mpt-helpdesk \
-  --out ./prepared-helpdesk \
-  --main Mpt.Helpdesk.Api
+  --src ./btcpayserver \
+  --out ./btcpayserver_prep \
+  --main BTCPayServer
 ```
 
 ### What the script does
@@ -228,9 +227,9 @@ curl -s http://localhost:<PORT>/swagger/v1/swagger.json | head -c 200
 ## 5. Step 3: Verify Instrumentation
 
 ```bash
-# 1. Initialize SHM — allocates 64KB bitmap, syncs SharpFuzz across all DLLs
+# 1. Initialize SHM — allocates the shared bitmap (256KB by default), syncs SharpFuzz across all DLLs
 curl -s -X POST http://localhost:<PORT>/shm/create
-# → {"status":"synced","mode":"file-backed-mmap","bitmap_size":65536,...}
+# → {"status":"synced","mode":"file-backed-mmap","bitmap_size":262144,...}
 
 # 2. Send any API request to generate coverage
 curl -s http://localhost:<PORT>/api/some-endpoint
@@ -259,7 +258,7 @@ curl -s http://localhost:<PORT>/shm/coverage
 The grammar describes every API request shape — method, path, headers, body — as typed, fuzzable templates.
 
 ```bash
-cd /path/to/mvpsharpfuzznet
+cd /path/to/upside-fuzzer
 
 # Download swagger from running instrumented app
 curl -s http://localhost:<PORT>/swagger/v1/swagger.json -o swagger.json
@@ -275,7 +274,7 @@ mkdir -p grammars/<project>
 cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/<project>/
 ```
 
-> **nopCommerce tip:** Prefer `/fuzz/openapi.json` over `/swagger/v1/swagger.json` — it covers conventional MVC routes.
+> **Swagger tip:** If a target exposes both a public swagger and a fuzz-specific/internal OpenAPI document, prefer the richer spec as long as it still matches the running API surface you fuzz.
 
 ### What `compile-grammar.sh` does
 
@@ -290,7 +289,7 @@ cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/<
 RESTler’s compiler produces **`grammar.py`** and **`dict.json`**. The Go fuzzer (Void) additionally loads **`templates.export.json`** — a JSON export of request templates produced by [`void/export-templates.py`](void/export-templates.py). Generate it **on the host** before starting Void:
 
 ```bash
-cd /path/to/mvpsharpfuzznet
+cd /path/to/upside-fuzzer
 python3 void/export-templates.py \
   --grammar-dir restler_output/Compile \
   --out restler_output/Compile/templates.export.json
@@ -300,7 +299,7 @@ Point Void at that directory with `-grammar` (a folder containing `grammar.py` a
 
 **Why:** Void needs `python3` only when it must export templates from `grammar.py` at runtime. The current `void/Dockerfile.go` installs `python3` and copies `export-templates.py`, but older/custom images may not. If a legacy image exits with `exec: "python3": executable file not found in $PATH`, either rebuild the current image, export templates on the host, or ensure `templates.export.json` is at least as new as `grammar.py`.
 
-You may mount any folder that holds these files as `/grammar` in Compose (for example `../restler_output/Compile:/grammar:ro` instead of `../grammars/helpdesk`), or copy the three artifacts into `grammars/<project>/`.
+You may mount any folder that holds these files as `/grammar` in Compose (for example `../restler_output/Compile:/grammar:ro` instead of `../grammars/bitwarden`), or copy the three artifacts into `grammars/<project>/`.
 
 ---
 
@@ -344,7 +343,7 @@ docker compose --profile fuzz-go run --rm void \
 Target URL and auth are set via **environment variables**, not flags:
 
 ```bash
-cd /path/to/mvpsharpfuzznet/void/go
+cd /path/to/upside-fuzzer/void/go
 
 # Build binary (one-time — see Build section below)
 go build -o void .
@@ -404,18 +403,18 @@ docker compose --profile fuzz-go run --rm void
 You can run the fuzzer container with plain `docker run` as long as (1) the **target stack is already up**, (2) the container joins the **same Docker network** as the API (so `http://api:8080` or your service hostname resolves), and (3) the **same `coverage_shm` volume** is mounted at the path Void uses (`-shm-path`, e.g. `/coverage_shm/bitmap`) **and** is attached to the instrumented API the same way as in Compose.
 
 ```bash
-REPO=/absolute/path/to/mvpsharpfuzznet
+REPO=/absolute/path/to/upside-fuzzer
 
 docker run --rm -it \
-  --network cleanprephelpdesk_default \
+  --network mytarget_default \
   -e TARGET_HOST=http://api:8080 \
   -e SHM_HOST=http://api:8080 \
   -e AUTH_TOKEN='eyJhbGciOi...' \
-  -v cleanprephelpdesk_coverage_shm:/coverage_shm \
+  -v mytarget_coverage_shm:/coverage_shm \
   -v "$REPO/void:/fuzzer" \
   -v "$REPO/restler_output/Compile:/grammar:ro" \
-  -v "$REPO/cleanprephelpdesk/src:/src:ro" \
-  cleanprephelpdesk-void:latest \
+  -v "$REPO/my-target/src:/src:ro" \
+  void-fuzzer:latest \
   -grammar /grammar -templates-json /grammar/templates.export.json \
   -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
   -time-budget 7 -concurrency 16 -adaptive-concurrency -coverage-interval 4 \
@@ -423,9 +422,7 @@ docker run --rm -it \
   -src /src
 ```
 
-Replace `cleanprephelpdesk_default`, `cleanprephelpdesk_coverage_shm`, and `cleanprephelpdesk-void:latest` with the names your Compose project actually uses (`docker compose ls`, `docker volume ls`, `docker compose images void`). If you use `docker compose -p myproj`, prefixes become `myproj_*`.
-
-A full Helpdesk-style checklist (bacpac, SQL ports, worker env) lives in **[`docs/SETUP_HELPDESK_STYLE_FUZZING.md`](docs/SETUP_HELPDESK_STYLE_FUZZING.md)**.
+Replace `mytarget_default`, `mytarget_coverage_shm`, `http://api:8080`, and `void-fuzzer:latest` with the names your Compose project actually uses (`docker compose ls`, `docker volume ls`, `docker compose images`). If you use `docker compose -p myproj`, prefixes become `myproj_*`.
 
 ### Inspect crash output
 
@@ -588,7 +585,7 @@ docker compose --profile fuzz-go run --rm void \
 
 ### Full flag reference
 
-See [`void/README.md`](void/README.md) for the complete table of all 60+ flags with accurate defaults taken from source.
+See [`void/README.md`](void/README.md) for the complete CLI table with defaults taken from source.
 
 ### Build for any platform
 
@@ -598,225 +595,38 @@ See [`void/README.md §Build`](void/README.md#build-for-any-platform) for cross-
 
 ## 9. Real-World Examples
 
-### mpt-helpdesk
+The generic runbook above is the maintained source of truth for instrumentation, grammar generation, auth configuration, SHM wiring, and fuzzer flags. For target-specific setup details, use the current quickstarts that are checked into this repository:
 
-Multi-service .NET solution with SQL Server, Azure Service Bus, Blob Storage, and a separate Worker process.
+### Bitwarden
 
-#### Instrument
+See [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md).
 
-```bash
-python3 fuzz-prep-multi.py \
-  --src ./mpt-helpdesk \
-  --out ./prepared-helpdesk \
-  --main Mpt.Helpdesk.Api
-```
+Use this target when you want a realistic multi-service API with MSSQL, identity flows, strict validation, and multi-user access-control fuzzing. The quickstart covers JWT acquisition, `auth.identities.json`, and test-data population for cross-identity findings.
 
-#### Build & start
+### BTCPayServer
 
-```bash
-cd prepared-helpdesk
-docker compose build
-docker compose up -d
-sleep 60  # DB migration + Azurite startup
+See [QUICKSTART_BTCPAYSERVER.md](QUICKSTART_BTCPAYSERVER.md).
 
-# Verify
-curl -s -X POST http://localhost:8080/shm/create
-curl -s http://localhost:8080/shm/coverage
-```
+Use this target when you want API-key-driven auth and a more complex service graph around the Greenfield API. The quickstart covers API-key generation, Swagger cleanup, and grammar/template export.
 
-#### Compile grammar
+### eShopOnWeb
 
-```bash
-cd /path/to/mvpsharpfuzznet
-curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
-./compile-grammar.sh swagger.json --src ./mpt-helpdesk
-mkdir -p grammars/helpdesk
-cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/helpdesk/
-```
+See [QUICKSTART_ESHOP.md](QUICKSTART_ESHOP.md).
 
-Export **Void template JSON** on the host (the RESTler output alone is not enough — see [Template export](#grammar-folder-and-template-export-for-void)). Typical layouts:
+Use this target as the smallest end-to-end sample in the repo. It is a good sanity check for instrumentation, SHM coverage, and grammar generation on a straightforward REST API.
 
-- **Templates next to grammar** (default Void flag `-templates-json` omitted → `<grammar>/templates.export.json`):
+### SimplCommerce
 
-  ```bash
-  python3 void/export-templates.py \
-    --grammar-dir grammars/helpdesk \
-    --out grammars/helpdesk/templates.export.json
-  ```
+See [QUICKSTART_SIMPLCOMMERCE.md](QUICKSTART_SIMPLCOMMERCE.md).
 
-- **Templates path used by many compose files** (`-templates-json /fuzzer/templates.helpdesk.json` — file lives under the repo `void/` mount):
+Use this target when you want anti-forgery tokens, cookie-based auth, and a modular monolith with more framework surface area than eShopOnWeb.
 
-  ```bash
-  python3 void/export-templates.py \
-    --grammar-dir grammars/helpdesk \
-    --out void/templates.helpdesk.json
-  ```
+### Which quickstart to pick first
 
-After you change `grammar.py`, re-run the exporter (or Void will try to run Python inside the Alpine image and fail).
-
-#### Repo layout: `cleanprephelpdesk/` (pre-instrumented tree)
-
-This repository includes **`cleanprephelpdesk/`** (API on host port **8081**, SQL **8433** by default). Full order of operations — database, `.bacpac`, Azurite, worker, grammar, JWT, Void — is in **[`docs/SETUP_HELPDESK_STYLE_FUZZING.md`](docs/SETUP_HELPDESK_STYLE_FUZZING.md)**. From the repo root you can run: `AUTH_TOKEN='…' ./scripts/examples/run-void-cleanprephelpdesk.sh`.
-
-#### Fuzz — Void (Go smart fuzzer, direct SHM)
-
-**Void** is the Go coverage-guided smart fuzzer (same engine family as `void/go` in this repo; “smart fuzzer” and “void” refer to the same thing here). `prepared-helpdesk/docker-compose.yml` defines Compose service **`void`** (profile `fuzz-go`) with **`-direct-shm`**, **`-shm-path /coverage_shm/bitmap`**, **`-coverage-bitmap-size 1048576`**, and **`-shm-read-mode file`**, matching the instrumented API’s shared bitmap volume.
-
-```bash
-cd prepared-helpdesk
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void
-```
-
-To override the full command line (must keep SHM flags), pass arguments after the service name; they replace the compose `command` array:
-
-```bash
-cd prepared-helpdesk
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json -src /src \
-  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
-  -time-budget 20 -concurrency 16 -adaptive-concurrency \
-  -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8
-```
-
-#### Fuzz — max throughput profile
-
-```bash
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json \
-  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
-  -time-budget 20 -concurrency 64 -min-concurrency 64 -max-concurrency 160 \
-  -adaptive-concurrency -request-timeout 2.0 -max-response-bytes 8192 \
-  -coverage-interval 8 -sequence-prob 0 -race-mode=false \
-  -crash-triage=false -repro-runs 0 -minimize-crash=false \
-  -crash-replay-count 0 -skip-endpoint-on-500 -no-ui
-```
-
-#### Fuzz — hybrid profile (race detection + multi-identity)
-
-```bash
-AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json -src /src \
-  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
-  -time-budget 20 -concurrency 48 -min-concurrency 24 -max-concurrency 96 \
-  -adaptive-concurrency -sequence-prob 0.25 -sequence-max-depth 3 \
-  -sequence-fanout 5 -race-prob 0.06 -race-burst 3 \
-  -source-aware-priority=true -multi-identity=true -identity-mode weighted \
-  -crash-triage=false -repro-runs 0 -minimize-crash=false
-```
-
----
-
-### mpt-currency
-
-.NET API with currency management endpoints. Similar setup to helpdesk but simpler service graph.
-
-#### Instrument
-
-```bash
-python3 fuzz-prep-multi.py \
-  --src ./mpt-currency \
-  --out ./mpt-prepared \
-  --main <WebApiProjectName>
-```
-
-#### Fuzz
-
-```bash
-cd mpt-prepared
-AUTH_TOKEN="..." \
-docker compose --profile fuzz-go run --rm void \
-  -direct-shm -shm-path /coverage_shm/bitmap \
-  -time-budget 7 -concurrency 16 -coverage-interval 4 \
-  -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8
-```
-
----
-
-### nopCommerce
-
-Large open-source .NET e-commerce platform. Uses the automated bootstrap script.
-
-#### Instrument + grammar + compose in one command
-
-```bash
-cd /path/to/mvpsharpfuzznet
-
-./prepare-nopcommerce.sh \
-  --src /absolute/path/to/nopCommerce \
-  --swagger-url http://localhost/fuzz/openapi.json
-```
-
-> The bootstrap script: instruments the project, builds Docker images, starts the stack, waits for DB seeding, downloads the swagger spec, and compiles the grammar.
-
-#### Fuzz
-
-```bash
-cd nopcommerce-prepared
-
-docker compose -f docker-compose.yml -f docker-compose.fuzz-go.yml \
-  --profile fuzz-go run --rm void \
-  -direct-shm \
-  -shm-path /coverage_shm/bitmap \
-  -coverage-bitmap-size 262144 \
-  -coverage-interval 4 \
-  -endpoint-stall-reqs 220 \
-  -endpoint-zero-edge-reqs 120 \
-  -antiforgery-sample-rate 0.10 \
-  -antiforgery-max-tokens 2048 \
-  -antiforgery-token-ttl 300 \
-  -time-budget 30 \
-  -concurrency 16 \
-  -adaptive-concurrency \
-  -ui-endpoint-sort recent \
-  -ui-endpoint-rotate \
-  -ui-endpoint-rotate-sec 0.8
-```
-
----
-
-### eShopOnWeb (dev example)
-
-```bash
-# Instrument
-python3 fuzz-prep-multi.py --src ./esh --out ./eshprep --main PublicApi
-
-# Start
-cd eshprep && docker compose up -d && sleep 40
-
-# Compile grammar
-cd .. && ./compile-grammar.sh swagger-eshop.json --src ./esh
-cp restler_output/Compile/* grammars/eshop/
-
-# Fuzz (HTTP mode)
-cd void/go
-export TARGET_HOST="http://localhost:5200"
-export SHM_HOST="http://localhost:5200"
-export AUTH_TOKEN="<token>"
-./void -grammar ../../grammars/eshop -time-budget 5
-```
-
----
-
-### CustomerLoyalty (dev example)
-
-```bash
-# Instrument
-python3 fuzz-prep-multi.py --src ./customer-loyalty --out ./loyalty-prep --main WebAPI
-
-# Start
-cd loyalty-prep && docker compose up -d && sleep 40
-
-# Compile grammar
-cd .. && ./compile-grammar.sh swagger-loyalty.json --src ./customer-loyalty
-cp restler_output/Compile/* grammars/loyalty/
-
-# Fuzz (HTTP mode)
-cd void/go
-export TARGET_HOST="http://localhost:5100"
-export SHM_HOST="http://localhost:5100"
-export AUTH_TOKEN="<token>"
-./void -grammar ../../grammars/loyalty -time-budget 5
-```
+- Choose `eShopOnWeb` for the fastest “is my pipeline wired correctly?” verification.
+- Choose `Bitwarden` for authz, multi-identity, and deeper business-logic coverage.
+- Choose `BTCPayServer` for API-key auth and a larger service graph.
+- Choose `SimplCommerce` for cookie auth and anti-forgery-heavy MVC behavior.
 
 ---
 
@@ -875,13 +685,13 @@ Any top-level key whose value is an array of strings is treated as a pool of val
 }
 ```
 
-### Real-world example: SoftwareOne marketplace currencies
+### Real-world example: commerce and billing fields
 
 ```json
 {
   "restler_custom_payload": {
     "currencyCode": ["USD", "EUR", "GBP", "CHF", "SEK", "PLN"],
-    "currencyId": ["CUR-001", "CUR-002"],
+    "billingCurrency": ["USD", "EUR", "GBP"],
     "amount": ["0", "1", "100", "99999.99", "-1"]
   },
   "fuzzableString": ["test", "INVALID", ""],
@@ -943,4 +753,4 @@ Use these gates to evaluate whether a fuzzing run reached meaningful depth.
 | Coverage is flat after warmup | All endpoints exhausted or API too slow | Increase `-sequence-prob`, reduce `-concurrency` |
 | Fuzzer exits immediately | grammar.py parse error | Check Python syntax: `python3 -c "import grammar"` from grammar dir |
 | `exec: "python3": executable file not found` inside Void | Legacy/custom Void image without Python | Rebuild current `void/Dockerfile.go` or export templates on the host (`void/export-templates.py`); see [Template export](#grammar-folder-and-template-export-for-void) |
-| Void exits at startup (templates JSON missing / load error) | Path from `-templates-json` has no file or stale grammar | Run `export-templates.py` to the path your Compose `command` uses (e.g. `void/templates.helpdesk.json` for `cleanprephelpdesk`); see [mpt-helpdesk](#mpt-helpdesk) and [`docs/SETUP_HELPDESK_STYLE_FUZZING.md`](docs/SETUP_HELPDESK_STYLE_FUZZING.md) §6.1 |
+| Void exits at startup (templates JSON missing / load error) | Path from `-templates-json` has no file or stale grammar | Run `export-templates.py` to the exact path your Compose `command` uses, or place `templates.export.json` next to `grammar.py`; see [Template export](#grammar-folder-and-template-export-for-void) and the target quickstarts above |

@@ -61,6 +61,7 @@ graph TD
 
 Check out our step-by-step guides for instrumenting and fuzzing real-world applications from scratch:
 
+- [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) (Multi-service app, JWT auth, multi-identity and data population)
 - [BTCPayServer Quickstart](QUICKSTART_BTCPAYSERVER.md) (Complex multi-service app, Greenfield API, Greenfield Auth)
 - [eShopOnWeb Quickstart](QUICKSTART_ESHOP.md) (Standard REST API, basic setup)
 - [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) (Modular Monolith, Anti-forgery + Identity Auth injection)
@@ -121,8 +122,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 └── ARCHITECTURE.md             Platform internals, diagrams, design decisions
 ```
 
-> **`restler_bin/` is not included** — `compile-grammar.sh` downloads it automatically from Docker on first run (`mcr.microsoft.com/restlerfuzzer/restler`).  
-> **`grammars/` is not included** — generated per-project by `compile-grammar.sh`.
+> **`restler_bin/` and `grammars/` may already exist in this workspace** during active research runs. They are still generated artifacts: `compile-grammar.sh` can refresh `restler_bin/` from Docker and regenerate grammars/templates per target as needed.
 
 ---
 
@@ -261,4 +261,4 @@ Each unique crash in `unique-crashes-*.jsonl`:
 - **[INSTRUCTIONS.md](INSTRUCTIONS.md)** — Full step-by-step runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine
 - **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** — Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance
-- **[void/README.md](void/README.md)** — Go fuzzer: all 60+ flags with defaults, build for any platform, cross-compilation guide
+- **[void/README.md](void/README.md)** — Go fuzzer: full CLI reference, startup output guide, build for any platform, cross-compilation guide

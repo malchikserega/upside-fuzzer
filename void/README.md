@@ -439,7 +439,7 @@ MOpt-style weighted selection — categories that find more edges get higher pro
   "signature": "7ecd321e718f5a26",
   "status_code": 500,
   "method": "PUT",
-  "path": "/v1/helpdesk/channels/0",
+  "path": "/api/example-resource/0",
   "identity": "org-a-admin",
   "auth_context": {
     "identity": "org-a-admin",
@@ -461,7 +461,7 @@ MOpt-style weighted selection — categories that find more edges get higher pro
   "response_body": "An error occurred while processing your request.",
   "triage": {"classification": "needs_review", "severity_score": 5, "crash_layer": "model_binding"},
   "repro": {"stable_reproducible": true, "stability_pct": "100.0"},
-  "minimized": {"path": "/v1/helpdesk/channels/0", "payload": ""},
+  "minimized": {"path": "/api/example-resource/0", "payload": ""},
   "poc_file": "./crashes/pocs/poc-7ecd321e718f5a26.sh",
   "timeline_file": "./crashes/timelines/timeline-7ecd321e718f5a26.md"
 }

@@ -88,7 +88,7 @@ cd ..  # back to upside-fuzzer root
 
 # Compile grammar (RESTler compiler + source-aware enhancement)
 # Note: BTCPayServer's Swagger JSON has a malformed reference that needs to be patched
-python3 fix_swagger_paths.py  # A script you must create to replace "#/components/parameters/Subscriptions/Currency" with "#/components/parameters/Subscriptions_Currency"
+python3 fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
 ./compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver
 
 # Save grammar files
@@ -108,9 +108,6 @@ python3 void/export-templates.py \
 ## Step 7: Build the fuzzer Docker image
 
 ```bash
-# Create empty go.sum if missing (no external deps)
-touch void/go/go.sum
-
 docker build -t void-fuzzer -f void/Dockerfile.go void/
 ```
 

@@ -107,9 +107,6 @@ python3 void/export-templates.py \
 ## Step 6: Build the fuzzer Docker image
 
 ```bash
-# Create empty go.sum if missing (no external deps)
-touch void/go/go.sum
-
 docker build -t void-fuzzer -f void/Dockerfile.go void/
 ```
 
@@ -232,5 +229,5 @@ cd .. && rm -rf eshprep
 | Port 5200 busy | Edit `eshprep/docker-compose.override.yml` |
 | `edges: 0` | Call `POST /shm/create` first |
 | 401/403 on writes | eShop needs auth — fuzzer handles this via `/api/authenticate` |
-| `go.sum not found` on Docker build | Run `touch void/go/go.sum` |
+| `go.sum not found` on Docker build | Use the current repo checkout; `void/go/go.sum` is tracked and should already be present |
 | Fuzzer can't connect | Check network name: `docker network ls \| grep eshprep` |
