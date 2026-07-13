@@ -22,9 +22,9 @@ Follow these rules exactly. If any of them is violated, the run is not comparabl
 2. Run `RESTler` against the vanilla Docker deployment.
 3. Run `Void` against the instrumented Docker deployment.
 4. Run `Void` in Docker mode with:
-   - `--direct-shm`
-   - `--skip-endpoint-on-500`
-   - `--no-ui`
+   - `-direct-shm`
+   - `-skip-endpoint-on-500`
+   - `-no-ui`
 5. Do not compare raw `unique crash signatures` from `Void` to `RESTler` bug buckets.
 6. The fair bug metric for the paper is:
    - `distinct HTTP 500 method+endpoint pairs`
@@ -186,19 +186,19 @@ docker run --rm \
   -v "$VOID_OUT:/results" \
   --env-file "$VOID_OUT/run.env" \
   void-go-main:latest \
-  --grammar /grammar \
-  --templates-json /grammar/templates.export.json \
-  --dict /grammar/dict.json \
-  --direct-shm \
-  --skip-endpoint-on-500 \
-  --no-ui \
-  --time-budget 20 \
-  --summary-file /results/summary.json \
-  --report-file /results/report.json \
-  --crash-file /results/crashes.jsonl \
-  --unique-crash-file /results/unique-crashes.jsonl \
-  --poc-dir /results/pocs \
-  --timeline-dir /results/timelines
+  -grammar /grammar \
+  -templates-json /grammar/templates.export.json \
+  -dict /grammar/dict.json \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -no-ui \
+  -time-budget 20 \
+  -summary-file /results/summary.json \
+  -report-file /results/report.json \
+  -crash-file /results/crashes.jsonl \
+  -unique-crash-file /results/unique-crashes.jsonl \
+  -poc-dir /results/pocs \
+  -timeline-dir /results/timelines
 ```
 
 ### 4.4 Normalize a `RESTler` run into `metrics.json`
@@ -377,19 +377,19 @@ docker run --rm --network "$VOID_NETWORK" \
   -v "$VOID_OUT:/results" \
   --env-file "$VOID_OUT/run.env" \
   void-go-main:latest \
-  --grammar /grammar \
-  --templates-json /grammar/templates.export.json \
-  --dict /grammar/dict.json \
-  --direct-shm \
-  --skip-endpoint-on-500 \
-  --no-ui \
-  --time-budget 20 \
-  --summary-file /results/summary.json \
-  --report-file /results/report.json \
-  --crash-file /results/crashes.jsonl \
-  --unique-crash-file /results/unique-crashes.jsonl \
-  --poc-dir /results/pocs \
-  --timeline-dir /results/timelines
+  -grammar /grammar \
+  -templates-json /grammar/templates.export.json \
+  -dict /grammar/dict.json \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -no-ui \
+  -time-budget 20 \
+  -summary-file /results/summary.json \
+  -report-file /results/report.json \
+  -crash-file /results/crashes.jsonl \
+  -unique-crash-file /results/unique-crashes.jsonl \
+  -poc-dir /results/pocs \
+  -timeline-dir /results/timelines
 ```
 
 Collect comparable metrics:
@@ -503,19 +503,19 @@ docker run --rm --network "$VOID_NETWORK" \
   -v "$VOID_OUT:/results" \
   --env-file "$VOID_OUT/run.env" \
   void-go-main:latest \
-  --grammar /grammar \
-  --templates-json /grammar/templates.export.json \
-  --dict /grammar/dict.json \
-  --direct-shm \
-  --skip-endpoint-on-500 \
-  --no-ui \
-  --time-budget 20 \
-  --summary-file /results/summary.json \
-  --report-file /results/report.json \
-  --crash-file /results/crashes.jsonl \
-  --unique-crash-file /results/unique-crashes.jsonl \
-  --poc-dir /results/pocs \
-  --timeline-dir /results/timelines
+  -grammar /grammar \
+  -templates-json /grammar/templates.export.json \
+  -dict /grammar/dict.json \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -no-ui \
+  -time-budget 20 \
+  -summary-file /results/summary.json \
+  -report-file /results/report.json \
+  -crash-file /results/crashes.jsonl \
+  -unique-crash-file /results/unique-crashes.jsonl \
+  -poc-dir /results/pocs \
+  -timeline-dir /results/timelines
 ```
 
 Collect metrics with:
@@ -668,19 +668,19 @@ docker run --rm --network "$VOID_NETWORK" \
   -v "$VOID_OUT:/results" \
   --env-file "$VOID_OUT/run.env" \
   void-go-main:latest \
-  --grammar /grammar \
-  --templates-json /grammar/templates.export.json \
-  --dict /grammar/dict.json \
-  --direct-shm \
-  --skip-endpoint-on-500 \
-  --no-ui \
-  --time-budget 20 \
-  --summary-file /results/summary.json \
-  --report-file /results/report.json \
-  --crash-file /results/crashes.jsonl \
-  --unique-crash-file /results/unique-crashes.jsonl \
-  --poc-dir /results/pocs \
-  --timeline-dir /results/timelines
+  -grammar /grammar \
+  -templates-json /grammar/templates.export.json \
+  -dict /grammar/dict.json \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -no-ui \
+  -time-budget 20 \
+  -summary-file /results/summary.json \
+  -report-file /results/report.json \
+  -crash-file /results/crashes.jsonl \
+  -unique-crash-file /results/unique-crashes.jsonl \
+  -poc-dir /results/pocs \
+  -timeline-dir /results/timelines
 
 python3 "$ROOT/benchmarks/collect_void_go_metrics.py" \
   --run-dir "$VOID_OUT" \
@@ -909,19 +909,19 @@ docker run --rm --network "$VOID_NETWORK" \
   -v "$VOID_OUT:/results" \
   --env-file "$VOID_OUT/run.env" \
   void-go-main:latest \
-  --grammar /grammar \
-  --templates-json /grammar/templates.export.json \
-  --dict /grammar/dict.json \
-  --direct-shm \
-  --skip-endpoint-on-500 \
-  --no-ui \
-  --time-budget 20 \
-  --summary-file /results/summary.json \
-  --report-file /results/report.json \
-  --crash-file /results/crashes.jsonl \
-  --unique-crash-file /results/unique-crashes.jsonl \
-  --poc-dir /results/pocs \
-  --timeline-dir /results/timelines
+  -grammar /grammar \
+  -templates-json /grammar/templates.export.json \
+  -dict /grammar/dict.json \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -no-ui \
+  -time-budget 20 \
+  -summary-file /results/summary.json \
+  -report-file /results/report.json \
+  -crash-file /results/crashes.jsonl \
+  -unique-crash-file /results/unique-crashes.jsonl \
+  -poc-dir /results/pocs \
+  -timeline-dir /results/timelines
 
 python3 "$ROOT/benchmarks/collect_void_go_metrics.py" \
   --run-dir "$VOID_OUT" \
@@ -1006,7 +1006,7 @@ Use these as reference when validating a rerun:
 Before declaring a rerun successful, verify all of the following:
 
 1. Every run lasted `20 minutes`.
-2. Every `Void` run used `--skip-endpoint-on-500`.
+2. Every `Void` run used `-skip-endpoint-on-500`.
 3. `CustomerLoyalty` had its DB migrated before fuzzing.
 4. `Catalog.API` used the 12-operation sanitized swagger and static `api-version=1.0`.
 5. `Jellyfin` used the 309-operation sanitized swagger and a fresh static `MediaBrowser` token in both tools.

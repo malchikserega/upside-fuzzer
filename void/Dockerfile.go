@@ -13,6 +13,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cd go && go build -ldflags="-s -w" -o /out/void .
 
 FROM alpine:3.19
+RUN apk add --no-cache python3
 WORKDIR /fuzzer
+COPY export-templates.py .
 COPY --from=builder /out/void /usr/local/bin/void
 ENTRYPOINT ["/usr/local/bin/void"]

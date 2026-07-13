@@ -238,25 +238,15 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 	// returns X-Coverage-Delta / X-Exception-Type in the response — zero extra round-trips.
 	requestID := atomic.AddUint64(&f.requestIDSeq, 1)
 	req.Header.Set("X-Fuzz-Request-Id", "fz-"+strconv.FormatUint(requestID, 36))
-	idHeaders, idToken := f.identityAuth(item.Identity)
+	idHeaders, idToken, _ := f.identityAuth(item.Identity)
 	for k, v := range idHeaders {
 		if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
 			continue
 		}
-		if strings.TrimSpace(req.Header.Get(k)) == "" {
-			req.Header.Set(k, v)
-		}
+		req.Header.Set(k, v)
 	}
 	if idToken != "" {
 		req.Header.Set("Authorization", "Bearer "+idToken)
-	} else {
-		// Snapshot token under RLock — authenticate() may write it concurrently.
-		f.authMu.RLock()
-		tok := f.token
-		f.authMu.RUnlock()
-		if tok != "" {
-			req.Header.Set("Authorization", "Bearer "+tok)
-		}
 	}
 
 	resp, err := httpClient.Do(req)
@@ -433,10 +423,12 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		// Auto re-authenticate when a token has expired (persistent 401 stream on any endpoint).
 		// Threshold of 9 avoids hammering auth on the very first 401; 30s cooldown prevents tight loops.
 		if st := f.authBlocked[endpointKey(res.Item.Method, ep.Path)]; st != nil && st.Count == 9 {
-			if time.Since(f.lastAuthRefresh) > 30*time.Second {
-				f.lastAuthRefresh = time.Now()
-				if err := f.authenticate(); err == nil {
-					f.addEvent("Re-authenticated after 401 stream (token refreshed)")
+			if !f.hasConfiguredIdentityAuth() || hasExplicitAuthLoginEnv() {
+				if time.Since(f.lastAuthRefresh) > 30*time.Second {
+					f.lastAuthRefresh = time.Now()
+					if err := f.authenticate(); err == nil {
+						f.addEvent("Re-authenticated after 401 stream (token refreshed)")
+					}
 				}
 			}
 		}

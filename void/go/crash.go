@@ -22,6 +22,8 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	elapsed := time.Since(f.startTime).Seconds()
 	sig := f.crashSignature(res.Item.Method, res.Item.Path, res.Status, res.Item.MutationLabel, res.ExceptionType, res.Body)
 	triage := f.triageCrash(res)
+	crashHeaders := f.resolvedCrashHeaders(res.Item)
+	crashAuthContext := maskedAuthContext(res.Item.Identity, crashHeaders)
 	rec := CrashRecord{
 		TS:            time.Now().Format(time.RFC3339),
 		ElapsedSec:    fmt.Sprintf("%.3f", elapsed),
@@ -34,6 +36,7 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		Payload:       sanitizeText(res.Item.Body, 8000),
 		Response:      sanitizeText(res.Body, 8000),
 		ExceptionType: res.ExceptionType,
+		AuthContext:   crashAuthContext,
 		Triage:        triage,
 	}
 	_ = f.crashWriter.Write(rec)
@@ -76,7 +79,9 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		rec.Repro = repro
 		f.triageTimeSpent += time.Since(t0)
 	}
-	reportHeaders := f.resolvedCrashHeaders(pocItem)
+	actualReportHeaders := f.resolvedCrashHeaders(pocItem)
+	authContext := maskedAuthContext(pocItem.Identity, actualReportHeaders)
+	reportHeaders := redactedCrashHeaders(actualReportHeaders)
 	curlCommand := f.buildInlineCurlCommand(pocItem, reportHeaders)
 	reportPath := strings.ToValidUTF8(pocItem.Path, "?")
 	if strings.TrimSpace(reportPath) == "" {
@@ -106,6 +111,7 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		"payload":        truncate(rec.Payload, 4000),
 		"response_body":  truncate(rec.Response, 4000),
 		"exception_type": rec.ExceptionType,
+		"auth_context":   authContext,
 		"triage":         triage,
 		"repro":          repro,
 		"minimized":      minimized,
@@ -134,6 +140,7 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		Response:     strings.ToValidUTF8(res.Body, "?"),
 		Exception:    rec.ExceptionType,
 		RequestHeads: cloneStringMap(reportHeaders),
+		AuthContext:  cloneAnyMap(authContext),
 		CurlCommand:  curlCommand,
 		Triage:       cloneAnyMap(triage),
 		Repro:        cloneAnyMap(repro),
@@ -150,6 +157,7 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	})
 	return true
 }
+
 // exceptionTypeRe matches .NET exception class names in response bodies.
 // Covers: "System.ArgumentException:", "Nop.Core.NopException:" etc.
 var exceptionTypeRe = regexp.MustCompile(`(?:^|\s)((?:[A-Za-z0-9]+\.)+[A-Za-z]*Exception)\s*:`)

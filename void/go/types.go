@@ -75,7 +75,9 @@ type Config struct {
 	PocDir                      string
 	TimelineDir                 string
 	MultiIdentity               bool
+	AuthFile                    string
 	IdentitySampleMode          string
+	IdentityIncludeGuest        bool
 	NoUI                        bool
 	ForceUI                     bool
 	PlainUI                     bool
@@ -156,6 +158,7 @@ type CrashRecord struct {
 	Payload       string         `json:"payload"`
 	Response      string         `json:"response_body"`
 	ExceptionType string         `json:"exception_type,omitempty"`
+	AuthContext   map[string]any `json:"auth_context,omitempty"`
 	Triage        map[string]any `json:"triage,omitempty"`
 	Repro         map[string]any `json:"repro,omitempty"`
 	Minimized     map[string]any `json:"minimized,omitempty"`

@@ -24,7 +24,6 @@ import (
 //   - minimize.go: crash minimization and repro verification
 //   - identity.go: auth identities, race probing, shared utilities (this file)
 
-
 var (
 	reSourceRoute = regexp.MustCompile(`(?i)(?:Route|HttpGet|HttpPost|HttpPut|HttpPatch|HttpDelete)\s*\(\s*"([^"]+)"`)
 )
@@ -55,6 +54,7 @@ type CrashFinding struct {
 	Response     string
 	Exception    string
 	RequestHeads map[string]string
+	AuthContext  map[string]any
 	CurlCommand  string
 	Triage       map[string]any
 	Repro        map[string]any
@@ -101,6 +101,13 @@ func (f *Fuzzer) extendTrace(prev []TraceStep, item WorkItem) []TraceStep {
 func (f *Fuzzer) initAuthIdentities() {
 	ids := make([]AuthIdentity, 0, 8)
 
+	if f.cfg.MultiIdentity {
+		parsed := parseAuthIdentitiesFile(f.cfg.AuthFile)
+		if len(parsed) > 0 {
+			ids = append(ids, parsed...)
+		}
+	}
+
 	parsed := parseAuthIdentitiesJSON(strings.TrimSpace(os.Getenv("AUTH_IDENTITIES_JSON")))
 	if f.cfg.MultiIdentity && len(parsed) > 0 {
 		ids = append(ids, parsed...)
@@ -142,7 +149,7 @@ func (f *Fuzzer) initAuthIdentities() {
 			ids[i].Headers = map[string]string{}
 		}
 	}
-	if f.cfg.MultiIdentity && !hasGuest {
+	if f.cfg.MultiIdentity && f.cfg.IdentityIncludeGuest && !hasGuest {
 		ids = append(ids, AuthIdentity{Name: "guest", Headers: map[string]string{}, Weight: 0.7})
 	}
 
@@ -174,52 +181,130 @@ func parseAuthIdentitiesJSON(raw string) []AuthIdentity {
 	if raw == "" {
 		return nil
 	}
+	out, _ := parseAuthIdentitiesBytes([]byte(raw))
+	return out
+}
+
+func parseAuthIdentitiesFile(path string) []AuthIdentity {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to read auth identities file %s: %v\n", p, err)
+		return nil
+	}
+	out, err := parseAuthIdentitiesBytes(b)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse auth identities file %s: %v\n", p, err)
+		return nil
+	}
+	return out
+}
+
+func parseAuthIdentitiesBytes(raw []byte) ([]AuthIdentity, error) {
 	type identityIn struct {
-		Name    string         `json:"name"`
-		Token   string         `json:"token"`
-		Cookie  string         `json:"cookie"`
-		Weight  float64        `json:"weight"`
-		Headers map[string]any `json:"headers"`
+		Name      string         `json:"name"`
+		Token     string         `json:"token"`
+		JWT       string         `json:"jwt"`
+		APIKey    string         `json:"api_key"`
+		APIKeyEnv string         `json:"api_key_env"`
+		APIKeyHdr string         `json:"api_key_header"`
+		Cookie    string         `json:"cookie"`
+		Weight    float64        `json:"weight"`
+		Headers   map[string]any `json:"headers"`
+	}
+	type identityFile struct {
+		Version    string       `json:"version,omitempty"`
+		Identities []identityIn `json:"identities"`
 	}
 	out := make([]AuthIdentity, 0, 8)
-	tryAdd := func(name, token, cookie string, headers map[string]any, weight float64) {
+	tryAdd := func(name string, id identityIn) {
 		h := map[string]string{}
-		for k, v := range headers {
+		skipReason := ""
+		for k, v := range id.Headers {
 			ks := strings.TrimSpace(k)
 			vs := strings.TrimSpace(toString(v))
 			if ks == "" || vs == "" {
 				continue
 			}
-			h[ks] = vs
+			setHeaderCI(h, ks, vs)
 		}
-		if strings.TrimSpace(cookie) != "" {
-			setHeaderCI(h, "Cookie", strings.TrimSpace(cookie))
+		token := strings.TrimSpace(id.JWT)
+		if token == "" {
+			token = strings.TrimSpace(id.Token)
 		}
+		if token != "" && strings.TrimSpace(getHeaderCI(h, "Authorization")) == "" {
+			setHeaderCI(h, "Authorization", "Bearer "+stripBearerPrefix(token))
+		}
+		apiKey := strings.TrimSpace(id.APIKey)
+		apiKeyEnv := strings.TrimSpace(id.APIKeyEnv)
+		if apiKey == "" && apiKeyEnv != "" {
+			apiKey = strings.TrimSpace(os.Getenv(apiKeyEnv))
+			if apiKey == "" {
+				skipReason = fmt.Sprintf("api_key_env %s is empty", apiKeyEnv)
+			}
+		}
+		apiKeyHeader := strings.TrimSpace(id.APIKeyHdr)
+		if apiKeyHeader == "" {
+			apiKeyHeader = "X-Api-Key"
+		}
+		if apiKey != "" && strings.TrimSpace(getHeaderCI(h, apiKeyHeader)) == "" {
+			setHeaderCI(h, apiKeyHeader, apiKey)
+		}
+		if strings.TrimSpace(id.Cookie) != "" {
+			setHeaderCI(h, "Cookie", strings.TrimSpace(id.Cookie))
+		}
+		legacyToken := strings.TrimSpace(id.Token)
+		if legacyToken != "" && strings.TrimSpace(id.JWT) != "" {
+			legacyToken = ""
+		}
+		legacyToken = stripBearerPrefix(legacyToken)
+		weight := id.Weight
 		if weight <= 0 {
 			weight = 1.0
 		}
+		if len(h) == 0 && legacyToken == "" && !strings.EqualFold(strings.TrimSpace(name), "guest") && !strings.Contains(strings.ToLower(strings.TrimSpace(name)), "anon") {
+			if skipReason != "" {
+				fmt.Fprintf(os.Stderr, "warning: auth identity %q skipped: %s\n", strings.TrimSpace(name), skipReason)
+			}
+			return
+		}
 		out = append(out, AuthIdentity{
 			Name:    strings.TrimSpace(name),
-			Token:   strings.TrimSpace(token),
+			Token:   legacyToken,
 			Headers: h,
 			Weight:  weight,
 		})
 	}
 
+	var file identityFile
+	if err := json.Unmarshal(raw, &file); err == nil && file.Identities != nil {
+		for i, id := range file.Identities {
+			n := id.Name
+			if strings.TrimSpace(n) == "" {
+				n = fmt.Sprintf("id-%d", i+1)
+			}
+			tryAdd(n, id)
+		}
+		return out, nil
+	}
+
 	var arr []identityIn
-	if err := json.Unmarshal([]byte(raw), &arr); err == nil {
+	if err := json.Unmarshal(raw, &arr); err == nil {
 		for i, id := range arr {
 			n := id.Name
 			if strings.TrimSpace(n) == "" {
 				n = fmt.Sprintf("id-%d", i+1)
 			}
-			tryAdd(n, id.Token, id.Cookie, id.Headers, id.Weight)
+			tryAdd(n, id)
 		}
-		return out
+		return out, nil
 	}
 
 	var obj map[string]identityIn
-	if err := json.Unmarshal([]byte(raw), &obj); err == nil {
+	if err := json.Unmarshal(raw, &obj); err == nil {
 		keys := make([]string, 0, len(obj))
 		for k := range obj {
 			keys = append(keys, k)
@@ -231,24 +316,40 @@ func parseAuthIdentitiesJSON(raw string) []AuthIdentity {
 			if strings.TrimSpace(id.Name) != "" {
 				name = id.Name
 			}
-			tryAdd(name, id.Token, id.Cookie, id.Headers, id.Weight)
+			tryAdd(name, id)
 		}
+		return out, nil
 	}
-	return out
+	return nil, fmt.Errorf("expected JSON auth identity file, array, or object")
 }
 
-func (f *Fuzzer) identityAuth(name string) (map[string]string, string) {
-	f.authMu.RLock()
-	defer f.authMu.RUnlock()
-	if strings.TrimSpace(name) == "" {
-		return cloneStringMap(f.authHeaders), strings.TrimSpace(f.token)
+func stripBearerPrefix(token string) string {
+	t := strings.TrimSpace(token)
+	for {
+		parts := strings.Fields(t)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			t = strings.TrimSpace(parts[1])
+			continue
+		}
+		return t
+	}
+}
+
+func (f *Fuzzer) identityAuth(name string) (map[string]string, string, bool) {
+	wanted := strings.TrimSpace(name)
+	if wanted == "" {
+		f.authMu.RLock()
+		defer f.authMu.RUnlock()
+		return cloneStringMap(f.authHeaders), strings.TrimSpace(f.token), false
 	}
 	for _, id := range f.identities {
-		if id.Name == name {
-			return cloneStringMap(id.Headers), strings.TrimSpace(id.Token)
+		if id.Name == wanted {
+			return cloneStringMap(id.Headers), strings.TrimSpace(id.Token), true
 		}
 	}
-	return cloneStringMap(f.authHeaders), strings.TrimSpace(f.token)
+	f.authMu.RLock()
+	defer f.authMu.RUnlock()
+	return cloneStringMap(f.authHeaders), strings.TrimSpace(f.token), false
 }
 
 func (f *Fuzzer) pickIdentityForEndpoint(method, path string) string {
@@ -524,7 +625,6 @@ func (f *Fuzzer) triageCrash(res SendResult) map[string]any {
 		"reasons":        dedupStrings(reasons),
 	}
 }
-
 
 func cloneStringMap(in map[string]string) map[string]string {
 	out := map[string]string{}

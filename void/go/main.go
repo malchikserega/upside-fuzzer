@@ -43,7 +43,7 @@ func parseFlags() Config {
 	flag.BoolVar(&cfg.DirectSHM, "direct-shm", false, "Read coverage bitmap directly from SHM file")
 	flag.StringVar(&cfg.SHMPath, "shm-path", "/coverage_shm/bitmap", "Path to mmap bitmap")
 	flag.StringVar(&cfg.SHMReadMode, "shm-read-mode", "file", "Direct SHM read mode: file|mmap|auto")
-	flag.BoolVar(&cfg.SkipOnCrash, "skip-on-crash", false, "Remove endpoint from active set after 5xx")
+	flag.BoolVar(&cfg.SkipOnCrash, "skip-on-crash", false, "Remove only the crashing template after any 5xx")
 	flag.BoolVar(&cfg.SkipEndpointOn500, "skip-endpoint-on-500", false, "Stop fuzzing endpoint after first HTTP 500")
 	flag.BoolVar(&cfg.SequentialBaseline, "sequential-baseline", false, "Run baseline epoch sequentially")
 	flag.BoolVar(&cfg.SourceAwarePriority, "source-aware-priority", true, "Prioritize sensitive endpoints using source + route heuristics")
@@ -74,8 +74,10 @@ func parseFlags() Config {
 	flag.IntVar(&cfg.MinimizeMaxProbes, "minimize-max-probes", 24, "Max probe requests for crash delta-reduction")
 	flag.StringVar(&cfg.PocDir, "poc-dir", filepath.Join("./crashes", "pocs"), "Directory for generated reproducible PoC scripts")
 	flag.StringVar(&cfg.TimelineDir, "timeline-dir", filepath.Join("./crashes", "timelines"), "Directory for generated Mermaid exploit timelines")
-	flag.BoolVar(&cfg.MultiIdentity, "multi-identity", true, "Enable multi-identity scheduling from AUTH_IDENTITIES_JSON")
+	flag.BoolVar(&cfg.MultiIdentity, "multi-identity", true, "Enable multi-identity scheduling from -auth-file/AUTH_FILE/AUTH_IDENTITIES_JSON")
+	flag.StringVar(&cfg.AuthFile, "auth-file", "", "Path to auth identities JSON file (JWT/API-key/cookie headers)")
 	flag.StringVar(&cfg.IdentitySampleMode, "identity-mode", "weighted", "Identity scheduling: weighted|round-robin|random")
+	flag.BoolVar(&cfg.IdentityIncludeGuest, "identity-include-guest", true, "Include an anonymous guest identity during multi-identity fuzzing")
 	flag.BoolVar(&cfg.NoUI, "no-ui", false, "Disable live UI")
 	flag.BoolVar(&cfg.ForceUI, "force-ui", false, "Force dashboard UI even when stdout is not a terminal")
 	flag.BoolVar(&cfg.PlainUI, "plain-ui", false, "Use plain line-by-line UI instead of dashboard")
@@ -108,6 +110,12 @@ func parseFlags() Config {
 	}
 	cfg.PocDir = absPath(cfg.PocDir)
 	cfg.TimelineDir = absPath(cfg.TimelineDir)
+	if strings.TrimSpace(cfg.AuthFile) == "" {
+		cfg.AuthFile = strings.TrimSpace(os.Getenv("AUTH_FILE"))
+	}
+	if strings.TrimSpace(cfg.AuthFile) != "" {
+		cfg.AuthFile = absPath(cfg.AuthFile)
+	}
 	cfg.MinConcurrency = maxInt(1, cfg.MinConcurrency)
 	cfg.MaxConcurrency = maxInt(cfg.MinConcurrency, cfg.MaxConcurrency)
 	cfg.Concurrency = clampInt(maxInt(1, cfg.Concurrency), cfg.MinConcurrency, cfg.MaxConcurrency)

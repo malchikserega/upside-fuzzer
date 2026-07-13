@@ -425,8 +425,8 @@ for each batch (N = concurrency):
 
 | Mode | How | Overhead |
 |------|-----|----------|
-| **HTTP** (default) | `GET /shm/coverage` — one HTTP round-trip per `--coverage-interval` requests | Low (~1ms) |
-| **Direct SHM** (`--direct-shm`) | `mmap.read(bitmap)` on `/coverage_shm/bitmap` | Near-zero |
+| **HTTP** (default) | `GET /shm/coverage` — one HTTP round-trip per `-coverage-interval` requests | Low (~1ms) |
+| **Direct SHM** (`-direct-shm`) | `mmap.read(bitmap)` on `/coverage_shm/bitmap` | Near-zero |
 | **Per-request header** | `X-Coverage-Delta` response header injected by middleware | Zero overhead per batch |
 
 ### Advanced Features (`advanced_features.go`)
@@ -435,10 +435,10 @@ for each batch (N = concurrency):
 |---------|-------------|
 | **Crash triage** | Re-probes 5xx with same payload; calculates Triage Score (detects layer: pre-auth crashes like deserialization are capped at `needs_review`); generates curl PoC |
 | **Crash minimization** | Binary search through request payload removing fields until crash fails to repro |
-| **Race condition probing** | Sends `--race-burst` parallel identical requests to probe TOCTOU conditions |
+| **Race condition probing** | Sends `-race-burst` parallel identical requests to probe TOCTOU conditions |
 | **Multi-identity** | Rotates through multiple auth tokens for authorization bypass testing |
 | **Anti-forgery tokens** | Discovers HTML `<input>` token fields, pools and rotates them automatically |
-| **Source-aware priority** | Boosts endpoints backed by detected business logic files from `--src` |
+| **Source-aware priority** | Boosts endpoints backed by detected business logic files from `-src` |
 | **Adaptive concurrency** | PID-style controller adjusts goroutine count based on error rate |
 | **Sequence fanout** | Builds producer→consumer chains using runtime-extracted response IDs |
 
@@ -474,7 +474,7 @@ HTTP coverage polling (the fallback) adds ~0.5–2ms per batch. At high concurre
 | Method | Throughput (est.) | Overhead | Notes |
 |--------|-------------------|----------|-------|
 | HTTP JSON (`GET /shm/coverage`) | ~300–600 req/s cap | TCP + routing + serialization | Works everywhere, no volume needed |
-| File-backed mmap (`--direct-shm`) | 2000+ req/s | ~microseconds (OS page cache) | Requires `coverage_shm` tmpfs volume (Docker sidecar mode) |
+| File-backed mmap (`-direct-shm`) | 2000+ req/s | ~microseconds (OS page cache) | Requires `coverage_shm` tmpfs volume (Docker sidecar mode) |
 
 How file-backed mmap works across containers:
 

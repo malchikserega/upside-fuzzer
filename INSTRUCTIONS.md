@@ -14,7 +14,7 @@ Step-by-step runbook for **any .NET 8+ web API** — from source code to coverag
 6. [Step 4: Compile the Grammar](#6-step-4-compile-the-grammar)
    - [Template export for Void (`templates.export.json`)](#grammar-folder-and-template-export-for-void)
 7. [Step 5: Run the Fuzzer](#7-step-5-run-the-fuzzer)
-   - [Authentication (JWT and custom headers)](#authentication-jwt-custom-headers-and-cookies)
+   - [Authentication (JWT, API keys, custom headers, and cookies)](#authentication-jwt-api-keys-custom-headers-and-cookies)
    - [Void without Docker Compose (`docker run`)](#void-without-docker-compose-docker-run)
 8. [Go Fuzzer CLI Reference](#8-go-fuzzer-cli-reference)
 9. [Real-World Examples](#9-real-world-examples)
@@ -126,7 +126,7 @@ dotnet --version        # 8.0+
 │  Void (Coverage-Guided)                                       │
 │                                                                         │
 │  Epochs: Baseline → Deterministic → Havoc → Splicing                   │
-│  Reads bitmap via mmap (--direct-shm) or HTTP (/shm/coverage)          │
+│  Reads bitmap via mmap (-direct-shm) or HTTP (/shm/coverage)           │
 │  Logs crashes to JSONL, prints live TUI dashboard                       │
 │  Adaptive concurrency, crash triage, PoC generation                    │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -296,9 +296,9 @@ python3 void/export-templates.py \
   --out restler_output/Compile/templates.export.json
 ```
 
-Point Void at that directory with `-grammar` / `--grammar` (a folder containing `grammar.py` and `dict.json`). If the JSON is not beside them, pass `-templates-json` / `--templates-json` explicitly.
+Point Void at that directory with `-grammar` (a folder containing `grammar.py` and `dict.json`). If the JSON is not beside them, pass `-templates-json` explicitly.
 
-**Why:** the default Void container image (`void/Dockerfile.go`, Alpine) **does not ship `python3`**. If templates are missing, older than `grammar.py`, or you pass `--refresh-templates`, Void tries to run `python3 export-templates.py` **inside the container** and exits with `exec: "python3": executable file not found in $PATH`. Fix by exporting on the host, omitting `--refresh-templates`, and ensuring `templates.export.json` exists and is at least as new as `grammar.py` (re-run the exporter after grammar changes, or `touch` the JSON if needed).
+**Why:** Void needs `python3` only when it must export templates from `grammar.py` at runtime. The current `void/Dockerfile.go` installs `python3` and copies `export-templates.py`, but older/custom images may not. If a legacy image exits with `exec: "python3": executable file not found in $PATH`, either rebuild the current image, export templates on the host, or ensure `templates.export.json` is at least as new as `grammar.py`.
 
 You may mount any folder that holds these files as `/grammar` in Compose (for example `../restler_output/Compile:/grammar:ro` instead of `../grammars/helpdesk`), or copy the three artifacts into `grammars/<project>/`.
 
@@ -363,19 +363,31 @@ All bug-finding features are **on by default**: crash triage, repro, minimizatio
 
 Simply omit `AUTH_TOKEN` / `AUTH_URL`. The fuzzer starts immediately without authentication.
 
-### Authentication: JWT, custom headers, and cookies
+### Authentication: JWT, API keys, custom headers, and cookies
 
-Void reads authentication from **environment variables** (not from CLI flags). Typical Compose files pass them through with `AUTH_TOKEN: ${AUTH_TOKEN:-}` so you can `export` on the host before `docker compose run`.
+For serious access-control fuzzing, prefer a documented auth identity file passed with `-auth-file` or `AUTH_FILE`. The file can hold multiple JWT, API-key, cookie, or arbitrary-header identities and is parsed once at startup.
 
-| Variable | Meaning |
-|----------|---------|
-| **`AUTH_TOKEN`** | Raw JWT only: **do not** include the `Bearer ` prefix. Void sets `Authorization: Bearer <AUTH_TOKEN>`. |
+See **[`docs/FUZZER_AUTHENTICATION.md`](docs/FUZZER_AUTHENTICATION.md)** and **[`docs/auth.identities.example.json`](docs/auth.identities.example.json)**.
+
+| Mechanism | Meaning |
+|-----------|---------|
+| **`-auth-file ./auth.identities.json`** | Recommended multi-identity file for JWT/API-key/cookie/header auth. |
+| **`AUTH_FILE=./auth.identities.json`** | Environment-variable equivalent of `-auth-file`. |
+| **`AUTH_TOKEN`** | Raw JWT recommended: Void sets `Authorization: Bearer <AUTH_TOKEN>`. If you paste `Bearer ...`, Void strips that prefix. |
 | **`AUTH_HEADERS_JSON`** | JSON object of header name → value, e.g. `{"Authorization":"Bearer eyJ...","X-Custom":"v"}`. Header values are sent as written (include `Bearer ` inside `Authorization` if you use this path). |
+| **`AUTH_HEADER`** | Legacy single header shortcut in `Header-Name: value` format. Prefer `AUTH_HEADERS_JSON` or `-auth-file` for new runs. |
 | **`AUTH_COOKIE`** | Optional `Cookie` header value for cookie-based sessions. |
 | **`AUTH_URL`**, **`AUTH_METHOD`**, **`AUTH_BODY`**, **`AUTH_CONTENT_TYPE`**, **`AUTH_TOKEN_FIELD`** | If no token/headers/cookie are pre-set, Void can perform one login request against `TARGET_HOST` and parse a token (defaults in code: `POST` `/api/authenticate`, JSON field `token`). See `void/go/auth.go`. |
-| **`AUTH_IDENTITIES_JSON`** | Multiple weighted identities (advanced); see `void/go/identity.go`. |
+| **`AUTH_IDENTITIES_JSON`** | Backward-compatible inline multi-identity JSON. Prefer `-auth-file` for new runs. |
 
 Examples:
+
+```bash
+docker compose --profile fuzz-go run --rm void \
+  -auth-file ./auth.identities.json \
+  -multi-identity=true \
+  -identity-mode weighted
+```
 
 ```bash
 export AUTH_TOKEN='eyJhbGciOi...'
@@ -389,7 +401,7 @@ docker compose --profile fuzz-go run --rm void
 
 ### Void without Docker Compose (`docker run`)
 
-You can run the fuzzer container with plain `docker run` as long as (1) the **target stack is already up**, (2) the container joins the **same Docker network** as the API (so `http://api:8080` or your service hostname resolves), and (3) the **same `coverage_shm` volume** is mounted at the path Void uses (`--shm-path`, e.g. `/coverage_shm/bitmap`) **and** is attached to the instrumented API the same way as in Compose.
+You can run the fuzzer container with plain `docker run` as long as (1) the **target stack is already up**, (2) the container joins the **same Docker network** as the API (so `http://api:8080` or your service hostname resolves), and (3) the **same `coverage_shm` volume** is mounted at the path Void uses (`-shm-path`, e.g. `/coverage_shm/bitmap`) **and** is attached to the instrumented API the same way as in Compose.
 
 ```bash
 REPO=/absolute/path/to/mvpsharpfuzznet
@@ -404,11 +416,11 @@ docker run --rm -it \
   -v "$REPO/restler_output/Compile:/grammar:ro" \
   -v "$REPO/cleanprephelpdesk/src:/src:ro" \
   cleanprephelpdesk-void:latest \
-  --direct-shm --shm-path /coverage_shm/bitmap --coverage-bitmap-size 1048576 --shm-read-mode file \
-  --grammar /grammar --templates-json /grammar/templates.export.json \
-  --time-budget 7 --concurrency 16 --adaptive-concurrency --coverage-interval 4 \
-  --sequence-prob 0.35 --sequence-max-depth 4 --sequence-fanout 8 \
-  --src /src
+  -grammar /grammar -templates-json /grammar/templates.export.json \
+  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
+  -time-budget 7 -concurrency 16 -adaptive-concurrency -coverage-interval 4 \
+  -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8 \
+  -src /src
 ```
 
 Replace `cleanprephelpdesk_default`, `cleanprephelpdesk_coverage_shm`, and `cleanprephelpdesk-void:latest` with the names your Compose project actually uses (`docker compose ls`, `docker volume ls`, `docker compose images void`). If you use `docker compose -p myproj`, prefixes become `myproj_*`.
@@ -464,7 +476,7 @@ The following are **on by default** and only need explicit flags to *disable*:
 | Race condition detection | ON | `-race-mode=false` |
 | Anti-forgery token harvesting | ON | `-auto-antiforgery=false` |
 | Source-aware endpoint priority | ON | `-source-aware-priority=false` |
-| Multi-identity scheduling | ON | `-multi-identity=false` |
+| Multi-identity scheduling | ON | `-multi-identity=false`; configure identities with `-auth-file` |
 
 > **Note on Crash Triage:** The `-crash-triage` feature (enabled by default) now detects the `crash_layer` (e.g., `model_binding`, `deserialization`, `controller`). Crashes that happen pre-authentication (like JSON parse errors) are automatically penalized in score and capped at `needs_review` severity, preventing noise from trivial 400-level-masked-as-500 errors.
 
@@ -477,11 +489,88 @@ The following are **on by default** and only need explicit flags to *disable*:
 | `-max-concurrency` | `64` | Upper bound for adaptive mode |
 | `-request-timeout` | `5.0` s | Lower for fast targets (2.5), raise for slow ones |
 | `-direct-shm` | `false` | Set `true` in Docker sidecar mode |
+| `-auth-file` | empty | Use for JWT/API-key/cookie multi-identity access-control fuzzing |
 | `-sequence-prob` | `0.30` | Raise to 0.5–0.6 for stateful API testing |
 | `-sequence-max-depth` | `3` | Raise to 5–6 for deep workflows |
 | `-sequence-fanout` | `6` | Raise to 8–10 for wide API surface |
 | `-skip-endpoint-on-500` | `false` | Set `true` when 500s are expected (misconfigured infra) |
 | `-coverage-interval` | `1` | Raise to 5–10 for throughput benchmarking |
+
+### Security flag interactions
+
+Some options look like duplicates because they work at different scopes:
+
+| Flags | Difference | When to use |
+|-------|------------|-------------|
+| `-skip-on-crash` vs `-skip-endpoint-on-500` | `-skip-on-crash` removes only the crashing template after any 5xx. `-skip-endpoint-on-500` blocks every template for that endpoint after the first HTTP 500. | Use both for noisy targets where breadth matters more than repeatedly exploring one broken route. |
+| `-repro-runs` vs `-crash-replay-count` | Repro runs verify a finding for the report. Crash replay schedules more fuzzing near a crash to discover variants. | Keep repro for report quality. Set `-crash-replay-count 0` when you want strict no-revisit behavior. |
+| `-crash-boost-*` vs `-crash-replay-*` | Crash boost temporarily raises the endpoint's scheduler weight. Crash replay queues concrete follow-up items. | Keep enabled for exploitability/depth; disable both for broad scans on very crashy targets. |
+| `-endpoint-stall-reqs`, `-endpoint-zero-edge-reqs`, `-endpoint-req-share-cap-pct` | All reduce wasted requests, but at different levels: local stall, total zero-edge endpoint, and global request share. | Leave defaults unless one endpoint monopolizes the run or coverage goes flat. |
+| `-race-mode` and sequence flags | Sequences build stateful chains; race mode bursts conflicting writes found during those chains. | Keep both for business-logic and authz testing. Reduce them for pure throughput benchmarks. |
+
+### Security campaign profiles
+
+Access-control / authz campaign for IDOR, tenant isolation, missing role checks, guest-auth bypasses:
+
+```bash
+docker compose --profile fuzz-go run --rm void \
+  -grammar /path/to/grammar \
+  -auth-file ./auth.identities.json \
+  -identity-mode weighted \
+  -identity-include-guest=true \
+  -source-aware-priority=true \
+  -sequence-prob 0.45 \
+  -sequence-max-depth 5 \
+  -sequence-fanout 8 \
+  -race-mode=true \
+  -race-prob 0.08 \
+  -race-burst 3 \
+  -skip-on-crash \
+  -skip-endpoint-on-500 \
+  -repro-runs 3 \
+  -time-budget 30
+```
+
+For very noisy targets where you do not want to revisit crash areas, add:
+
+```bash
+-crash-replay-count 0 -crash-boost-requests 0
+```
+
+Broad discovery campaign for coverage growth and many unique endpoints before deep triage:
+
+```bash
+docker compose --profile fuzz-go run --rm void \
+  -grammar /path/to/grammar \
+  -direct-shm \
+  -coverage-interval 4 \
+  -concurrency 32 \
+  -max-concurrency 96 \
+  -sequence-prob 0.35 \
+  -skip-on-crash \
+  -crash-replay-count 0 \
+  -crash-boost-requests 0 \
+  -repro-runs 1 \
+  -time-budget 60
+```
+
+Report-quality triage campaign for cleaner PoCs and stable findings:
+
+```bash
+docker compose --profile fuzz-go run --rm void \
+  -grammar /path/to/grammar \
+  -auth-file ./auth.identities.json \
+  -identity-mode weighted \
+  -concurrency 8 \
+  -request-timeout 5 \
+  -crash-triage=true \
+  -repro-runs 5 \
+  -repro-target 80 \
+  -minimize-crash=true \
+  -minimize-max-probes 24 \
+  -crash-replay-count 0 \
+  -time-budget 20
+```
 
 ### Fast-scan profile (CI — maximize throughput, skip slow analysis)
 
@@ -555,7 +644,7 @@ Export **Void template JSON** on the host (the RESTler output alone is not enoug
     --out grammars/helpdesk/templates.export.json
   ```
 
-- **Templates path used by many compose files** (`--templates-json /fuzzer/templates.helpdesk.json` — file lives under the repo `void/` mount):
+- **Templates path used by many compose files** (`-templates-json /fuzzer/templates.helpdesk.json` — file lives under the repo `void/` mount):
 
   ```bash
   python3 void/export-templates.py \
@@ -571,7 +660,7 @@ This repository includes **`cleanprephelpdesk/`** (API on host port **8081**, SQ
 
 #### Fuzz — Void (Go smart fuzzer, direct SHM)
 
-**Void** is the Go coverage-guided smart fuzzer (same engine family as `void/go` in this repo; “smart fuzzer” and “void” refer to the same thing here). `prepared-helpdesk/docker-compose.yml` defines Compose service **`void`** (profile `fuzz-go`) with **`--direct-shm`**, **`--shm-path /coverage_shm/bitmap`**, **`--coverage-bitmap-size 1048576`**, and **`--shm-read-mode file`**, matching the instrumented API’s shared bitmap volume.
+**Void** is the Go coverage-guided smart fuzzer (same engine family as `void/go` in this repo; “smart fuzzer” and “void” refer to the same thing here). `prepared-helpdesk/docker-compose.yml` defines Compose service **`void`** (profile `fuzz-go`) with **`-direct-shm`**, **`-shm-path /coverage_shm/bitmap`**, **`-coverage-bitmap-size 1048576`**, and **`-shm-read-mode file`**, matching the instrumented API’s shared bitmap volume.
 
 ```bash
 cd prepared-helpdesk
@@ -583,36 +672,36 @@ To override the full command line (must keep SHM flags), pass arguments after th
 ```bash
 cd prepared-helpdesk
 AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  --direct-shm --shm-path /coverage_shm/bitmap --coverage-bitmap-size 1048576 --shm-read-mode file \
-  --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json --src /src \
-  --time-budget 20 --concurrency 16 --adaptive-concurrency \
-  --sequence-prob 0.35 --sequence-max-depth 4 --sequence-fanout 8
+  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json -src /src \
+  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
+  -time-budget 20 -concurrency 16 -adaptive-concurrency \
+  -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8
 ```
 
 #### Fuzz — max throughput profile
 
 ```bash
 AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  --direct-shm --shm-path /coverage_shm/bitmap --coverage-bitmap-size 1048576 --shm-read-mode file \
-  --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json \
-  --time-budget 20 --concurrency 64 --min-concurrency 64 --max-concurrency 160 \
-  --adaptive-concurrency --request-timeout 2.0 --max-response-bytes 8192 \
-  --coverage-interval 8 --sequence-prob 0 --race-mode=false \
-  --crash-triage=false --repro-runs 0 --minimize-crash=false \
-  --crash-replay-count 0 --skip-endpoint-on-500 --no-ui
+  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json \
+  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
+  -time-budget 20 -concurrency 64 -min-concurrency 64 -max-concurrency 160 \
+  -adaptive-concurrency -request-timeout 2.0 -max-response-bytes 8192 \
+  -coverage-interval 8 -sequence-prob 0 -race-mode=false \
+  -crash-triage=false -repro-runs 0 -minimize-crash=false \
+  -crash-replay-count 0 -skip-endpoint-on-500 -no-ui
 ```
 
 #### Fuzz — hybrid profile (race detection + multi-identity)
 
 ```bash
 AUTH_TOKEN="<token>" docker compose --profile fuzz-go run --rm void \
-  --direct-shm --shm-path /coverage_shm/bitmap --coverage-bitmap-size 1048576 --shm-read-mode file \
-  --grammar /grammar --templates-json /fuzzer/templates.helpdesk.json --src /src \
-  --time-budget 20 --concurrency 48 --min-concurrency 24 --max-concurrency 96 \
-  --adaptive-concurrency --sequence-prob 0.25 --sequence-max-depth 3 \
-  --sequence-fanout 5 --race-prob 0.06 --race-burst 3 \
-  --source-aware-priority=true --multi-identity=true \
-  --crash-triage=false --repro-runs 0 --minimize-crash=false
+  -grammar /grammar -templates-json /fuzzer/templates.helpdesk.json -src /src \
+  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
+  -time-budget 20 -concurrency 48 -min-concurrency 24 -max-concurrency 96 \
+  -adaptive-concurrency -sequence-prob 0.25 -sequence-max-depth 3 \
+  -sequence-fanout 5 -race-prob 0.06 -race-burst 3 \
+  -source-aware-priority=true -multi-identity=true -identity-mode weighted \
+  -crash-triage=false -repro-runs 0 -minimize-crash=false
 ```
 
 ---
@@ -636,9 +725,9 @@ python3 fuzz-prep-multi.py \
 cd mpt-prepared
 AUTH_TOKEN="..." \
 docker compose --profile fuzz-go run --rm void \
-  --direct-shm --shm-path /coverage_shm/bitmap \
-  --time-budget 7 --concurrency 16 --coverage-interval 4 \
-  --sequence-prob 0.35 --sequence-max-depth 4 --sequence-fanout 8
+  -direct-shm -shm-path /coverage_shm/bitmap \
+  -time-budget 7 -concurrency 16 -coverage-interval 4 \
+  -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8
 ```
 
 ---
@@ -666,21 +755,21 @@ cd nopcommerce-prepared
 
 docker compose -f docker-compose.yml -f docker-compose.fuzz-go.yml \
   --profile fuzz-go run --rm void \
-  --direct-shm \
-  --shm-path /coverage_shm/bitmap \
-  --coverage-bitmap-size 262144 \
-  --coverage-interval 4 \
-  --endpoint-stall-reqs 220 \
-  --endpoint-zero-edge-reqs 120 \
-  --antiforgery-sample-rate 0.10 \
-  --antiforgery-max-tokens 2048 \
-  --antiforgery-token-ttl 300 \
-  --time-budget 30 \
-  --concurrency 16 \
-  --adaptive-concurrency \
-  --ui-endpoint-sort recent \
-  --ui-endpoint-rotate \
-  --ui-endpoint-rotate-sec 0.8
+  -direct-shm \
+  -shm-path /coverage_shm/bitmap \
+  -coverage-bitmap-size 262144 \
+  -coverage-interval 4 \
+  -endpoint-stall-reqs 220 \
+  -endpoint-zero-edge-reqs 120 \
+  -antiforgery-sample-rate 0.10 \
+  -antiforgery-max-tokens 2048 \
+  -antiforgery-token-ttl 300 \
+  -time-budget 30 \
+  -concurrency 16 \
+  -adaptive-concurrency \
+  -ui-endpoint-sort recent \
+  -ui-endpoint-rotate \
+  -ui-endpoint-rotate-sec 0.8
 ```
 
 ---
@@ -822,19 +911,19 @@ Use these gates to evaluate whether a fuzzing run reached meaningful depth.
 **Recommended baseline for most APIs:**
 
 ```bash
---time-budget 20
---concurrency 12
---request-timeout 2.5
---sequence-prob 0.55
---sequence-max-depth 5
---sequence-fanout 8
+-time-budget 20
+-concurrency 12
+-request-timeout 2.5
+-sequence-prob 0.55
+-sequence-max-depth 5
+-sequence-fanout 8
 ```
 
 **For slow / unstable APIs:**
 ```bash
---concurrency 6
---request-timeout 5
---sequence-fanout 4
+-concurrency 6
+-request-timeout 5
+-sequence-fanout 4
 ```
 
 ---
@@ -851,7 +940,7 @@ Use these gates to evaluate whether a fuzzing run reached meaningful depth.
 | Grammar has 0 endpoints | Wrong swagger.json | Re-download: `/swagger/v1/swagger.json` or `/fuzz/openapi.json` |
 | Docker build fails on instrumentation | DLL not found | Check publish output path in Dockerfile; run `docker build --progress=plain .` |
 | All writes are 401/403 | Auth token expired or wrong role | Refresh `AUTH_TOKEN`; verify the user has write permissions |
-| Coverage is flat after warmup | All endpoints exhausted or API too slow | Increase `--sequence-prob`, reduce `--concurrency` |
+| Coverage is flat after warmup | All endpoints exhausted or API too slow | Increase `-sequence-prob`, reduce `-concurrency` |
 | Fuzzer exits immediately | grammar.py parse error | Check Python syntax: `python3 -c "import grammar"` from grammar dir |
-| `exec: "python3": executable file not found` inside Void | Auto template refresh in Alpine image | Export templates on the host (`void/export-templates.py`); do not use `--refresh-templates` unless the image includes Python; see [Template export](#grammar-folder-and-template-export-for-void) |
+| `exec: "python3": executable file not found` inside Void | Legacy/custom Void image without Python | Rebuild current `void/Dockerfile.go` or export templates on the host (`void/export-templates.py`); see [Template export](#grammar-folder-and-template-export-for-void) |
 | Void exits at startup (templates JSON missing / load error) | Path from `-templates-json` has no file or stale grammar | Run `export-templates.py` to the path your Compose `command` uses (e.g. `void/templates.helpdesk.json` for `cleanprephelpdesk`); see [mpt-helpdesk](#mpt-helpdesk) and [`docs/SETUP_HELPDESK_STYLE_FUZZING.md`](docs/SETUP_HELPDESK_STYLE_FUZZING.md) §6.1 |

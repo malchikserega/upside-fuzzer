@@ -53,10 +53,10 @@ type Fuzzer struct {
 	authBlocked   map[string]*AuthBlockedState
 	clientSamples map[string][]string
 
-	startTime             time.Time
-	startEdges            int
-	currentEdges          int
-	coverageCapacity      int
+	startTime        time.Time
+	startEdges       int
+	currentEdges     int
+	coverageCapacity int
 	// baselineEdgesCeiling is set once, at the end of the Baseline epoch, to the
 	// number of edges seen after every template was sent unmutated exactly once.
 	// It serves as a real coverage ceiling: it represents the reachable application
@@ -297,8 +297,14 @@ func (f *Fuzzer) Run() error {
 		f.cfg.CrashReplayProb, f.cfg.CrashReplayCount, f.cfg.CrashReplayQueueMax, f.cfg.CrashReplayPerEndpoint)
 	fmt.Printf("Crash boost: requests=%d max_per_endpoint=%d weight=%.2f\n",
 		f.cfg.CrashBoostRequests, f.cfg.CrashBoostMaxPerEndpoint, f.cfg.CrashBoostWeight)
+	if f.cfg.SkipOnCrash {
+		fmt.Printf("Template policy: remove crashing template after any HTTP 5xx\n")
+	}
 	if f.cfg.SkipEndpointOn500 {
 		fmt.Printf("Endpoint policy: stop fuzzing endpoint after first HTTP 500\n")
+	}
+	if (f.cfg.SkipOnCrash || f.cfg.SkipEndpointOn500) && (f.cfg.CrashReplayCount > 0 || f.cfg.CrashBoostRequests > 0) {
+		fmt.Printf("Crash focus note: replay/boost may still probe recent crash areas; set -crash-replay-count 0 -crash-boost-requests 0 for strict no-revisit scans\n")
 	}
 
 	if err := f.authenticate(); err != nil {
@@ -309,7 +315,8 @@ func (f *Fuzzer) Run() error {
 		fmt.Printf("Authenticated (cookie/header auth available)\n")
 	}
 	f.initAuthIdentities()
-	fmt.Printf("Identities loaded: %d (mode=%s)\n", len(f.identities), f.cfg.IdentitySampleMode)
+	fmt.Printf("Identities loaded: %d (mode=%s guest=%v auth_file=%v)\n",
+		len(f.identities), f.cfg.IdentitySampleMode, f.cfg.IdentityIncludeGuest, strings.TrimSpace(f.cfg.AuthFile) != "")
 
 	if err := f.coverage.Init(); err != nil {
 		return fmt.Errorf("coverage init failed: %w", err)

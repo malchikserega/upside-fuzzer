@@ -77,7 +77,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 | **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories |
 | **Sequences** | Producer→consumer chains (POST→GET→PUT→DELETE), runtime value extraction, configurable fanout |
 | **Bug finding** | Crash triage, repro verification, payload minimization, PoC generation, race condition probing, multi-identity auth |
-| **Auth** | JWT env var, multi-identity scheduling, anti-forgery token harvesting |
+| **Auth** | Documented auth identity files, JWT/API-key/cookie/header support, weighted multi-identity scheduling, anti-forgery token harvesting |
 
 ---
 
@@ -179,7 +179,21 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 export AUTH_TOKEN="<your-jwt-token>"
 docker compose --profile fuzz-go run --rm void \
   -grammar restler_output/Compile \
-  -direct-shm -time-budget 60
+  -direct-shm \
+  -time-budget 60
+```
+
+For access-control testing with several roles or tenants, prefer an auth identity file:
+
+```bash
+docker compose --profile fuzz-go run --rm void \
+  -grammar restler_output/Compile \
+  -auth-file ./auth.identities.json \
+  -identity-mode weighted \
+  -direct-shm \
+  -skip-endpoint-on-500 \
+  -skip-on-crash \
+  -time-budget 60
 ```
 
 **Host mode** (API running natively, coverage via HTTP):
@@ -212,6 +226,7 @@ All bug-finding features are **on by default**. You only need flags to tune or d
 | `-direct-shm` | `false` | Enable in Docker sidecar mode |
 | `-time-budget` | `10` min | Set 60–120 for thorough scans |
 | `-concurrency` | `10` | Raise to 32–64 for fast APIs |
+| `-auth-file` | empty | Recommended JWT/API-key/cookie multi-identity auth config |
 | `-sequence-prob` | `0.30` | Raise to 0.5 for stateful APIs |
 | `-skip-endpoint-on-500` | `false` | Set `true` if infra returns known 500s |
 | `-crash-triage=false` | — | Disable for max throughput in CI |
@@ -245,4 +260,5 @@ Each unique crash in `unique-crashes-*.jsonl`:
 
 - **[INSTRUCTIONS.md](INSTRUCTIONS.md)** — Full step-by-step runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine
+- **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** — Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance
 - **[void/README.md](void/README.md)** — Go fuzzer: all 60+ flags with defaults, build for any platform, cross-compilation guide

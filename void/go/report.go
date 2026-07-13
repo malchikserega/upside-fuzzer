@@ -68,7 +68,20 @@ func (f *Fuzzer) findingsReportData() (map[string]any, []map[string]any) {
 		"repro_target_pct":       f.cfg.ReproTargetPct,
 		"source_aware_priority":  f.cfg.SourceAwarePriority,
 		"multi_identity_enabled": f.cfg.MultiIdentity,
+		"identity_mode":          f.cfg.IdentitySampleMode,
+		"identity_count":         len(f.identities),
+		"identity_include_guest": f.cfg.IdentityIncludeGuest,
+		"auth_file_configured":   strings.TrimSpace(f.cfg.AuthFile) != "",
 		"race_mode_enabled":      f.cfg.RaceMode,
+		"race_prob":              f.cfg.RaceProb,
+		"race_burst":             f.cfg.RaceBurst,
+		"sequence_prob":          f.cfg.SequenceProb,
+		"sequence_max_depth":     f.cfg.SequenceMaxDepth,
+		"sequence_fanout":        f.cfg.SequenceFanout,
+		"skip_on_crash":          f.cfg.SkipOnCrash,
+		"skip_endpoint_on_500":   f.cfg.SkipEndpointOn500,
+		"crash_replay_count":     f.cfg.CrashReplayCount,
+		"crash_boost_requests":   f.cfg.CrashBoostRequests,
 	}
 	return summary, top
 }
@@ -120,6 +133,7 @@ func (f *Fuzzer) buildStructuredCrashReport(triageSummary map[string]any) map[st
 				"method":               fd.Method,
 				"path":                 fd.Path,
 				"identity":             fd.Identity,
+				"auth_context":         cloneAnyMap(fd.AuthContext),
 				"mutation":             fd.Mutation,
 				"headers":              cloneStringMap(fd.RequestHeads),
 				"payload":              fd.Payload,

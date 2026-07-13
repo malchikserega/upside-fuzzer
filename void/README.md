@@ -4,21 +4,24 @@ Coverage-guided web API fuzzer — the Go runtime of the UpsideFuzz platform.
 
 ---
 
-## Environment Variables (required)
+## Target And Authentication
 
-The fuzzer reads target URL and auth from environment, **not** from flags:
+The fuzzer reads target URLs from environment variables. Authentication can come from the recommended `-auth-file` / `AUTH_FILE` identity file or from legacy single-identity environment variables:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `TARGET_HOST` | Base URL of the instrumented API | `http://localhost:8080` |
 | `SHM_HOST` | URL of the SHM/coverage endpoint (usually same as TARGET_HOST) | `http://localhost:8080` |
-| `AUTH_TOKEN` | Raw JWT only — **do not** include the `Bearer ` prefix; Void sends `Authorization: Bearer <value>` | `eyJhbGci...` |
+| `AUTH_FILE` | Path to a documented multi-identity auth file | `./auth.identities.json` |
+| `AUTH_TOKEN` | Raw JWT recommended; Void sends `Authorization: Bearer <value>` and strips a pasted `Bearer ` prefix | `eyJhbGci...` |
 | `AUTH_HEADERS_JSON` | JSON object of header → value (use full `Bearer …` inside `Authorization` if you set it here) | `{"Authorization":"Bearer eyJ..."}` |
+| `AUTH_HEADER` | Legacy single `Header-Name: value` shortcut | `Authorization: Bearer eyJ...` |
 | `AUTH_COOKIE` | Optional `Cookie` header for session auth | `sessionid=abc` |
 | `AUTH_URL` / `AUTH_METHOD` / `AUTH_BODY` / … | Login flow to obtain a token when `AUTH_TOKEN` is unset | See `auth.go` |
-| `AUTH_IDENTITIES_JSON` | Multi-identity weighted fuzzing | See below |
+| `AUTH_IDENTITIES_JSON` | Legacy inline multi-identity JSON | Prefer `AUTH_FILE` / `-auth-file` |
 
-Full table and edge cases: **[`INSTRUCTIONS.md`](../INSTRUCTIONS.md#authentication-jwt-custom-headers-and-cookies)**.
+Canonical auth file schema and access-control guidance: **[`docs/FUZZER_AUTHENTICATION.md`](../docs/FUZZER_AUTHENTICATION.md)**.
+Security-focused flag interactions and recommended profiles: **[`INSTRUCTIONS.md`](../INSTRUCTIONS.md#security-campaign-profiles)**.
 
 ---
 
@@ -32,6 +35,15 @@ export SHM_HOST="http://localhost:8080"
 export AUTH_TOKEN="<jwt>"
 
 ./void -time-budget 60
+```
+
+For access-control fuzzing with multiple roles:
+
+```bash
+./void \
+  -auth-file ../docs/auth.identities.example.json \
+  -identity-mode weighted \
+  -time-budget 60
 ```
 
 That's it. All bug-finding features are **on by default**: crash triage, repro, minimization, race detection, anti-forgery, source-aware priority, adaptive concurrency, multi-identity.
@@ -88,6 +100,51 @@ docker compose --profile fuzz-go run --rm void \
 
 ---
 
+## Startup Output Explained
+
+At startup Void prints the effective campaign configuration. This is the fastest way to sanity-check that the run is using the intended auth, dictionary, coverage mode, and security features.
+
+| Line | What it means | Why it matters |
+|------|---------------|----------------|
+| `Loaded dictionary: ...` | The active mutation dictionary path. | For security campaigns this should point to your security/domain dictionary, not only the default RESTler dictionary. |
+| `Time budget: ... minutes` | Wall-clock fuzzing budget. | Confirms long runs were not accidentally started with a short smoke-test value. |
+| `Concurrency: N (adaptive=... min=... max=...)` | Initial worker count and adaptive bounds. | Too high can destabilize slow targets; too low wastes fast targets. |
+| `Output files: crash=... unique=... summary=... report=...` | Where artifacts will be written. | Use these paths for later triage and to confirm Docker volumes are mounted correctly. |
+| `Content-Type adaptation: true` | Void can switch JSON/form content types based on endpoint feedback. | Helps reach MVC/form endpoints instead of repeatedly sending the wrong body type. |
+| `Anti-forgery auto-harvest: ...` | CSRF token discovery/injection settings. | Important for ASP.NET MVC apps with form anti-forgery validation. |
+| `Coverage bitmap target size: ...` | Expected SHM bitmap size. | Must match the instrumented API side; mismatches reduce or break coverage feedback. |
+| `Endpoint stall throttle: ...` | Per-endpoint down-weighting thresholds. | Prevents the scheduler from wasting the campaign on endpoints that stop yielding new coverage. |
+| `Advanced: triage=... repro_runs=... minimize=... race=... source_priority=... multi_identity=...` | Summary of major bug-finding features. | This should stay enabled for security reporting unless you are intentionally benchmarking throughput. |
+| `Crash dedup: mode=...` | Unique crash signature strategy. | `balanced` is the default; stricter modes produce more unique findings. |
+| `Crash replay: ...` | Whether Void schedules follow-up requests near crashy areas. | Disable with `-crash-replay-count 0` for strict breadth scans that should not revisit crash sites. |
+| `Crash boost: ...` | Whether crashy endpoints receive temporary scheduler weight. | Useful for variant discovery; disable for noisy targets when one endpoint dominates. |
+| `Template policy: remove crashing template...` | Printed when `-skip-on-crash` is enabled. | Confirms only the crashing template is removed, not the whole endpoint. |
+| `Endpoint policy: stop fuzzing endpoint...` | Printed when `-skip-endpoint-on-500` is enabled. | Confirms the stronger endpoint-level skip policy is active. |
+| `Identities loaded: N (mode=... guest=... auth_file=...)` | Number of auth identities and scheduling mode. | For access-control fuzzing, confirm this is more than one and `auth_file=true`. |
+| `Direct SHM read mode: requested=... active=...` | Whether coverage is read from shared memory. | `active=file` or `active=mmap` means the fast Docker sidecar path is working. |
+| `Coverage after reset: ... edges` | Edges visible immediately after bitmap reset. | A small non-zero value can be normal if the API is active; a huge stale value suggests reset/mount problems. |
+| `Dependency graph: producers=... consumers=...` | Number of producer/consumer links found for sequences. | Higher numbers mean Void can build more stateful request chains. |
+| `Source-aware priority: boosted templates=...` | Templates boosted from source/route heuristics. | Confirms `-src` and `-source-aware-priority` are actually helping the scheduler. |
+| `Templates loaded: ...` | Number of request templates from `templates.export.json`. | If this is unexpectedly low, grammar export or mount paths are wrong. |
+| `Baseline corpus seeded: ...` | Initial corpus entries created from templates. | Should usually match the template count at startup. |
+
+With `-no-ui`, Docker logs are intentionally quiet during the run: Void prints startup lines, writes JSONL/PoC/workflow artifacts continuously, and prints the final summary at shutdown. For live progress in container logs, use `-plain-ui` or omit `-no-ui` when running in an interactive terminal.
+
+The final block starts with `Fuzzing complete.` and summarizes:
+
+| Final field | Meaning |
+|-------------|---------|
+| `Requests done/sent` | Completed requests vs scheduled/sent requests and their rates. |
+| `Coverage` | Final edge count, baseline ceiling, and mutation coverage above baseline. |
+| `Latency avg`, `errors`, `crashes`, `uniq` | Health and finding counters for the campaign. |
+| `Top endpoints` | Hot or high-signal endpoints with request/status/edge counts. |
+| `Endpoints with logged 500` | Endpoints that produced crash records. |
+| `Top triaged findings` | Highest-scored findings after triage/repro/minimization. |
+
+Generated PoC scripts and structured reports redact sensitive auth headers. If a finding required bearer auth, the PoC uses `${AUTH_TOKEN:?set AUTH_TOKEN}`; set that environment variable before replaying it manually. Crash records still keep non-secret auth metadata in `auth_context`: identity name, sensitive header name, auth scheme, JWT marker when applicable, token length, cookie names, and short SHA-256 fingerprints. This lets you compare which credential triggered a finding without writing live tokens to disk.
+
+---
+
 ## Full CLI Reference
 
 ### Target / Grammar
@@ -100,6 +157,8 @@ docker compose --profile fuzz-go run --rm void \
 | `-exporter` | `./export-templates.py` | Path to grammar exporter script |
 | `-refresh-templates` | `false` | Force re-export even if JSON exists |
 | `-src` | _(empty)_ | Source tree path for source-aware prioritization |
+| `-source-aware-priority` | **true** | Prioritize sensitive endpoints using source and route heuristics |
+| `-bootstrap-max` | `20` | Max GET requests during runtime bootstrap value harvest |
 | `-time-budget` | `10` | Run duration in minutes |
 
 ### Concurrency
@@ -112,6 +171,7 @@ docker compose --profile fuzz-go run --rm void \
 | `-max-concurrency` | `64` | Adaptive upper bound |
 | `-request-timeout` | `5.0` | Per-request timeout (seconds) |
 | `-max-response-bytes` | `262144` | Max bytes read from response body |
+| `-adaptive-content-type` | **true** | Adapt request `Content-Type` per endpoint using response feedback |
 
 ### Coverage
 
@@ -171,20 +231,29 @@ docker compose --profile fuzz-go run --rm void \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-skip-endpoint-on-500` | `false` | Stop hitting endpoint after first 500 |
-| `-skip-on-crash` | `false` | Remove endpoint from active set after any 5xx |
+| `-skip-on-crash` | `false` | Remove only the crashing template after any 5xx |
 | `-endpoint-stall-reqs` | `220` | Down-weight after N requests with no new edges |
 | `-endpoint-zero-edge-reqs` | `120` | Down-weight when total reqs exceed N but no edges |
 | `-endpoint-req-share-cap-pct` | `2.0` | Soft share cap (%) when no new edges |
+| `-endpoint-req-cap-min-reqs` | `500` | Min endpoint requests before share cap applies |
+| `-endpoint-no-edge-cap-weight` | `0.01` | Weight when endpoint exceeds share cap without new edges |
 | `-endpoint-crash-rate-threshold` | `50.0` | 5xx% threshold for crash-rate throttling |
 | `-endpoint-crash-rate-min-crashes` | `50` | Min 5xx count before throttling applies |
+| `-endpoint-crash-rate-weight` | `0.02` | Weight for high crash-rate endpoints |
+
+`-skip-on-crash` and `-skip-endpoint-on-500` are intentionally different. The first removes one crashing template; the second removes the whole endpoint. If crash replay or crash boost is still enabled, the fuzzer may deliberately revisit nearby crash areas to find variants. For a strict breadth scan on noisy targets, combine `-skip-on-crash -skip-endpoint-on-500 -crash-replay-count 0 -crash-boost-requests 0`.
 
 ### Auth / Identity
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-multi-identity` | **true** | Rotate identities from `AUTH_IDENTITIES_JSON` |
+| `-auth-file` | empty | Path to documented JWT/API-key/cookie identity file |
+| `-multi-identity` | **true** | Rotate identities from `-auth-file`, `AUTH_FILE`, or `AUTH_IDENTITIES_JSON` |
 | `-identity-mode` | `weighted` | Scheduling: `weighted` \| `round-robin` \| `random` |
+| `-identity-include-guest` | **true** | Add anonymous guest traffic when no `guest` identity is present |
 | `-auto-antiforgery` | **true** | Auto-harvest CSRF tokens from HTML responses |
+| `-antiforgery-field` | `__RequestVerificationToken` | Form field name used for CSRF token injection |
+| `-antiforgery-header` | `RequestVerificationToken` | Request header name used for CSRF token injection |
 | `-antiforgery-sample-rate` | `0.10` | Fraction of HTML responses to scan for CSRF tokens |
 | `-antiforgery-max-tokens` | `2048` | Max CSRF tokens in pool |
 | `-antiforgery-token-ttl` | `300` | Token TTL seconds |
@@ -198,7 +267,7 @@ docker compose --profile fuzz-go run --rm void \
 | `-unique-crash-file` | `crashes/unique-crashes-<ts>.jsonl` | Deduplicated crashes |
 | `-summary-file` | `summaries/summary-<ts>.json` | Run statistics |
 | `-report-file` | _(derived from summary)_ | Structured bug report JSON |
-| `-poc-dir` | `crashes/pocs` | Reproducer shell scripts |
+| `-poc-dir` | `crashes/pocs` | Reproducer shell scripts with sensitive auth headers redacted |
 | `-timeline-dir` | `crashes/timelines` | Mermaid exploit flow diagrams |
 
 ### UI
@@ -214,6 +283,7 @@ docker compose --profile fuzz-go run --rm void \
 | `-ui-interval` | `1.0` | Dashboard refresh interval (seconds) |
 | `-ui-endpoint-sort` | `hot` | Sort: `hot` \| `recent` \| `req` \| `edges` \| `alpha` |
 | `-ui-endpoint-rotate` | **true** | Auto-rotate endpoint pages |
+| `-ui-endpoint-rotate-sec` | `1.0` | Seconds between endpoint page rotations |
 
 ---
 
@@ -226,7 +296,7 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`store.go`**: Runtime knowledge extraction, global value deduplication, and dynamic `DictStore` lookup.
 - **`coverage.go`**: Handlers for Shared Memory (SHM) direct byte reads and HTTP `/coverage` polling.
 - **`fuzzer.go`**: Main fuzzer struct and high-level lifecycle hooks (`Run`, `Close`, scheduling steps).
-- **`auth.go`**: Identity rotation (JWT, session cookies) and Anti-forgery (CSRF) token harvesting/injection.
+- **`auth.go`**: JWT/header/cookie authentication state, login fallback, and Anti-forgery (CSRF) token harvesting/injection.
 - **`template.go`**: Parsing of `templates.export.json` and rendering API request structures into raw HTTP bytes.
 - **`worker.go`**: Core fuzzing loop, concurrency management, and worker thread synchronization (`sync.WaitGroup`).
 - **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
@@ -234,7 +304,7 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`poc.go`**: Generation of `curl` reproducer shell scripts and Markdown exploit timelines.
 - **`report.go`**: Assembly of the final JSON crash report and vulnerability findings.
 - **`minimize.go`**: Delta-debugging logic to binary-search and strip away unnecessary JSON fields from a crashing payload.
-- **`identity.go`**: Authentication state bridging, trace decoration, and race condition probes.
+- **`identity.go`**: Auth identity files, weighted identity scheduling, trace decoration, and race condition probes.
 - **`mutation_engine.go`**: Context-aware injection algorithms (JSON payload flipping, path traversal injection, query dropping, etc.).
 - **`ui.go`**: Rich terminal dashboard rendering, ASCII progress bars, and run reporting.
 - **`utils.go`**: General string manipulation, byte arrays, path parsers, and generic mathematical helpers.
@@ -294,11 +364,11 @@ cd void
 
 # Linux amd64 (for use inside Docker compose)
 docker run --rm -v "$(pwd)/go:/src" -w /src golang:1.22-alpine \
-  go build -o /src/void-linux-amd64 .
+  /usr/local/go/bin/go build -o /src/void-linux-amd64 .
 
 # macOS arm64 cross-compiled inside Docker
 docker run --rm -v "$(pwd)/go:/src" -w /src golang:1.22-alpine \
-  sh -c "GOOS=darwin GOARCH=arm64 go build -o /src/void-darwin-arm64 ."
+  sh -c "GOOS=darwin GOARCH=arm64 /usr/local/go/bin/go build -o /src/void-darwin-arm64 ."
 ```
 
 ### Build optimized release binary (smaller, no debug symbols)
@@ -317,13 +387,17 @@ GOOS=linux GOARCH=amd64 go build \
 ```dockerfile
 FROM golang:1.22-alpine AS builder
 WORKDIR /src
-COPY go/ .
-RUN go build -ldflags="-s -w" -o /void .
+COPY go/go.mod go/go.sum ./go/
+RUN cd go && go mod download
+COPY go/ ./go/
+RUN cd go && go build -ldflags="-s -w" -o /out/void .
 
 FROM alpine:3.19
-COPY --from=builder /void /void
-COPY export-templates.py /export-templates.py
-ENTRYPOINT ["/void"]
+RUN apk add --no-cache python3
+WORKDIR /fuzzer
+COPY export-templates.py .
+COPY --from=builder /out/void /usr/local/bin/void
+ENTRYPOINT ["/usr/local/bin/void"]
 ```
 
 Build for multiple platforms via `docker buildx`:
@@ -366,6 +440,22 @@ MOpt-style weighted selection — categories that find more edges get higher pro
   "status_code": 500,
   "method": "PUT",
   "path": "/v1/helpdesk/channels/0",
+  "identity": "org-a-admin",
+  "auth_context": {
+    "identity": "org-a-admin",
+    "redacted": true,
+    "credential_count": 1,
+    "credentials": [
+      {
+        "header": "Authorization",
+        "scheme": "Bearer",
+        "token_format": "jwt",
+        "token_len": 1089,
+        "token_fingerprint": "sha256:2d8b6a2a9f7d0c31",
+        "masked": "Bearer ${AUTH_TOKEN:?set AUTH_TOKEN}"
+      }
+    ]
+  },
   "mutation": "sqli",
   "payload": "'{\"name\":\"' OR 1=1--\"}",
   "response_body": "An error occurred while processing your request.",

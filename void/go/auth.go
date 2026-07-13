@@ -37,10 +37,13 @@ func (f *Fuzzer) authenticate() error {
 	}
 	f.seedAuthContextValues()
 	if tok := strings.TrimSpace(os.Getenv("AUTH_TOKEN")); tok != "" {
-		f.token = tok
+		f.token = stripBearerPrefix(tok)
 		return nil
 	}
 	if f.hasAuthContextLocked() {
+		return nil
+	}
+	if f.hasConfiguredIdentityAuth() && !hasExplicitAuthLoginEnv() {
 		return nil
 	}
 
@@ -86,14 +89,14 @@ func (f *Fuzzer) authenticate() error {
 		switch tv := js.(type) {
 		case string:
 			if len(tv) > 10 {
-				f.token = tv
+				f.token = stripBearerPrefix(tv)
 				return nil
 			}
 		case map[string]any:
 			if v, ok := tv[tokenField]; ok {
 				t := strings.TrimSpace(toString(v))
 				if len(t) > 10 {
-					f.token = t
+					f.token = stripBearerPrefix(t)
 					return nil
 				}
 			}
@@ -101,7 +104,7 @@ func (f *Fuzzer) authenticate() error {
 	}
 	text = strings.Trim(text, `"`)
 	if len(text) > 10 {
-		f.token = text
+		f.token = stripBearerPrefix(text)
 		return nil
 	}
 	if f.hasAuthContextLocked() {
@@ -138,6 +141,62 @@ func (f *Fuzzer) hasAuthContextLocked() bool {
 	return f.hasSessionCookies()
 }
 
+func (f *Fuzzer) hasConfiguredIdentityAuth() bool {
+	if f == nil || !f.cfg.MultiIdentity {
+		return false
+	}
+	return strings.TrimSpace(f.cfg.AuthFile) != "" || strings.TrimSpace(os.Getenv("AUTH_IDENTITIES_JSON")) != ""
+}
+
+func hasExplicitAuthLoginEnv() bool {
+	for _, k := range []string{"AUTH_URL", "AUTH_METHOD", "AUTH_BODY", "AUTH_TOKEN_FIELD"} {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *Fuzzer) hasAnyAuthContext() bool {
+	if f.hasAuthContext() {
+		return true
+	}
+	for _, id := range f.identities {
+		if identityHasAuth(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func identityHasAuth(id AuthIdentity) bool {
+	return strings.TrimSpace(id.Token) != "" || len(id.Headers) > 0
+}
+
+func (f *Fuzzer) primaryAuthContextForHarvest() (map[string]string, string) {
+	f.authMu.RLock()
+	if strings.TrimSpace(f.token) != "" || len(f.authHeaders) > 0 {
+		headers := cloneStringMap(f.authHeaders)
+		token := strings.TrimSpace(f.token)
+		f.authMu.RUnlock()
+		return headers, token
+	}
+	f.authMu.RUnlock()
+
+	for _, id := range f.identities {
+		name := strings.ToLower(strings.TrimSpace(id.Name))
+		if identityHasAuth(id) && !strings.EqualFold(name, "guest") && !strings.Contains(name, "anon") {
+			return cloneStringMap(id.Headers), strings.TrimSpace(id.Token)
+		}
+	}
+	for _, id := range f.identities {
+		if identityHasAuth(id) {
+			return cloneStringMap(id.Headers), strings.TrimSpace(id.Token)
+		}
+	}
+	return map[string]string{}, ""
+}
+
 func (f *Fuzzer) seedAuthContextValues() {
 	if f == nil || f.runtime == nil {
 		return
@@ -145,7 +204,7 @@ func (f *Fuzzer) seedAuthContextValues() {
 }
 
 func (f *Fuzzer) preHarvestAntiForgeryTokens() int {
-	if !f.cfg.AutoAntiForgery || !f.hasAuthContext() {
+	if !f.cfg.AutoAntiForgery || !f.hasAnyAuthContext() {
 		return 0
 	}
 	if learned := f.harvestAntiForgeryForPath("/"); learned > 0 {
@@ -327,7 +386,7 @@ func (f *Fuzzer) harvestAntiForgeryForPath(path string) int {
 }
 
 func (f *Fuzzer) reserveAntiForgeryHarvest(path string) (string, bool) {
-	if !f.cfg.AutoAntiForgery || !f.hasAuthContext() {
+	if !f.cfg.AutoAntiForgery || !f.hasAnyAuthContext() {
 		return "", false
 	}
 	norm := normalizePath(path)
@@ -351,11 +410,7 @@ func (f *Fuzzer) harvestAntiForgeryForPathReserved(norm string) int {
 	total := 0
 	candidates := antiForgeryHarvestPaths(norm)
 
-	// Snapshot auth state under RLock to avoid racing with authenticate().
-	f.authMu.RLock()
-	authHdrs := cloneStringMap(f.authHeaders)
-	authToken := f.token
-	f.authMu.RUnlock()
+	authHdrs, authToken := f.primaryAuthContextForHarvest()
 
 	for _, p := range candidates {
 		req, err := http.NewRequest(http.MethodGet, f.target+p, nil)
