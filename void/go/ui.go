@@ -190,7 +190,96 @@ func sortEndpointsForUI(eps []*EndpointStats, mode string) {
 }
 
 func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
-	if f.cfg.NoUI {
+	if f.cfg.WebUI {
+		now := time.Now()
+		if f.lastUIRender.IsZero() || now.Sub(f.lastUIRender) >= 200*time.Millisecond {
+			f.lastUIRender = now
+
+			eps := make([]EndpointStats, 0, len(f.endpointStats))
+			epsPtrs := make([]*EndpointStats, 0, len(f.endpointStats))
+			for _, ep := range f.endpointStats {
+				epsPtrs = append(epsPtrs, ep)
+			}
+			sortEndpointsForUI(epsPtrs, f.cfg.UIEndpointSort)
+			for i, ep := range epsPtrs {
+				if i >= 15 {
+					break
+				}
+				eps = append(eps, *ep)
+			}
+
+			avgLat := 0.0
+			if f.latencySamples > 0 {
+				avgLat = f.latencyTotalMS / float64(f.latencySamples)
+			}
+
+			satPct := 0.0
+			if f.coverageCapacity > 0 {
+				satPct = f.coverageSaturationPct()
+			}
+
+			// Capture recent events
+			f.eventMu.Lock()
+			recentEvents := make([]string, len(f.eventLog))
+			copy(recentEvents, f.eventLog)
+			f.eventMu.Unlock()
+
+			recentCrashes := make([]CrashRecord, len(f.recentCrashes))
+			copy(recentCrashes, f.recentCrashes)
+
+			timeRem := ""
+			if f.cfg.TimeBudgetMinutes > 0 {
+				timeBudget := time.Duration(f.cfg.TimeBudgetMinutes * float64(time.Minute))
+				rem := time.Until(f.startTime.Add(timeBudget)).Round(time.Second)
+				if rem > 0 {
+					timeRem = rem.String()
+				} else {
+					timeRem = "Finishing..."
+				}
+			}
+
+				elapsed := time.Since(f.startTime).Seconds()
+			reqPerSec := 0.0
+			if elapsed > 0 {
+				reqPerSec = float64(f.totalDone) / elapsed
+			}
+
+			stats := WebUIStats{
+				EpochName:        epochName,
+				EpochIdx:         epochIdx,
+				InFlight:         inFlight,
+				TotalDone:        f.totalDone,
+				TotalSent:        f.totalSent,
+				CurrentEdges:     f.currentEdges,
+				StartEdges:       f.startEdges,
+				NewEdges:         f.currentEdges - f.startEdges,
+				CoverageSatPct:   satPct,
+				TotalErrors:      f.totalErrors,
+				TotalCrashes:     f.totalCrashes,
+				UniqueCrashes:    f.uniqueCrashes,
+				AvgLatency:       avgLat,
+				Concurrency:      f.currentConcurrency,
+				CorpusSize:       len(f.corpus),
+				ElapsedSecs:      elapsed,
+				RequestsPerSec:   reqPerSec,
+				AuthBlockedCount: len(f.authBlocked),
+				IdentityCount:    len(f.identities),
+				TimeBudgetSecs:   f.cfg.TimeBudgetMinutes * 60,
+				TopEndpoints:     eps,
+				RecentEvents:     recentEvents,
+				RecentCrashes:    recentCrashes,
+				TimeRemaining:    timeRem,
+			}
+
+			select {
+			case f.WebUIStatsCh <- stats:
+			default:
+			}
+		}
+		if f.cfg.NoUI {
+			return
+		}
+	} else if f.cfg.NoUI {
 		return
 	}
 	now := time.Now()

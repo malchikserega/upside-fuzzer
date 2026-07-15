@@ -76,6 +76,7 @@ type Fuzzer struct {
 	learnedByEndpoint    map[string]int
 	uniqueCrashKeys      map[string]struct{}
 	crashLog             []map[string]any
+	recentCrashes        []CrashRecord
 	blockedEndpoints     map[string]struct{}
 	forceFormEndpoints   map[string]struct{}
 	antiForgeryHarvestAt map[string]time.Time
@@ -129,6 +130,9 @@ type Fuzzer struct {
 	// Reusable buffers for weighted template selection to avoid per-call allocations.
 	weightsBuf []float64
 	tidsBuf    []int
+
+	// Channel for asynchronously pushing UI states to Web UI
+	WebUIStatsCh chan WebUIStats
 }
 
 func NewFuzzer(cfg Config) (*Fuzzer, error) {
@@ -246,6 +250,7 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		uiInline:       isTerminal(os.Stdout),
 		eventLog:       make([]string, 0, 8),
 		requestSamples: make([]string, 0, 8),
+		WebUIStatsCh:   make(chan WebUIStats, 2),
 		uiWidthLocked:  0,
 	}
 	for i := range f.templates {

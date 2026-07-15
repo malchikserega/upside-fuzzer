@@ -17,8 +17,9 @@
 7. [Step 6: Populate the Database with Test Data](#step-6-populate-the-database-with-test-data)
 8. [Step 7: Compile the Grammar](#step-7-compile-the-grammar)
 9. [Step 8: Run the Fuzzer](#step-8-run-the-fuzzer)
-10. [Step 9: View Results](#step-9-view-results)
-11. [Troubleshooting](#troubleshooting)
+10. [Step 8b: Web UI Dashboard](#step-8b-web-ui-dashboard)
+11. [Step 9: View Results](#step-9-view-results)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -257,6 +258,7 @@ docker compose -f docker-compose.instrumented.yml --profile fuzz up smartfuzzer 
 
 ```bash
 docker compose -f docker-compose.instrumented.yml --profile fuzz run --build --rm \
+  -p 13377:13377 \
   -v "$PWD/src:/src:ro" \
   -v "$PWD/auth.identities.json:/auth/auth.identities.json:ro" \
   smartfuzzer \
@@ -283,7 +285,8 @@ docker compose -f docker-compose.instrumented.yml --profile fuzz run --build --r
   -race-burst 3 \
   -skip-endpoint-on-500 \
   -skip-on-crash \
-  -no-ui
+  -skip-on-crash \
+  -web-ui
 ```
 
 **What to look for in the logs (when `-no-ui` is omitted):**
@@ -299,6 +302,40 @@ Baseline corpus seeded: 142
 The metrics `edges`, `corpus`, and `crashes` should start increasing within the first minute.
 
 > **Many 401/403 responses are expected and beneficial.** They prove the fuzzer is testing authorization boundaries by using fuzzed IDs, which stress-tests resource-based access control even when the underlying resource doesn't exist.
+
+---
+
+## Step 8b: Web UI Dashboard
+
+When launched with `-web-ui`, the fuzzer starts an embedded HTTP server on port `13377` (configurable via `-web-ui-port`).
+
+**Access the dashboard:** Open `http://localhost:13377` in your browser.
+
+### Dashboard Features
+
+| Area | What it shows |
+|------|---------------|
+| **Header** | Live req/s, avg latency, concurrency threads, time progress bar |
+| **Stats Cards** | Requests, edges, crashes (total + unique), corpus size, new edges, avg latency |
+| **Fuzzer Engine** | Epoch progress (Baseline → Deterministic → Havoc → Splicing), active mutations, animated packet flow |
+| **Crash List** | Scrollable list of up to 20 recent unique crashes, color-coded by status, with method badges and exception types |
+| **Crash Popup** | Click any crash to see: endpoint, status, mutation, signature, identity, triage score/classification, formatted response body, request payload, auth context |
+| **Coverage Bitmap** | Live visualization of the shared memory coverage bitmap |
+| **Event Log** | Color-coded live event stream (crashes = 🔴, new edges = 🟢, auth blocks = 🟡, concurrency adaptation = 🟣) |
+| **Run Info** | Identity count, auth-blocked endpoints, coverage saturation % |
+
+> **Note:** The Web UI uses Server-Sent Events (SSE) for real-time streaming — no WebSocket or polling required. Stats refresh every 200ms.
+
+### Port mapping in Docker
+
+When using `docker compose run`, you must expose the port explicitly:
+
+```bash
+docker compose -f docker-compose.instrumented.yml --profile fuzz run --rm \
+  -p 13377:13377 \
+  ... \
+  smartfuzzer -web-ui
+```
 
 ---
 

@@ -155,6 +155,10 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		"mutation": rec.Mutation,
 		"triage":   triage,
 	})
+	f.recentCrashes = append(f.recentCrashes, rec)
+	if len(f.recentCrashes) > 20 {
+		f.recentCrashes = f.recentCrashes[len(f.recentCrashes)-20:]
+	}
 	return true
 }
 

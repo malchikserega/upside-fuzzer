@@ -275,6 +275,8 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-no-ui` | `false` | Disable dashboard (plain stdout) |
+| `-web-ui` | `false` | Enable the rich web UI dashboard server |
+| `-web-ui-port` | `13377` | Port for the web UI dashboard |
 | `-plain-ui` | `false` | Simple line-by-line output |
 | `-ascii-ui` | `false` | ASCII borders (no Unicode box drawing) |
 | `-force-ui` | `false` | Force dashboard even when stdout is not a TTY |

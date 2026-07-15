@@ -79,6 +79,8 @@ type Config struct {
 	IdentitySampleMode          string
 	IdentityIncludeGuest        bool
 	NoUI                        bool
+	WebUI                       bool
+	WebUIPort                   int
 	ForceUI                     bool
 	PlainUI                     bool
 	UINoClear                   bool
@@ -123,21 +125,21 @@ type TemplateExport struct {
 }
 
 type EndpointStats struct {
-	Method        string
-	Path          string
-	Reqs          int
-	LastSeen      int
-	ReqsSinceEdge int
-	S2xx          int
-	S4xx          int
-	S500          int
-	Logged500     int
-	Filtered500   int
-	S401403       int
-	S5xx          int
-	Logged5xx     int
-	Filtered5xx   int
-	NewEdges      int
+	Method        string `json:"method"`
+	Path          string `json:"path"`
+	Reqs          int    `json:"reqs"`
+	LastSeen      int    `json:"last_seen"`
+	ReqsSinceEdge int    `json:"reqs_since_edge"`
+	S2xx          int    `json:"s2xx"`
+	S4xx          int    `json:"s4xx"`
+	S500          int    `json:"s500"`
+	Logged500     int    `json:"logged_500"`
+	Filtered500   int    `json:"filtered_500"`
+	S401403       int    `json:"s401403"`
+	S5xx          int    `json:"s5xx"`
+	Logged5xx     int    `json:"logged_5xx"`
+	Filtered5xx   int    `json:"filtered_5xx"`
+	NewEdges      int    `json:"edges_discovered"`
 }
 
 type MutationStats struct {
@@ -414,4 +416,31 @@ func (j *JSONLWriter) Close() error {
 		return j.f.Close()
 	}
 	return nil
+}
+
+type WebUIStats struct {
+	EpochName        string          `json:"epoch_name"`
+	EpochIdx         int             `json:"epoch_idx"`
+	InFlight         int             `json:"in_flight"`
+	TotalDone        int             `json:"total_done"`
+	TotalSent        int             `json:"total_sent"`
+	CurrentEdges     int             `json:"current_edges"`
+	StartEdges       int             `json:"start_edges"`
+	NewEdges         int             `json:"new_edges"`
+	CoverageSatPct   float64         `json:"coverage_sat_pct"`
+	TotalErrors      int             `json:"total_errors"`
+	TotalCrashes     int             `json:"total_crashes"`
+	UniqueCrashes    int             `json:"unique_crashes"`
+	AvgLatency       float64         `json:"avg_latency"`
+	Concurrency      int             `json:"concurrency"`
+	CorpusSize       int             `json:"corpus_size"`
+	ElapsedSecs      float64         `json:"elapsed_secs"`
+	RequestsPerSec   float64         `json:"requests_per_sec"`
+	AuthBlockedCount int             `json:"auth_blocked_count"`
+	IdentityCount    int             `json:"identity_count"`
+	TimeBudgetSecs   float64         `json:"time_budget_secs"`
+	TopEndpoints     []EndpointStats `json:"top_endpoints"`
+	RecentEvents     []string        `json:"recent_events"`
+	RecentCrashes    []CrashRecord   `json:"recent_crashes"`
+	TimeRemaining    string          `json:"time_remaining"`
 }

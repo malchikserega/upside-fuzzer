@@ -79,6 +79,8 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.IdentitySampleMode, "identity-mode", "weighted", "Identity scheduling: weighted|round-robin|random")
 	flag.BoolVar(&cfg.IdentityIncludeGuest, "identity-include-guest", true, "Include an anonymous guest identity during multi-identity fuzzing")
 	flag.BoolVar(&cfg.NoUI, "no-ui", false, "Disable live UI")
+	flag.BoolVar(&cfg.WebUI, "web-ui", false, "Enable the web UI dashboard server")
+	flag.IntVar(&cfg.WebUIPort, "web-ui-port", 13377, "Port for the web UI dashboard")
 	flag.BoolVar(&cfg.ForceUI, "force-ui", false, "Force dashboard UI even when stdout is not a terminal")
 	flag.BoolVar(&cfg.PlainUI, "plain-ui", false, "Use plain line-by-line UI instead of dashboard")
 	flag.BoolVar(&cfg.UINoClear, "ui-no-clear", false, "Do not clear screen between dashboard refreshes")
@@ -196,6 +198,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer f.Close()
+	if cfg.WebUI {
+		go RunWebUI(f)
+	}
 	if err := f.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "run failed: %v\n", err)
 		os.Exit(1)
