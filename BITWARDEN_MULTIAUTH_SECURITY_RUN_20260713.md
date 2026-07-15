@@ -2,6 +2,8 @@
 
 This report summarizes a 15-minute validation campaign against the local instrumented Bitwarden stand. The goal was to verify that Void's documented multi-auth identity file support works in a real run and that the security-focused flags behave as expected.
 
+**→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Docs Index](docs/INDEX.md)**
+
 ## Run Setup
 
 Artifacts:
@@ -102,3 +104,7 @@ Security hygiene issue found and fixed:
 This is a successful validation run for the fuzzer feature itself. It shows that multi-user auth scheduling, direct SHM coverage, security dictionary mutations, stateful sequences, race settings, crash triage, repro, minimization, and skip-on-crash behavior can run together at high throughput on Bitwarden.
 
 The findings are security-relevant, mostly stability/error-handling and post-auth exception issues. They should not be treated as automatically critical without manual exploitability review, but the run produced enough stable, post-auth crashes to justify deeper triage.
+
+---
+
+**→ [Back to README](README.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md)**

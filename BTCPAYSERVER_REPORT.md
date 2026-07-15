@@ -1,5 +1,7 @@
 # UpsideFuzz Final Analysis: BTCPay Server (Greenfield API)
 
+**→ [Back to README](README.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md) · [Docs Index](docs/INDEX.md)**
+
 ## Executive Summary
 A 10-minute automated fuzzing session was executed against the BTCPay Server Greenfield API using UpsideFuzz with direct SHM coverage guidance. Following critical bug fixes to the authentication and sequence engine mechanisms, the fuzzer achieved **35,721 coverage edges** (13.6% bitmap saturation) and identified **3 unique server crashes** (500 Internal Server Errors).
 
@@ -146,3 +148,7 @@ The introduction of the professional dictionary allowed the fuzzer to penetrate 
 
 > [!CAUTION]
 > The recurring `Newtonsoft.Json` polymorphic deserialization failures (`$type` confusion) observed across multiple endpoints (Admin, Users, Payouts) suggest a systemic vulnerability in how BTCPay Server configures `TypeNameHandling`. If `TypeNameHandling` is not strictly set to `None`, these crashes could potentially be weaponized into Remote Code Execution (RCE).
+
+---
+
+**→ [Back to README](README.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md)**

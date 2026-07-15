@@ -2,6 +2,8 @@
 
 > Run the full coverage-guided fuzzing pipeline on **eShopOnWeb** from scratch on any machine.
 
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+
 ---
 
 ## Prerequisites
@@ -231,3 +233,7 @@ cd .. && rm -rf eshprep
 | 401/403 on writes | eShop needs auth — fuzzer handles this via `/api/authenticate` |
 | `go.sum not found` on Docker build | Use the current repo checkout; `void/go/go.sum` is tracked and should already be present |
 | Fuzzer can't connect | Check network name: `docker network ls \| grep eshprep` |
+
+---
+
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md)**

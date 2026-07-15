@@ -1,104 +1,150 @@
-# Руководство по настройке фаззинга Bitwarden с нуля
+# UpsideFuzz — Bitwarden Quick Start
 
-В этом документе подробно описаны все шаги, необходимые для подготовки локального окружения Bitwarden, интеграции инструментирования (C# AST) и запуска смарт-фаззера UpsideFuzzer.
+> Run the full coverage-guided fuzzing pipeline on **Bitwarden** (multi-service password manager backend) from scratch on any machine.
 
----
-
-## 1. Подготовка исходного кода и окружения
-
-Предполагается, что вы находитесь в корневой директории платформы `upside-fuzzer` и у вас есть папка `bitwarden_prep`, содержащая исходный код `bitwarden/server`.
-
-### Требования:
-- Установленный **Docker** и **Docker Compose**.
-- Установленный **Python 3**.
-- Настроенный скрипт компиляции RESTler (`compile-grammar.sh`).
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md)**
 
 ---
 
-## 2. Интеграция C# инструментирования
+## Table of Contents
 
-Чтобы фаззер получал обратную связь (Code Coverage), необходимо внедрить код сбора покрытия в исходный код API Bitwarden.
-В проекте `upside-fuzzer` используется инструмент на основе Roslyn (находится в директории `instrumentor`), который модифицирует исходники перед компиляцией в Docker-образе.
-
-### 2.1 Изменение Dockerfile
-В `bitwarden_prep` мы используем `Dockerfile.instrumented` вместо стандартного. В него добавлены следующие шаги (на этапе сборки C# проекта):
-1. Копирование утилиты `instrumentor` внутрь сборочного контейнера.
-2. Выполнение команды `dotnet run` для инструментации кода (инжектирование блоков `try/finally` с вызовом `Coverage.Hit(...)`).
-3. Добавление зависимости `HttpExtensions.dll`, которая реализует Shared Memory (SHM) для передачи покрытия фаззеру.
-
-### 2.2 Настройка Docker Compose
-Вместо базового `docker-compose.yml` используется `docker-compose.instrumented.yml`:
-- У сервисов `api` и `identity` изменен `build.dockerfile` на `Dockerfile.instrumented`.
-- Отключены healthcheck'и на основе `curl`, так как инструменты отладки удалены из продакшен образов Bitwarden.
-- Добавлен Shared Memory volume `coverage_shm:/coverage_shm` для быстрой передачи битового массива покрытия между API и фаззером.
+1. [Prerequisites](#prerequisites)
+2. [Step 1: Clone Repositories](#step-1-clone-repositories)
+3. [Step 2: Instrument the Project](#step-2-instrument-the-project)
+4. [Step 3: Build and Start Containers](#step-3-build-and-start-containers)
+5. [Step 4: Generate an Auth Token](#step-4-generate-an-auth-token)
+6. [Step 5: Create an Auth Identity File](#step-5-create-an-auth-identity-file)
+7. [Step 6: Populate the Database with Test Data](#step-6-populate-the-database-with-test-data)
+8. [Step 7: Compile the Grammar](#step-7-compile-the-grammar)
+9. [Step 8: Run the Fuzzer](#step-8-run-the-fuzzer)
+10. [Step 9: View Results](#step-9-view-results)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
-## 3. Генерация грамматики для фаззера
+## Prerequisites
 
-UpsideFuzzer (Void) требует грамматику API (файл `grammar.py`), сгенерированную на базе OpenAPI/Swagger спецификации.
+```bash
+docker --version        # Docker 24+
+docker compose version  # Compose v2+
+python3 --version       # Python 3.9+
+```
 
-### Шаг 3.1: Запуск API для экспорта спецификации
-Сначала нужно поднять БД и сам API, чтобы скачать Swagger JSON:
+Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+> **Apple Silicon / ARM hosts:** Bitwarden's MSSQL container is `linux/amd64` and runs under Rosetta emulation on M-series Macs. Expect slower first-time pull and a longer DB startup window (90–120 s).
+
+---
+
+## Step 1: Clone Repositories
+
+```bash
+# Clone the fuzzer
+git clone https://github.com/malchikserega/upside-fuzzer.git
+cd upside-fuzzer
+
+# Clone Bitwarden server (target application)
+git clone https://github.com/bitwarden/server.git bitwarden_src
+```
+
+> **Note:** The repository already contains a prepared `bitwarden_prep/` directory with a custom `docker-compose.instrumented.yml` and helper scripts. If you use a fresh Bitwarden checkout, run `fuzz-prep-multi.py` (Step 2) to regenerate it.
+
+---
+
+## Step 2: Instrument the Project
+
+```bash
+python3 fuzz-prep-multi.py \
+  --src ./bitwarden_src \
+  --out ./bitwarden_prep \
+  --main src/Api
+```
+
+This creates an instrumented copy in `./bitwarden_prep/` with:
+- SharpFuzz IL instrumentation for all business logic DLLs
+- SHM coverage endpoints (`/shm/create`, `/shm/coverage`, `/shm/reset`)
+- Docker Compose with tmpfs volume for shared memory bitmap
+
+> **Tip:** `bitwarden_prep/` in this repository already contains a working instrumented tree. You can skip this step and go directly to Step 3 unless you want to re-instrument from a fresh clone.
+
+---
+
+## Step 3: Build and Start Containers
+
 ```bash
 cd bitwarden_prep
+
 docker compose -f docker-compose.instrumented.yml up mssql migrator identity api -d
+
+# MSSQL needs time to initialize — wait 90–120 seconds on first run
+sleep 90
 ```
 
-Дождитесь запуска API (обычно на порту `4000`), затем скачайте внутреннюю спецификацию:
+**Verify the API is responding:**
+
 ```bash
-curl -s http://localhost:4000/specs/internal/swagger.json > internal_swagger.json
+curl -s http://localhost:4000/alive
+# → 200 OK
+
+# Fetch the internal OpenAPI spec
+curl -s http://localhost:4000/specs/internal/swagger.json | head -c 200
 ```
 
-### Шаг 3.2: Санитизация Swagger'а
-В Bitwarden используются сложные вложенные структуры объектов в query-параметрах. Компилятор RESTler (Microsoft) не поддерживает `deepObject` или параметры со ссылками `$ref`.
-Используйте Python-скрипт `sanitize_swagger.py` (уже есть в папке `bitwarden_prep`):
-```bash
-python3 sanitize_swagger.py internal_swagger.json
-```
-Этот скрипт очистит JSON от неподдерживаемых конструкций.
+> **Port:** Bitwarden API listens on port `4000` by default. Check `docker-compose.instrumented.yml` if it differs.
 
-### Шаг 3.3: Компиляция грамматики
-Перейдите в корень проекта и скомпилируйте `grammar.py`:
+**Verify coverage instrumentation:**
+
 ```bash
-cd ..
-./compile-grammar.sh bitwarden_prep/internal_swagger.json
-```
-Убедитесь, что скрипт успешно завершился. Скопируйте результаты в директорию с грамматиками:
-```bash
-mkdir -p grammars/bitwarden
-cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/bitwarden/
+curl -s -X POST http://localhost:4000/shm/create
+# → {"status":"synced","mode":"file-backed-mmap","bitmap_size":262144,...}
+
+curl -s http://localhost:4000/shm/coverage
+# → {"edges":N,"hits":N}  (edges > 0 confirms instrumentation is active)
 ```
 
 ---
 
-## 4. Настройка аутентификации
+## Step 4: Generate an Auth Token
 
-Bitwarden требует строгой валидации паролей и двушаговую регистрацию. Мы автоматизировали этот процесс скриптом `get_apikey.py`.
+Bitwarden requires a valid access token. The `get_apikey.py` helper automates the full registration + token flow:
 
 ```bash
 cd bitwarden_prep
 python3 get_apikey.py
 ```
-**Что делает скрипт:**
-1. Отправляет запрос `/accounts/register/send-verification-email` (первый шаг).
-2. Забирает токен подтверждения из ответа API.
-3. Завершает регистрацию `/accounts/register/finish` (с параметрами `kdfIterations: 600000`).
-4. Запрашивает OAuth Access Token `/connect/token` (обязательно с заголовками `Bitwarden-Client-Version` и `Device-Type`).
-5. Создает файл `fuzzer.env` с auth-материалом для фаззера.
 
-Void сейчас понимает все основные варианты auth без дополнительных конвертаций:
-- `AUTH_TOKEN` — raw JWT или вставленный `Bearer ...` токен; префикс `Bearer` будет безопасно удален.
-- `AUTH_HEADERS_JSON` — JSON-объект заголовков, например `{"Authorization":"Bearer ..."}`.
-- `AUTH_HEADER` — legacy shortcut вида `Header-Name: value`, например `Authorization: Bearer ...`; используйте только если helper script сгенерировал именно его.
-- `AUTH_COOKIE` — значение заголовка `Cookie` для cookie-based сессии.
+**What the script does:**
 
-Для обычного single-user прогона оставьте `fuzzer.env` как есть: `docker-compose.instrumented.yml` подключает его через `env_file`.
+1. Sends `POST /accounts/register/send-verification-email`
+2. Completes registration via `POST /accounts/register/finish` (with `kdfIterations: 600000`)
+3. Requests an OAuth access token from `POST /connect/token` with the required Bitwarden client headers
+4. Writes a `fuzzer.env` file with the auth material
 
-Для access-control fuzzing лучше создать явный identity-файл и запускать Void с `-auth-file`. Пример для cookie-сессии:
+> **SMTP note:** Bitwarden's identity service may try to send a verification email. If your test stand has no SMTP server, start a dummy listener inside the container:
+> ```bash
+> docker exec -it bitwarden_prep-identity-1 bash -c "apt-get install -y python3 && python3 -m smtpd -n -c DebuggingServer localhost:25 &"
+> ```
+
+After running `get_apikey.py`, `fuzzer.env` contains one of:
+- `AUTH_TOKEN` — raw JWT (Void sends `Authorization: Bearer <token>`)
+- `AUTH_HEADERS_JSON` — JSON object of header → value
+- `AUTH_HEADER` — legacy single-header shortcut
+
+All three formats are accepted by Void without modification.
+
+---
+
+## Step 5: Create an Auth Identity File
+
+For access-control fuzzing (finding IDOR, cross-user bugs), create an auth identity file with multiple users. The script below reads `fuzzer.env` and writes `auth.identities.json`:
 
 ```bash
 cd bitwarden_prep
+
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -123,64 +169,91 @@ else:
     raise SystemExit("No supported auth value found in fuzzer.env")
 
 Path("auth.identities.json").write_text(json.dumps({"version": "1", "identities": identities}, indent=2))
+print("Written: auth.identities.json")
 PY
 ```
 
+For a multi-user access-control campaign, run `get_apikey.py` for a second user, then manually add a second identity entry. See [`docs/FUZZER_AUTHENTICATION.md`](docs/FUZZER_AUTHENTICATION.md) for the full auth file schema.
+
 ---
 
-## 5. Наполнение базы тестовыми данными
+## Step 6: Populate the Database with Test Data
 
-Для того чтобы фаззер мог эффективно находить уязвимости в бизнес-логике, база данных должна содержать реальные объекты (папки, пароли/шифры, отправки). В противном случае большинство запросов на изменение (`PUT`, `DELETE`) будут завершаться с ошибкой 404 (Not Found).
+Bitwarden's business logic requires real objects in the database (folders, ciphers, sends) for `PUT`/`DELETE` endpoints to return anything other than 404. The `populate_data.py` script creates them:
 
-Мы автоматизировали этот процесс с помощью скрипта `populate_data.py`. Скрипт генерирует фейковые зашифрованные данные, соответствующие строгим требованиям валидации Bitwarden (правильные base64 IV и Ciphertext).
-
-Для access-control fuzzing лучше наполнять стенд под несколькими пользователями. Тогда в базе появляются объекты разных владельцев, а Void во время multi-auth fuzzing может эффективнее находить IDOR, cross-user и cross-tenant ошибки.
-
-**Как запустить:**
-Если у вас есть `auth.identities.json`, выполните:
 ```bash
 cd bitwarden_prep
+
+# Populate for all identities in auth.identities.json
 python3 populate_data.py --auth-file auth.identities.json
-```
 
-Если identity-файла нет, скрипт сохранит старое поведение и возьмет single-user auth из `fuzzer.env`:
-```bash
-cd bitwarden_prep
+# Single-user fallback (reads fuzzer.env)
 python3 populate_data.py
 ```
 
-Скрипт создаст:
-- Фейковые папки (Folders) для каждого authenticated identity
-- Фейковые записи (Ciphers), привязанные к папкам этого identity
-- Фейковые отправки (Sends)
-- `populated-objects.json` с созданными object IDs, сгруппированными по identity
+**Useful options:**
 
-Guest/anonymous identities автоматически пропускаются, потому что они не могут создавать vault objects. Секреты и токены в `populated-objects.json` не сохраняются.
-
-Полезные опции:
 ```bash
-python3 populate_data.py --auth-file auth.identities.json --identity bitwarden-admin
+# Populate only for one specific identity
+python3 populate_data.py --auth-file auth.identities.json --identity bitwarden-user
+
+# Control object counts
 python3 populate_data.py --auth-file auth.identities.json --folders 5 --ciphers 30 --sends 10
+
+# Dry-run to preview what would be created
 python3 populate_data.py --auth-file auth.identities.json --dry-run
 ```
 
+The script creates:
+- Folders for each authenticated identity
+- Cipher records (encrypted vault items) linked to those folders
+- Send items (secure sharing links)
+- `populated-objects.json` with created object IDs grouped by identity
+
+> Anonymous `guest` identities are skipped automatically. No secrets or tokens are written to `populated-objects.json`.
+
 ---
 
-## 6. Запуск фаззера (Void)
+## Step 7: Compile the Grammar
 
-В `docker-compose.instrumented.yml` уже прописан профиль фаззера. Обратите внимание на настройки volume:
-- `../grammars/bitwarden:/grammar` — грамматика и `templates.export.json`. Если шаблоны уже сгенерированы, можно монтировать read-only; если нужно экспортировать заново, оставьте write-доступ.
-- `../crashes:/fuzzer/crashes` — папка для сохранения найденных крашей и отчетов.
-
-### Сборка и старт через `fuzzer.env`
 ```bash
-# Собираем и запускаем сервис smartfuzzer
+cd ..  # back to upside-fuzzer root
+
+# Download the internal Swagger spec (includes all API routes)
+curl -s http://localhost:4000/specs/internal/swagger.json -o swagger-bitwarden.json
+
+# Sanitize: Bitwarden uses deepObject/nested $ref params unsupported by RESTler
+cd bitwarden_prep
+python3 sanitize_swagger.py internal_swagger.json
+cd ..
+
+# Compile grammar (RESTler + source-aware enhancement)
+./compile-grammar.sh bitwarden_prep/internal_swagger.json --src ./bitwarden_src
+
+# Save grammar files
+mkdir -p grammars/bitwarden
+cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/bitwarden/
+
+# Export templates for the Go fuzzer
+python3 void/export-templates.py \
+  --grammar-dir grammars/bitwarden \
+  --out grammars/bitwarden/templates.export.json
+```
+
+> **Tip:** If you have a security-specific dictionary overlay (`dict.security.json`), merge it with the generated `dict.json` before exporting templates. The security overlay adds Bitwarden-specific payloads for `returnUrl`, `redirect_uri`, device identifiers, base64url tokens, and GUID-heavy paths.
+
+---
+
+## Step 8: Run the Fuzzer
+
+### Standard run (using `fuzzer.env`)
+
+```bash
+cd bitwarden_prep
 docker compose -f docker-compose.instrumented.yml --profile fuzz up smartfuzzer --build -d
 ```
 
-### Рекомендуемый security-прогон с `-auth-file`
-
-Если вы создали `bitwarden_prep/auth.identities.json`, можно запустить одноразовый прогон с явными флагами:
+### Recommended security run (with auth identity file)
 
 ```bash
 docker compose -f docker-compose.instrumented.yml --profile fuzz run --build --rm \
@@ -188,7 +261,6 @@ docker compose -f docker-compose.instrumented.yml --profile fuzz run --build --r
   -v "$PWD/auth.identities.json:/auth/auth.identities.json:ro" \
   smartfuzzer \
   -grammar /grammar \
-  -dict /grammar/dict.security.json \
   -templates-json /grammar/templates.export.json \
   -src /src \
   -auth-file /auth/auth.identities.json \
@@ -214,19 +286,58 @@ docker compose -f docker-compose.instrumented.yml --profile fuzz run --build --r
   -no-ui
 ```
 
-### Просмотр логов и интерфейса фаззера
-Фаззер имеет продвинутый терминальный интерфейс. Подключитесь к логам, чтобы наблюдать за процессом в реальном времени:
-```bash
-docker logs -f bitwarden_prep-smartfuzzer-1
+**What to look for in the logs (when `-no-ui` is omitted):**
+
 ```
-Вы должны увидеть, как метрики `edges`, `corpus` и `crashes` начинают увеличиваться.
+Authenticated (jwt auth available)
+Identities loaded: 3 (mode=weighted guest=true auth_file=true)
+Coverage after reset: 0 edges
+Templates loaded: 142
+Baseline corpus seeded: 142
+```
+
+The metrics `edges`, `corpus`, and `crashes` should start increasing within the first minute.
+
+> **Many 401/403 responses are expected and beneficial.** They prove the fuzzer is testing authorization boundaries by using fuzzed IDs, which stress-tests resource-based access control even when the underlying resource doesn't exist.
 
 ---
 
-## 7. Анализ найденных уязвимостей
+## Step 9: View Results
 
-Все 500-е ошибки (краши) автоматически триажируются и сохраняются в папку `crashes` на вашей хост-машине.
-- **`unique-crashes-*.jsonl`**: Уникальные сгруппированные баги.
-- **`pocs/`**: Готовые bash-скрипты с `curl`-запросами для локального воспроизведения найденного краша.
+```bash
+# Live log (one line per crash)
+docker logs -f bitwarden_prep-smartfuzzer-1
 
-> ⚠️ Важное замечание по безопасности: Использование фаззера и анализ уязвимостей (включая RCE и DDoS вектора) должны проводиться строго в легитимных рамках, на собственных тестовых стендах, в рамках санкционированных исследований.
+# Unique crashes (deduplicated)
+cat ../crashes/unique-crashes-*.jsonl | \
+  python3 -c "import sys,json; [print(json.dumps(json.loads(l),indent=2)) for l in sys.stdin]"
+
+# Generated PoC scripts for manual reproduction
+ls ../crashes/pocs/
+```
+
+Crash records and PoC scripts have sensitive auth headers redacted. Set `AUTH_TOKEN` before replaying a PoC:
+
+```bash
+export AUTH_TOKEN="eyJhbGciOi..."
+bash ../crashes/pocs/poc-<signature>.sh
+```
+
+> ⚠️ **Responsible use:** Fuzzing and vulnerability analysis must be conducted strictly within authorized, self-hosted test environments. Do not run against production or third-party systems.
+
+---
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| MSSQL takes too long | Increase `sleep` to 120 s; check `docker logs bitwarden_prep-mssql-1` |
+| `edges: 0` after requests | Call `POST /shm/create` first |
+| Identity service rejects login | Start a dummy SMTP listener inside `bitwarden_prep-identity-1` (see Step 4 note) |
+| `get_apikey.py` fails | Check API is on port 4000; check `docker compose logs api` for startup errors |
+| Grammar has 0 endpoints | Verify swagger was downloaded with content; re-run sanitize step |
+| All writes are 401/403 | Token may have expired; re-run `get_apikey.py` |
+
+---
+
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Architecture](ARCHITECTURE.md)**

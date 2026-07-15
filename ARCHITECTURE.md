@@ -2,6 +2,8 @@
 
 This document describes the internal design, components, and data flows of the **UpsideFuzz** platform — from source analysis through instrumentation, runtime synchronization, coverage feedback, and coverage-guided fuzzing.
 
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Docs Index](docs/INDEX.md)**
+
 ---
 
 ## High-Level Overview
@@ -313,7 +315,7 @@ The grammar provides:
 
 ## 7. Void Architecture
 
-The production fuzzer is the Go runtime (`void/go/main.go` + `advanced_features.go`). It implements coverage-guided mutation with structured epochs, a seed corpus, adaptive concurrency, and crash triage.
+The production fuzzer is the Go runtime (`void/go/`). It implements coverage-guided mutation with structured epochs, a seed corpus, adaptive concurrency, and crash triage.
 
 ### Component Map
 
@@ -328,12 +330,13 @@ void/go/
 ├── template.go            RESTler grammar parsing and payload rendering
 ├── mutation_engine.go     MOpt-style mutation scheduler and weights
 ├── mutations.go           Concrete mutation categories (sqli, xss, etc)
+├── crash.go               Crash deduplication, signature generation, JSONL logging
 ├── triage.go              Source-aware priority and crash route scoring
-├── poc.go                 PoC shell script and timeline generation
+├── poc.go                 PoC shell scripts and timeline generation
 ├── report.go              Final JSON crash report and findings summary
 ├── minimize.go            Crash minimization and repro verification
-├── identity.go            Auth identities, trace decoration, race probing, and utilities
-├── auth.go                JWT extraction and authentication state
+├── identity.go            Auth identities, multi-identity scheduling, race probing
+├── auth.go                JWT/header/cookie auth state and login fallback
 ├── ui.go                  Live terminal dashboard
 ├── utils.go               HTTP and string utility functions
 ├── types.go               Core data structures (Seed, Config, WorkItem)
@@ -429,7 +432,7 @@ for each batch (N = concurrency):
 | **Direct SHM** (`-direct-shm`) | `mmap.read(bitmap)` on `/coverage_shm/bitmap` | Near-zero |
 | **Per-request header** | `X-Coverage-Delta` response header injected by middleware | Zero overhead per batch |
 
-### Advanced Features (`advanced_features.go`)
+### Advanced Features
 
 | Feature | Description |
 |---------|-------------|

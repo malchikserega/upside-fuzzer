@@ -1,5 +1,7 @@
 # UpsideFuzz Analysis: SimplCommerce
 
+**→ [Back to README](README.md) · [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) · [Docs Index](docs/INDEX.md)**
+
 ## Executive Summary
 A comprehensive security audit of **SimplCommerce** was performed using two consecutive 1-hour fuzzing campaigns:
 1. **Baseline Campaign (1 Hour):** Utilized a default dictionary to map the massive application graph.
@@ -72,3 +74,7 @@ The Professional Dictionary (`dict.json`) specifically targeted:
 4. **Business Logic IDs:** `-1`, `Vendor-0042`
 
 The massive jump from 15 to 44 unique crashes confirms that SimplCommerce's Entity Framework controllers and modular routing are highly susceptible to targeted payload mutations, especially when bypassing the initial CSRF/Auth layers.
+
+---
+
+**→ [Back to README](README.md) · [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md)**

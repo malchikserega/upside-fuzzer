@@ -2,6 +2,8 @@
 
 > Run the full coverage-guided fuzzing pipeline on **BTCPayServer** (Greenfield API) from scratch on any machine.
 
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+
 ---
 
 ## Prerequisites
@@ -157,3 +159,7 @@ cat crashes/unique-crashes-*.jsonl | \
 # Generated PoC scripts
 ls crashes/pocs/
 ```
+
+---
+
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md)**

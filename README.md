@@ -100,12 +100,13 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── template.go         RESTler grammar parsing and payload rendering
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler and weights
 │   │   ├── mutations.go        MOpt payload mutation categories
+│   │   ├── crash.go            Crash deduplication, signature generation, JSONL logging
 │   │   ├── triage.go           Source-aware priority and crash route scoring
 │   │   ├── poc.go              PoC shell script and timeline generation
 │   │   ├── report.go           Final JSON crash report and findings summary
 │   │   ├── minimize.go         Crash minimization and repro verification
-│   │   ├── identity.go         Auth identities, trace decoration, and utilities
-│   │   ├── auth.go             JWT extraction and authentication state
+│   │   ├── identity.go         Auth identities, multi-identity scheduling, race probing
+│   │   ├── auth.go             JWT/header/cookie auth state and login fallback
 │   │   ├── ui.go               Live terminal dashboard
 │   │   ├── utils.go            HTTP and string utility functions
 │   │   └── types.go            Core data structures
@@ -258,7 +259,13 @@ Each unique crash in `unique-crashes-*.jsonl`:
 
 ## Documentation
 
-- **[INSTRUCTIONS.md](INSTRUCTIONS.md)** — Full step-by-step runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine
-- **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** — Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance
-- **[void/README.md](void/README.md)** — Go fuzzer: full CLI reference, startup output guide, build for any platform, cross-compilation guide
+**→ [docs/INDEX.md](docs/INDEX.md)** — Full documentation index with navigation across all guides.
+
+| Document | Description |
+|----------|-------------|
+| **[INSTRUCTIONS.md](INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
+| **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** | Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance |
+| **[void/README.md](void/README.md)** | Go fuzzer: full CLI reference, startup output guide, build for any platform |
+| **[TARGET_CANDIDATES.md](TARGET_CANDIDATES.md)** | Implemented targets and future fuzzing candidates |
+| **[MCP_INTEGRATION_GUIDE.md](MCP_INTEGRATION_GUIDE.md)** | Using MCP to enrich the fuzzer dictionary from live database data |

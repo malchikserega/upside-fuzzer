@@ -2,6 +2,8 @@
 
 Step-by-step runbook for **any .NET 8+ web API** — from source code to coverage-guided fuzzing on a new system.
 
+**→ [Back to README](README.md) · [Architecture](ARCHITECTURE.md) · [Authentication](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+
 ---
 
 ## Table of Contents
@@ -754,3 +756,7 @@ Use these gates to evaluate whether a fuzzing run reached meaningful depth.
 | Fuzzer exits immediately | grammar.py parse error | Check Python syntax: `python3 -c "import grammar"` from grammar dir |
 | `exec: "python3": executable file not found` inside Void | Legacy/custom Void image without Python | Rebuild current `void/Dockerfile.go` or export templates on the host (`void/export-templates.py`); see [Template export](#grammar-folder-and-template-export-for-void) |
 | Void exits at startup (templates JSON missing / load error) | Path from `-templates-json` has no file or stale grammar | Run `export-templates.py` to the exact path your Compose `command` uses, or place `templates.export.json` next to `grammar.py`; see [Template export](#grammar-folder-and-template-export-for-void) and the target quickstarts above |
+
+---
+
+**→ [Back to README](README.md) · [Architecture](ARCHITECTURE.md) · [Authentication](docs/FUZZER_AUTHENTICATION.md) · [Go Fuzzer Reference](void/README.md)**

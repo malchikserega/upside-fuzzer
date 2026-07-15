@@ -2,6 +2,8 @@
 
 > Run the full coverage-guided fuzzing pipeline on **SimplCommerce** (a complex, modular e-commerce application) from scratch on any machine. This guide demonstrates how to inject custom authorization into the fuzzer.
 
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+
 ---
 
 ## Prerequisites
@@ -155,3 +157,7 @@ docker cp simplcommerce_prep-smartfuzzer-1:/fuzzer/summaries .
 ```
 
 You can find the reproduced CURL scripts for any 500 Internal Server Errors in `summaries/report-*.json` and the unique stack traces in `crashes/unique-crashes-*.jsonl`.
+
+---
+
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](SIMPLCOMMERCE_REPORT.md)**

@@ -1,5 +1,7 @@
 # UpsideFuzz Analysis: Bitwarden
 
+**→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Multi-Auth Run Report](BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md) · [Docs Index](docs/INDEX.md)**
+
 ## Executive Summary
 A **30-minute authenticated fuzzing campaign** was executed against the instrumented Bitwarden test stand using UpsideFuzz with direct SHM coverage guidance, a Bitwarden-specific security dictionary, source-aware prioritization, race mode, and aggressive endpoint skipping on crashes.
 
@@ -268,3 +270,7 @@ It shows that UpsideFuzz can:
 The findings are **useful**, **reportable**, and worth manual follow-up, but most are currently in the **DoS / robustness / validation failure** tier rather than clearly **critical**.
 
 That is still a strong result for a 30-minute automated campaign, and it suggests your fuzzer is already very effective at finding the class of bugs that often become deeper authz or logic issues once you add stronger semantic oracles and richer multi-identity state.
+
+---
+
+**→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Multi-Auth Run](BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md)**

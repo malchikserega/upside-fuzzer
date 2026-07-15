@@ -2,6 +2,8 @@
 
 This is the canonical way to pass authentication into Void. Use one auth identity file per target and pass it with `-auth-file` or `AUTH_FILE`.
 
+**→ [Back to README](../README.md) · [Full Runbook](../INSTRUCTIONS.md) · [Docs Index](INDEX.md)**
+
 Copyable example: [`docs/auth.identities.example.json`](auth.identities.example.json).
 
 ```bash
@@ -147,3 +149,7 @@ Some flags look duplicated because they operate at different scopes:
 | `-repro-runs` / `-crash-replay-count` | Repro verifies a finding for reporting. Crash replay keeps fuzzing near a crash to find variants. | Keep repro for final reports. Set `-crash-replay-count 0` for strict no-revisit scans. |
 | `-crash-boost-*` / `-crash-replay-*` | Boost raises scheduler weight for a crashy endpoint. Replay queues concrete follow-up requests. | Keep them for exploitability/depth; disable both for broad scans on very crashy targets. |
 | Sequence flags / `-race-mode` | Sequences build stateful chains. Race mode sends conflicting write bursts found during those chains. | Keep both for business-logic, authz, and state-corruption testing. |
+
+---
+
+**→ [Back to README](../README.md) · [Full Runbook](../INSTRUCTIONS.md) · [Go Fuzzer Reference](../void/README.md)**
