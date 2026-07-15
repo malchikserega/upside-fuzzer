@@ -68,6 +68,15 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ---
 
+## How it Works
+
+**[▶️ View the interactive Fuzzing Pipeline Animation](https://htmlpreview.github.io/?https://github.com/malchikserega/upside-fuzzer/blob/main/pipeline-animation/index.html)**
+
+1. **Semantic Source Extraction (SSE)**: The fuzzer parses the target's `.cs` files to extract validation rules (`[StringLength]`, `[Range]`, custom regexes, enum values) and uses them to intelligently enrich the RESTler black-box grammar.
+2. **IL Rewriting**: The `fuzz-prep-multi.py` script injects a `SharpFuzz` coverage hook into every basic block of the compiled .NET target.
+3. **Direct SHM or HTTP Coverage**: The Go engine reads execution paths in real-time either directly from an mmap'd shared memory bitmap, or via a lightning-fast HTTP endpoint injected into the target's pipeline.
+4. **Stateful Sequence Fanout**: When a `POST` creates a resource (e.g., `invoiceId`), the sequence engine tracks it and fans out subsequent `GET` / `PUT` / `DELETE` requests using that exact identifier.
+
 ## Features
 
 | Category | What it does |
