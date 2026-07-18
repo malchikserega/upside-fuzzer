@@ -1,3 +1,18 @@
+# ── Secrets / credentials (NEVER commit) ──────────────────────────────────────
+# fuzzer.env holds live session cookies / auth tokens used at runtime.
+*.env
+fuzzer.env
+*.secret
+*_cookies.txt
+# Real auth-identity files carry live tokens. Commit only *.example.json templates.
+auth-identities.json
+auth_file.json
+!*.example.json
+
+# ── Vendored / instrumented target repositories ───────────────────────────────
+# Per-target prep trees are large (GBs) and are checked out per run, not tracked.
+*_prep/
+
 # ── OS / IDE ──────────────────────────────────────────────────────────────────
 .DS_Store
 .DS_Store?

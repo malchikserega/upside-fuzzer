@@ -186,12 +186,19 @@ for key, val in source.items():
             values = val if isinstance(val, list) else [val]
             template[key].extend([normalize_scalar(v) for v in values])
         elif key in template and isinstance(template[key], dict):
+            # RESTler deserializes restler_custom_payload_uuid4_suffix as Map<string,string>
+            # (single string suffix per key), NOT Map<string,string list> like the other
+            # payload maps. Emitting a list here makes the compiler throw
+            # "Cannot deserialize mutations dictionary ... Unexpected token: StartArray".
+            suffix_map = key == "restler_custom_payload_uuid4_suffix"
             if isinstance(val, dict):
                 for sub_key, sub_vals in val.items():
                     seq = sub_vals if isinstance(sub_vals, list) else [sub_vals]
-                    template[key][sub_key] = uniq([normalize_scalar(v) for v in seq])
+                    norm = uniq([normalize_scalar(v) for v in seq])
+                    template[key][sub_key] = (norm[0] if norm else "") if suffix_map else norm
             elif isinstance(val, list):
-                template[key][key] = uniq([normalize_scalar(v) for v in val])
+                norm = uniq([normalize_scalar(v) for v in val])
+                template[key][key] = (norm[0] if norm else "") if suffix_map else norm
         continue
 
     values = val if isinstance(val, list) else [val]
@@ -202,6 +209,11 @@ for key, val in source.items():
 for k, v in template.items():
     if isinstance(v, list):
         template[k] = uniq(v)
+    elif k == "restler_custom_payload_uuid4_suffix":
+        # Map<string,string>: values are single strings. Running uniq() on a string
+        # iterates it into characters ("id" -> ["i","d"]), which then serializes as an
+        # array and makes RESTler throw. Keep the string (or first element if a list).
+        template[k] = {dk: (dv[0] if isinstance(dv, list) and dv else (dv if isinstance(dv, str) else "")) for dk, dv in v.items()}
     else:
         template[k] = {dk: uniq(dv) for dk, dv in v.items()}
 

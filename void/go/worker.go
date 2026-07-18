@@ -238,15 +238,19 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 	// returns X-Coverage-Delta / X-Exception-Type in the response — zero extra round-trips.
 	requestID := atomic.AddUint64(&f.requestIDSeq, 1)
 	req.Header.Set("X-Fuzz-Request-Id", "fz-"+strconv.FormatUint(requestID, 36))
-	idHeaders, idToken, _ := f.identityAuth(item.Identity)
-	for k, v := range idHeaders {
-		if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
-			continue
+	// Access-control auth-bypass probes are sent with NO credentials so the
+	// absence of auth alone determines whether access is (wrongly) granted.
+	if !item.NoAuth {
+		idHeaders, idToken, _ := f.identityAuth(item.Identity)
+		for k, v := range idHeaders {
+			if strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") || strings.EqualFold(k, "Transfer-Encoding") {
+				continue
+			}
+			req.Header.Set(k, v)
 		}
-		req.Header.Set(k, v)
-	}
-	if idToken != "" {
-		req.Header.Set("Authorization", "Bearer "+idToken)
+		if idToken != "" {
+			req.Header.Set("Authorization", "Bearer "+idToken)
+		}
 	}
 
 	resp, err := httpClient.Do(req)
@@ -286,9 +290,11 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 		}
 	}
 	exceptionType := headers["X-Exception-Type"]
-	// Fallback: if the header wasn't set (ASP.NET Core exception handler runs above our middleware
-	// and sets HasStarted=true before our finally can add headers), extract the exception class
-	// from the response body. In Development mode ASP.NET returns full stack traces.
+	exceptionMsg := headers["X-Exception-Message"]
+	// Fallback: if the header wasn't set (non-instrumented target, or an older middleware),
+	// extract the exception class from the response body. In Development mode ASP.NET returns
+	// full stack traces. The instrumentor now short-circuits fuzz-request 500s so the header
+	// is reliably present even in production mode.
 	if exceptionType == "" && resp.StatusCode >= 500 {
 		exceptionType = extractExceptionType(body)
 	}
@@ -300,6 +306,7 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 		Latency:       time.Since(t0),
 		CoverageDelta: coverageDelta,
 		ExceptionType: exceptionType,
+		ExceptionMsg:  exceptionMsg,
 	}
 }
 
@@ -312,6 +319,13 @@ func (f *Fuzzer) handleResult(res SendResult) {
 	f.latencySamples++
 	f.latencyTotalMS += float64(res.Latency.Milliseconds())
 	f.completedSinceCV++
+
+	// Access-control probes bypass the normal crash/learn/coverage path: they are
+	// evaluated purely for authorization outcome.
+	if res.Item.OracleKind != "" {
+		f.handleOracleResult(res)
+		return
+	}
 
 	edgeShare := 0
 	// Prefer per-request delta from X-Coverage-Delta response header (exact attribution).
@@ -420,6 +434,9 @@ func (f *Fuzzer) handleResult(res SendResult) {
 	} else if res.Status == 401 || res.Status == 403 {
 		f.recordAuthFailure(res.Item.Method, ep.Path, res.Status, res.Body)
 		f.recordClientErrorSample(res.Item.Method, ep.Path, res.Status, res.Body)
+		// Auth-bypass precondition: remember that this endpoint enforces auth. "strong"
+		// when the rejected request itself carried no effective credentials (guest).
+		f.markAuthRequired(res.Item.Method, res.Item.Path, !f.identityIsAuthed(res.Item.Identity))
 		// Auto re-authenticate when a token has expired (persistent 401 stream on any endpoint).
 		// Threshold of 9 avoids hammering auth on the very first 401; 30s cooldown prevents tight loops.
 		if st := f.authBlocked[endpointKey(res.Item.Method, ep.Path)]; st != nil && st.Count == 9 {
@@ -472,7 +489,17 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		if f.cfg.RaceMode {
 			f.enqueueRaceBurst(res.Item)
 		}
+		// Access-control oracles: replay this successful resource request under
+		// other identities / no auth to detect BOLA/IDOR and broken authentication.
+		f.maybeEnqueueAccessProbes(res)
+		// Mass-assignment: re-send this successful write with privileged fields over-posted.
+		f.maybeEnqueueMassAssignProbe(res)
 	}
+
+	// Positive injection oracles on non-crash responses (reflected XSS, evaluated
+	// SSTI, time-based SQLi). 5xx signals are handled by crash triage.
+	f.checkInjectionOracle(res)
+
 	if !f.coverageSaturationWarned {
 		if sat := f.coverageSaturationPct(); sat >= 98.0 && f.coverageCapacity > 0 {
 			f.coverageSaturationWarned = true

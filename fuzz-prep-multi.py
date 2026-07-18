@@ -311,14 +311,19 @@ def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path
 
         print(f"  Detected build stage: {source_stage}, runtime stage: {runtime_stage or '(unnamed)'}")
 
-        # Deduplicate to prevent "already instrumented" errors
+        # Deduplicate to prevent "already instrumented" errors.
+        # --instrument-all-user-code rewrites every non-framework/non-generated type in
+        # each of the project's own assemblies, instead of a heuristic namespace allowlist.
+        # This avoids the "namespace not listed -> code silently uninstrumented" blind spot.
+        # Fail-loud (exit 1) so an under-instrumented image never ships unnoticed.
         unique_dlls = sorted(list(set(dll_names)))
         instrument_cmds = "\n".join([
             f'RUN if [ -f {publish_dir}/{dll} ]; then '
-            f'echo "Instrumenting {dll}"; '
+            f'echo "Instrumenting {dll} (all user code)"; '
             f'DOTNET_ROLL_FORWARD=Major dotnet /instrumentor/bin/instrumentor.dll {publish_dir}/{dll} '
-            f'--config /instrumentor/bin/namespaces.json; '
-            f'else echo "Skipping {dll} (not found)"; fi'
+            f'--instrument-all-user-code '
+            f'|| {{ echo "FATAL: instrumentation failed for {dll}"; exit 1; }}; '
+            f'else echo "WARN: {dll} not found (skipping)"; fi'
             for dll in unique_dlls
         ])
 
@@ -879,6 +884,22 @@ namespace {ns_prefix}.Helpers
             SyncSharpFuzz();
         }}
 
+        // SanitizeHeader makes an arbitrary exception string safe as an HTTP header
+        // value: strips CR/LF/control chars and truncates. Exception messages routinely
+        // contain newlines and non-ASCII, which would throw when assigned to a header.
+        private static string SanitizeHeader(string s)
+        {{
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new System.Text.StringBuilder(Math.Min(s.Length, 1024));
+            foreach (var c in s)
+            {{
+                if (sb.Length >= 1024) break;
+                if (c == '\\r' || c == '\\n' || c == '\\t') {{ sb.Append(' '); continue; }}
+                if (c >= 32 && c < 127) sb.Append(c);
+            }}
+            return sb.ToString();
+        }}
+
         public static IApplicationBuilder UseCoverageMiddleware(this IApplicationBuilder app)
         {{
             Initialize();
@@ -894,11 +915,34 @@ namespace {ns_prefix}.Helpers
                     requestId = "default-" + Guid.NewGuid().ToString("N").Substring(0, 8);
 
                 string exceptionTypeName = null;
+                string exceptionMessage = null;
+                bool isFuzzRequest = !string.IsNullOrEmpty(context.Request.Headers["X-Fuzz-Request-Id"]);
                 int before = GetCurrentEdgeCount();
                 try {{
                     await next();
                 }} catch (Exception ex) {{
-                    exceptionTypeName = ex.GetType().Name;
+                    exceptionTypeName = ex.GetType().FullName;
+                    exceptionMessage = ex.Message;
+                    // PRODUCTION-MODE FIX: in non-Development mode the app's exception handler
+                    // starts the response (Response.HasStarted = true) and clears headers before
+                    // our finally block runs — losing X-Exception-Type on ~all prod 500s. For
+                    // FUZZ requests only, short-circuit here and emit our own 500 carrying the
+                    // exception type + message. Real traffic (no X-Fuzz-Request-Id) is untouched:
+                    // we re-throw so the app's normal error handling still runs for it.
+                    if (isFuzzRequest && !context.Response.HasStarted) {{
+                        try {{
+                            context.Response.Clear();
+                            context.Response.StatusCode = 500;
+                            int aftr = GetCurrentEdgeCount();
+                            context.Response.Headers["X-Coverage-Delta"] = (aftr - before).ToString();
+                            context.Response.Headers["X-Coverage-Edges"] = aftr.ToString();
+                            context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exceptionTypeName);
+                            context.Response.Headers["X-Exception-Message"] = SanitizeHeader(exceptionMessage);
+                            context.Response.ContentType = "application/json";
+                            await context.Response.WriteAsync("{{\"error\":\"unhandled_exception\"}}");
+                        }} catch {{ }}
+                        return;
+                    }}
                     throw;
                 }} finally {{
                     int after = GetCurrentEdgeCount();
@@ -910,7 +954,9 @@ namespace {ns_prefix}.Helpers
                             context.Response.Headers["X-Coverage-Delta"] = delta.ToString();
                             context.Response.Headers["X-Coverage-Edges"] = after.ToString();
                             if (exceptionTypeName != null)
-                                context.Response.Headers["X-Exception-Type"] = exceptionTypeName;
+                                context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exceptionTypeName);
+                            if (exceptionMessage != null)
+                                context.Response.Headers["X-Exception-Message"] = SanitizeHeader(exceptionMessage);
                         }}
                     }} catch {{ }}
                     // Bounded cleanup to prevent unbounded memory growth under sustained fuzzing.
@@ -1196,6 +1242,55 @@ def inject_multi_shm_endpoints(result: MultiAnalysisResult, output_path: Path):
     print(f"  Injected SHM into {main_proj.name}/Program.cs")
 
 
+def generate_coverage_smoke_test(result: MultiAnalysisResult, output_path: Path):
+    """Write verify_coverage.sh — a runtime check that instrumentation actually
+    records edges. Run it AFTER the stand is up; it fails loudly if the coverage
+    middleware/SHM is not active, catching the entire class of silently-broken
+    coverage that a build-time script cannot see."""
+    script = r"""#!/usr/bin/env bash
+# AUTO-GENERATED by fuzz-prep-multi.py — coverage smoke test.
+# Primary check is /shm/coverage (reliable). The per-response X-Coverage-* header is
+# best-effort only and is often absent on fast endpoints (ASP.NET starts the response
+# before our middleware's finally runs), so its absence does NOT mean coverage is broken.
+# Usage: ./verify_coverage.sh [BASE_URL] [WARMUP_ENDPOINT]
+set -euo pipefail
+
+BASE="${1:-http://localhost:4000}"
+WARM="${2:-/alive}"
+
+echo "1) Ensuring SHM is synced ..."
+curl -fsS -X POST "${BASE}/shm/create" >/dev/null 2>&1 || true
+
+echo "2) Warming up ${BASE}${WARM} ..."
+for i in 1 2 3; do
+  curl -fsS -H "X-Fuzz-Request-Id: coverage-smoke-$(date +%s)-$i" "${BASE}${WARM}" >/dev/null 2>&1 || true
+done
+
+echo "3) Reading /shm/coverage ..."
+COV="$(curl -fsS "${BASE}/shm/coverage" || true)"
+echo "   ${COV:-<no response>}"
+
+EDGES="$(printf '%s' "$COV" | grep -oE '"edges"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
+
+if [ -z "${EDGES:-}" ]; then
+  echo "FAIL: /shm/coverage returned no edges count — SHM endpoints not wired or wrong image."
+  exit 1
+fi
+if [ "${EDGES}" -le 0 ]; then
+  echo "FAIL: edges=0 — instrumentation ran as a no-op (check build log for '[instrumentor] Done: instrumented=0')."
+  exit 1
+fi
+echo "OK: coverage is active (edges=${EDGES}). Instrumentation verified."
+"""
+    dest = output_path / "verify_coverage.sh"
+    dest.write_text(script, encoding="utf-8")
+    try:
+        dest.chmod(0o755)
+    except Exception:
+        pass
+    print(f"  Wrote coverage smoke test: {dest.name} (run after the stand is up)")
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -1221,6 +1316,7 @@ def main() -> int:
         generate_multi_docker_configs(result, out_path)
         generate_multi_coverage_helper(result, out_path)
         inject_multi_shm_endpoints(result, out_path)
+        generate_coverage_smoke_test(result, out_path)
 
         print(f"\n  Multi-Project Preparation Complete for Solution: {result.solution_name}")
         print(f"  Instrumented Projects: {result.instrumented_projects}")

@@ -84,9 +84,12 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 | **Instrumentation** | Multi-project .NET solution support — instruments all business-logic DLLs, skips tests/migrations/generated code |
 | **Coverage** | 256KB SHM bitmap shared across all DLLs via reflection — file-backed mmap, zero HTTP overhead in Docker sidecar mode |
 | **Grammar** | OpenAPI → RESTler grammar → enhanced with enums, format constraints, C# `[Range]`/`[StringLength]`/FluentValidation, multipart |
-| **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories |
+| **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories (incl. .NET `$type` deserialization gadgets) |
 | **Sequences** | Producer→consumer chains (POST→GET→PUT→DELETE), runtime value extraction, configurable fanout |
 | **Bug finding** | Crash triage, repro verification, payload minimization, PoC generation, race condition probing, multi-identity auth |
+| **Vulnerability oracles** | Beyond HTTP 500s: **BOLA/IDOR + broken-auth** via cross-identity and no-credential replay; **mass-assignment** via privileged-field over-posting; **positive injection** detection (time-based SQLi, evaluated SSTI, reflected XSS) |
+| **Root-cause clustering** | Collapses thousands of per-payload crash signatures into a handful of distinct bugs by normalized exception message + top application stack frame (`distinct_root_causes` in the report) |
+| **Honest triage** | `likely_vuln` requires a real exploitation signal; unhandled-exception 500s are `confirmed_unhandled_exception`; DI failures are `target_misconfiguration`; malformed-input parse errors are down-ranked |
 | **Auth** | Documented auth identity files, JWT/API-key/cookie/header support, weighted multi-identity scheduling, anti-forgery token harvesting |
 
 ---
@@ -110,6 +113,8 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler and weights
 │   │   ├── mutations.go        MOpt payload mutation categories
 │   │   ├── crash.go            Crash deduplication, signature generation, JSONL logging
+│   │   ├── cluster.go          Root-cause clustering (many signatures → one bug)
+│   │   ├── oracle.go           BOLA/IDOR + auth-bypass + positive injection oracles
 │   │   ├── triage.go           Source-aware priority and crash route scoring
 │   │   ├── poc.go              PoC shell script and timeline generation
 │   │   ├── report.go           Final JSON crash report and findings summary
@@ -229,10 +234,19 @@ cat void/crashes/unique-crashes-*.jsonl | \
 
 ## Fuzzer Key Flags
 
-All bug-finding features are **on by default**. You only need flags to tune or disable:
+All bug-finding features are **on by default**. The fastest way to start is a **profile**:
+
+```bash
+./void/go/void -profile security -auth-file auth.json   # vuln hunting (oracles + multi-identity)
+./void/go/void -profile deep                            # thorough 60-min scan
+./void/go/void -profile fast                            # CI smoke (max throughput)
+```
+
+A profile only sets knobs you didn't pass yourself — any individual flag below still overrides it.
 
 | Flag | Default | Notes |
 |------|---------|-------|
+| `-profile` | empty | `fast` \| `deep` \| `security` preset bundle (individual flags win) |
 | `-direct-shm` | `false` | Enable in Docker sidecar mode |
 | `-time-budget` | `10` min | Set 60–120 for thorough scans |
 | `-concurrency` | `10` | Raise to 32–64 for fast APIs |
@@ -241,6 +255,13 @@ All bug-finding features are **on by default**. You only need flags to tune or d
 | `-skip-endpoint-on-500` | `false` | Set `true` if infra returns known 500s |
 | `-crash-triage=false` | — | Disable for max throughput in CI |
 | `-repro-runs 0` | — | Skip repro verification |
+| `-access-probe` | `true` | Master toggle: BOLA + auth-bypass + mass-assignment (most valuable with `-auth-file`) |
+| `-probe-bola` | `true` | Cross-identity BOLA/IDOR replay |
+| `-probe-auth-bypass` | `true` | No-credential replay — only fires on endpoints already seen returning 401/403 to unauth (no public-endpoint false positives) |
+| `-probe-mass-assign` | `true` | Over-post privileged fields on writes |
+| `-access-probe-prob` | `0.5` | Probability of firing access-control probes after a successful resource request |
+| `-injection-oracle` | `true` | Positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS) |
+| `-sqli-time-threshold` | `1.5` s | Latency (also ≥3× baseline) that flags a sleep/benchmark SQLi payload |
 
 Full reference: `./void/go/void --help` or [void/README.md](void/README.md)
 
@@ -257,12 +278,23 @@ Each unique crash in `unique-crashes-*.jsonl`:
   "method": "PUT",
   "path": "/v1/resource/0",
   "mutation": "sqli",
-  "triage": {"classification": "needs_review", "severity_score": 5},
+  "triage": {"classification": "confirmed_unhandled_exception", "severity_score": 6},
   "repro": {"stable_reproducible": true, "stability_pct": "100.0"},
   "minimized": {"path": "/v1/resource/0", "payload": ""},
   "poc_file": "./crashes/pocs/poc-7ecd321e.sh"
 }
 ```
+
+**Classification tiers** (see `triage.go` / `oracle.go`):
+
+| Classification | Meaning |
+|----------------|---------|
+| `likely_vuln_high` / `likely_vuln` | A concrete exploitation signal fired — BOLA/IDOR, broken auth, time-based SQLi, evaluated SSTI, reflected XSS, file read, SSRF |
+| `confirmed_unhandled_exception` | Reproducible 500 with a backend stack trace — a robustness/DoS bug, not a proven vulnerability |
+| `needs_review` | A 500 that could not be attributed (incl. down-ranked malformed-input parse errors) |
+| `target_misconfiguration` | DI/service-resolution failure from how the image was built — excluded from the vuln count |
+
+Access-control findings additionally carry an `access_control: true` field with `origin_identity` → `shadow_identity`; the report's `access_control_findings` and `distinct_root_causes` counters summarize the run.
 
 ---
 

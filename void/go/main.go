@@ -15,6 +15,7 @@ import (
 func parseFlags() Config {
 	nowTS := time.Now().Format("20060102-150405")
 	cfg := Config{}
+	flag.StringVar(&cfg.Profile, "profile", "", "Preset knob bundle: fast | deep | security. Individual flags you pass still override the profile.")
 	flag.StringVar(&cfg.GrammarDir, "grammar", ".", "Path to directory containing grammar.py and dict.json")
 	flag.StringVar(&cfg.SourceDir, "src", "", "Path to source tree for source-aware endpoint prioritization")
 	flag.StringVar(&cfg.DictPath, "dict", "", "Path to custom JSON dictionary")
@@ -98,7 +99,22 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.SummaryFile, "summary-file", filepath.Join("./summaries", "summary-"+nowTS+".json"), "Path to run summary JSON")
 	flag.StringVar(&cfg.ReportFile, "report-file", "", "Path to structured crash report JSON (default: derived from --summary-file)")
 	flag.IntVar(&cfg.BootstrapMax, "bootstrap-max", 20, "Max GET requests in runtime bootstrap harvest")
+	flag.BoolVar(&cfg.AccessProbe, "access-probe", true, "Master toggle for access-control oracles (BOLA + auth-bypass + mass-assignment)")
+	flag.BoolVar(&cfg.ProbeBOLA, "probe-bola", true, "Cross-identity BOLA/IDOR replay (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeAuthBypass, "probe-auth-bypass", true, "No-credential replay; only fires on endpoints that already returned 401/403 to unauth (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeMassAssign, "probe-mass-assign", true, "Privileged-field over-posting on writes (requires -access-probe)")
+	flag.Float64Var(&cfg.AccessProbeProb, "access-probe-prob", 0.5, "Probability of firing access-control probes after a successful resource-scoped request")
+	flag.IntVar(&cfg.AccessProbeMaxPerEndpoint, "access-probe-max-per-endpoint", 6, "Max access-control probes queued per endpoint per run")
+	flag.IntVar(&cfg.AccessProbeQueueMax, "access-probe-queue-max", 256, "Global max queued access-control probes")
+	flag.BoolVar(&cfg.InjectionOracle, "injection-oracle", true, "Enable positive injection oracles (time-based SQLi, SSTI arithmetic, reflection)")
+	flag.Float64Var(&cfg.SQLiTimeThresholdSec, "sqli-time-threshold", 1.5, "Absolute latency (seconds) above which a sleep/benchmark SQLi payload is flagged (also requires >=3x baseline)")
 	flag.Parse()
+
+	// Apply the preset profile ONLY to knobs the user did not explicitly set,
+	// so any individual flag the user passed still wins.
+	setFlags := map[string]bool{}
+	flag.Visit(func(fl *flag.Flag) { setFlags[fl.Name] = true })
+	applyProfile(&cfg, setFlags)
 
 	cfg.GrammarDir = absPath(cfg.GrammarDir)
 	cfg.SourceDir = absPath(cfg.SourceDir)
@@ -187,7 +203,78 @@ func parseFlags() Config {
 	if cfg.UIWidth > 0 {
 		cfg.UIWidth = clampInt(cfg.UIWidth, 80, 200)
 	}
+	cfg.AccessProbeProb = clampFloat(cfg.AccessProbeProb, 0.0, 1.0)
+	cfg.AccessProbeMaxPerEndpoint = maxInt(0, cfg.AccessProbeMaxPerEndpoint)
+	cfg.AccessProbeQueueMax = maxInt(1, cfg.AccessProbeQueueMax)
+	cfg.SQLiTimeThresholdSec = math.Max(0.5, cfg.SQLiTimeThresholdSec)
 	return cfg
+}
+
+// applyProfile fills in a curated set of knobs for the named preset, but only
+// for flags the user did not explicitly pass (tracked via flag.Visit). This keeps
+// the full 90-flag surface available while giving newcomers three good starting points.
+func applyProfile(cfg *Config, set map[string]bool) {
+	p := strings.ToLower(strings.TrimSpace(cfg.Profile))
+	if p == "" {
+		return
+	}
+	setB := func(name string, target *bool, v bool) {
+		if !set[name] {
+			*target = v
+		}
+	}
+	setF := func(name string, target *float64, v float64) {
+		if !set[name] {
+			*target = v
+		}
+	}
+	setI := func(name string, target *int, v int) {
+		if !set[name] {
+			*target = v
+		}
+	}
+	switch p {
+	case "fast":
+		// Maximize throughput (CI smoke): skip expensive per-crash work and oracles.
+		setI("repro-runs", &cfg.ReproRuns, 0)
+		setB("minimize-crash", &cfg.MinimizeCrash, false)
+		setB("access-probe", &cfg.AccessProbe, false)
+		setB("probe-bola", &cfg.ProbeBOLA, false)
+		setB("probe-auth-bypass", &cfg.ProbeAuthBypass, false)
+		setB("probe-mass-assign", &cfg.ProbeMassAssign, false)
+		setB("injection-oracle", &cfg.InjectionOracle, false)
+		setB("race-mode", &cfg.RaceMode, false)
+		setF("sequence-prob", &cfg.SequenceProb, 0.10)
+	case "deep":
+		// Balanced thorough scan: full crash analysis + oracles + stateful chains.
+		setF("time-budget", &cfg.TimeBudgetMinutes, 60)
+		setI("repro-runs", &cfg.ReproRuns, 5)
+		setB("minimize-crash", &cfg.MinimizeCrash, true)
+		setF("sequence-prob", &cfg.SequenceProb, 0.50)
+		setB("access-probe", &cfg.AccessProbe, true)
+		setB("probe-bola", &cfg.ProbeBOLA, true)
+		setB("probe-auth-bypass", &cfg.ProbeAuthBypass, true)
+		setB("probe-mass-assign", &cfg.ProbeMassAssign, true)
+		setB("injection-oracle", &cfg.InjectionOracle, true)
+		setB("race-mode", &cfg.RaceMode, true)
+	case "security":
+		// Vulnerability-hunting: prioritize the access-control / injection oracles
+		// and multi-identity coverage over raw throughput.
+		setB("multi-identity", &cfg.MultiIdentity, true)
+		setB("identity-include-guest", &cfg.IdentityIncludeGuest, true)
+		setB("access-probe", &cfg.AccessProbe, true)
+		setB("probe-bola", &cfg.ProbeBOLA, true)
+		setB("probe-auth-bypass", &cfg.ProbeAuthBypass, true)
+		setB("probe-mass-assign", &cfg.ProbeMassAssign, true)
+		setF("access-probe-prob", &cfg.AccessProbeProb, 0.75)
+		setB("injection-oracle", &cfg.InjectionOracle, true)
+		setB("source-aware-priority", &cfg.SourceAwarePriority, true)
+		setF("sequence-prob", &cfg.SequenceProb, 0.50)
+		setB("race-mode", &cfg.RaceMode, true)
+		setB("crash-triage", &cfg.CrashTriage, true)
+	default:
+		fmt.Fprintf(os.Stderr, "warning: unknown -profile %q (expected fast|deep|security); ignoring\n", p)
+	}
 }
 
 func main() {

@@ -98,6 +98,16 @@ type Config struct {
 	SummaryFile                 string
 	ReportFile                  string
 	BootstrapMax                int
+	AccessProbe                 bool // master toggle for all access-control probes
+	ProbeBOLA                   bool // cross-identity BOLA/IDOR replay
+	ProbeAuthBypass             bool // no-credential replay (gated by 401/403 precondition)
+	ProbeMassAssign             bool // privileged-field over-posting
+	AccessProbeProb             float64
+	AccessProbeMaxPerEndpoint   int
+	AccessProbeQueueMax         int
+	InjectionOracle             bool
+	SQLiTimeThresholdSec        float64
+	Profile                     string
 }
 
 type Segment struct {
@@ -152,6 +162,8 @@ type CrashRecord struct {
 	TS            string         `json:"ts"`
 	ElapsedSec    string         `json:"elapsed_secs"`
 	Signature     string         `json:"signature,omitempty"`
+	ClusterKey    string         `json:"cluster_key,omitempty"`
+	ClusterLabel  string         `json:"cluster_label,omitempty"`
 	Status        int            `json:"status_code"`
 	Method        string         `json:"method"`
 	Path          string         `json:"path"`
@@ -329,6 +341,13 @@ type WorkItem struct {
 	EpochIdx      int
 	SeqDepth      int
 	SeqState      *SequenceState
+	// Access-control oracle fields (set only on replayed probes; see oracle.go).
+	OracleKind           string // "" for normal items, else "bola" | "authbypass"
+	NoAuth               bool   // strip all credentials from this probe
+	OracleOriginIdentity string
+	OracleOriginStatus   int
+	OracleOriginFP       string
+	OracleOriginBodyLen  int
 }
 
 type SendResult struct {
@@ -340,6 +359,7 @@ type SendResult struct {
 	Err           error
 	CoverageDelta int    // per-request edge delta from X-Coverage-Delta response header
 	ExceptionType string // .NET exception type from X-Exception-Type response header
+	ExceptionMsg  string // .NET exception message from X-Exception-Message response header (prod-mode)
 }
 
 type Epoch struct {

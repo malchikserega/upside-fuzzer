@@ -10,6 +10,37 @@ import (
 // report.go — Final crash report building: findings summary, structured
 // JSON bug report, and classification roll-up.
 
+// clusterRollup returns root-cause clusters sorted by severity then variant count.
+// This is the headline number a human should read: distinct bugs, not raw signatures.
+func (f *Fuzzer) clusterRollup() []map[string]any {
+	out := make([]map[string]any, 0, len(f.clusters))
+	for _, ci := range f.clusters {
+		out = append(out, map[string]any{
+			"cluster_key":              ci.Key,
+			"label":                    ci.Label,
+			"classification":           ci.Class,
+			"max_severity_score":       ci.MaxSeverity,
+			"variant_signatures":       ci.Variants,
+			"has_exception_detail":     ci.HasException,
+			"representative_signature": ci.RepSignature,
+			"representative_endpoint":  strings.ToUpper(ci.RepMethod) + " " + ci.RepPath,
+			"status_code":              ci.Status,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		si, sj := toInt(out[i]["max_severity_score"]), toInt(out[j]["max_severity_score"])
+		if si != sj {
+			return si > sj
+		}
+		vi, vj := toInt(out[i]["variant_signatures"]), toInt(out[j]["variant_signatures"])
+		if vi != vj {
+			return vi > vj
+		}
+		return toString(out[i]["cluster_key"]) < toString(out[j]["cluster_key"])
+	})
+	return out
+}
+
 func (f *Fuzzer) findingsReportData() (map[string]any, []map[string]any) {
 	classCounts := map[string]int{}
 	devMode := 0
@@ -32,6 +63,7 @@ func (f *Fuzzer) findingsReportData() (map[string]any, []map[string]any) {
 		}
 		top = append(top, map[string]any{
 			"signature":       fd.Signature,
+			"cluster_key":     fd.ClusterKey,
 			"method":          fd.Method,
 			"path":            fd.Path,
 			"status":          fd.Status,
@@ -59,8 +91,12 @@ func (f *Fuzzer) findingsReportData() (map[string]any, []map[string]any) {
 		return toString(top[i]["signature"]) < toString(top[j]["signature"])
 	})
 
+	clusters := f.clusterRollup()
 	summary := map[string]any{
 		"total_findings":         len(f.findings),
+		"distinct_root_causes":   len(clusters),
+		"root_cause_clusters":    clusters,
+		"access_control_findings": f.accessFindings,
 		"classification_counts":  classCounts,
 		"dev_mode_findings":      devMode,
 		"stable_repro_findings":  stable,
@@ -123,6 +159,8 @@ func (f *Fuzzer) buildStructuredCrashReport(triageSummary map[string]any) map[st
 		bugs = append(bugs, map[string]any{
 			"id":             i + 1,
 			"signature":      fd.Signature,
+			"cluster_key":    fd.ClusterKey,
+			"cluster_label":  fd.ClusterLabel,
 			"timestamp":      fd.TS,
 			"elapsed_secs":   fd.ElapsedSec,
 			"classification": classification,
@@ -173,6 +211,10 @@ func (f *Fuzzer) buildStructuredCrashReport(triageSummary map[string]any) map[st
 			"errors":         f.totalErrors,
 			"crashes_total":  f.totalCrashes,
 			"crashes_unique": f.uniqueCrashes,
+			// distinct_root_causes is the honest "how many real bugs" number:
+			// unique signatures collapsed by normalized exception + top app frame.
+			"distinct_root_causes":    len(f.clusters),
+			"access_control_findings": f.accessFindings,
 			"coverage_edges": f.currentEdges,
 			"coverage_new":   f.currentEdges - f.startEdges,
 			// coverage_baseline_ceiling: edges found after all templates sent unmutated.

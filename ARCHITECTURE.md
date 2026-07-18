@@ -199,15 +199,13 @@ The adapted Dockerfile has 4 stages:
 2. **Probe Injection** — Inserts `SharpFuzz.Common.Trace.OnBranch` call at every basic block entry
 3. **Shared Memory** — Injected code expects `SharpFuzz.Common.Trace.SharedMem` to point to valid memory
 
-### Namespace-Filtered Instrumentation
-The generic instrumentor only instruments types whose full name matches the discovered namespaces in `namespaces.json` (or passed via CLI). Explicitly excluded:
-- `Program`, `Startup` — entry points
-- `Migration`, `DesignTimeDbContext` — EF Core infrastructure
-- `CoverageExtensions` — our own coverage code
-- Auto-generated types (`.g.`, `c__DisplayClass`, `d__`)
-- DTOs, ViewModels, Request/Response models — safe to skip (reduce instrumentation noise)
+### Instrumentation Modes
+The instrumentor has two selection modes; both always exclude entry points (`Program`, `Startup`), EF infra (`Migration`, `DesignTimeDbContext`), our own `CoverageExtensions`, and auto-generated types (`.g.`, `c__DisplayClass`, `d__`).
 
-This prevents instrumenting framework code (which causes crashes) while covering the business logic that matters.
+1. **`--instrument-all-user-code` (recommended, now the default for generated Dockerfiles):** rewrite every type whose full name does NOT start with a framework prefix (`System.`, `Microsoft.`, `Newtonsoft.`, …). Because the DLL list already contains only the target's own business assemblies, this instruments all of the app's code and nothing third-party.
+2. **`namespaces.json` allowlist:** instrument only types whose full name **contains** a listed namespace (substring match via `fullName.Contains`). Convenient but dangerous — any namespace not listed is silently dropped. This is exactly how Bitwarden's entire `Bit.Commercial.*` Secrets Manager code was omitted from coverage: `Bit.Core` is not a substring of `Bit.Commercial.Core`, and the assembly itself was missing from the DLL list.
+
+**Fail-loud + verify:** the generated instrument loop now aborts the build (`exit 1`) if a present DLL fails to instrument, instead of the old silent `|| true`. After bring-up, `verify_coverage.sh` hits an endpoint with an `X-Fuzz-Request-Id` and asserts `X-Coverage-Edges > 0` — a one-command guard against silently-broken coverage.
 
 ---
 
@@ -282,6 +280,9 @@ To achieve zero-overhead tracking in a highly concurrent environment (1,000+ req
 
 **The "Coverage Smearing" Trade-off:**
 In parallel execution, multiple requests might run simultaneously. If Request A and Request B execute concurrently and 5 new edges are found, *both* responses will report a delta and the fuzzer will assign "Energy" to both payloads. While this breaks perfect thread-isolation, it is a deliberate and highly beneficial trade-off. It avoids the catastrophic performance penalty of copying a 256KB SHM array per-request (which would crash ASP.NET throughput) and instead occasionally over-rewards a seed, which the Fenwick tree and evolutionary decay gracefully filter out over time.
+
+**Exception attribution in production mode (`X-Exception-Type` / `X-Exception-Message`):**
+The coverage middleware also reports the .NET exception type and message on 5xx responses. The subtlety: in non-Development mode the app's exception handler starts the response and clears headers *before* the middleware's `finally` block runs, so a header set there is lost — this previously left ~84% of production-mode crashes unattributable. The middleware now detects requests carrying `X-Fuzz-Request-Id` (fuzzer traffic only) and, on an unhandled exception, short-circuits with its own 500 carrying `X-Exception-Type` + `X-Exception-Message` (sanitized: CR/LF and control chars stripped, truncated). Real traffic (no fuzz header) is re-thrown untouched. The Go engine reads both headers; the message feeds `cluster.go`'s root-cause key so clustering stays precise even without a dev-mode stack trace.
 ---
 
 ## 6. Grammar Generation (RESTler + Enhancement)
@@ -331,6 +332,8 @@ void/go/
 ├── mutation_engine.go     MOpt-style mutation scheduler and weights
 ├── mutations.go           Concrete mutation categories (sqli, xss, etc)
 ├── crash.go               Crash deduplication, signature generation, JSONL logging
+├── cluster.go             Root-cause clustering (many signatures → one bug)
+├── oracle.go              BOLA/IDOR + auth-bypass + positive injection oracles
 ├── triage.go              Source-aware priority and crash route scoring
 ├── poc.go                 PoC shell scripts and timeline generation
 ├── report.go              Final JSON crash report and findings summary
@@ -457,11 +460,25 @@ UpsideFuzz assigns a heuristic **Triage Score (0.0 to 10.0)** to every discovere
    - `-1.5` for crashes on purely synthetic/non-existent paths (`/api/fuzzstring`).
    - `-2.0` for generic content-type mismatch noise.
 
-**Classification Labels:**
-- `>= 8.0` (**likely_vuln_high**): Critical vulnerabilities (e.g., 500 error + SQL exception on an admin path).
-- `>= 6.0` (**likely_vuln**): High confidence vulnerabilities.
-- `>= 4.0` (**needs_review**): Standard crashes requiring manual review.
-- `< 4.0` (**noise**): Ignored/Filtered.
+**Classification Labels (honest tiers):**
+A `likely_vuln*` label **requires a concrete exploitation signal** — a bare 500 never earns it.
+- **`likely_vuln_high` / `likely_vuln`**: An exploitation oracle fired (see below) — BOLA/IDOR, broken auth, time-based SQLi, evaluated SSTI, reflected XSS, file read, or SSRF.
+- **`confirmed_unhandled_exception`** (score `>= 6.0`, no exploit signal): Reproducible 500 with a backend stack trace — a robustness/DoS bug, *not* a proven vulnerability.
+- **`needs_review`** (score `>= 4.0`): A 500 that could not be attributed. Malformed-input parse exceptions (bad GUID/base64) are down-ranked into this tier so they stop masquerading as real code bugs.
+- **`target_misconfiguration`**: DI/service-resolution failure (e.g. an unregistered service) — a build/config artifact of the instrumented image, excluded from the vulnerability count.
+- **`noise`** (`< 4.0`): Filtered.
+
+### Root-Cause Clustering (`cluster.go`)
+The per-crash signature folds in path and mutation, so one bug reached from many routes/payloads yields many signatures — massively over-counting distinct bugs (a real run produced 933 "unique" crashes for ~5 actual bugs). `cluster.go` adds a **ClusterKey** that groups crashes by root cause: the normalized backend exception message plus the first *application* stack frame (framework frames skipped). When no exception detail is available (production mode), it falls back to a coarsened `(method, status, path-template)` key. The report exposes `distinct_root_causes` and a `root_cause_clusters` roll-up — the honest "how many real bugs" number.
+
+### Vulnerability Oracles (`oracle.go`)
+Because a 500 is only a robustness signal, UpsideFuzz adds oracles that reuse the multi-identity and mutation machinery to detect *actual* vulnerabilities:
+- **BOLA/IDOR + broken auth:** After any successful resource-scoped request under an authenticated identity, the identical request is replayed under every *other* identity and with *no* credentials. A 2xx returning a real body to a different or anonymous principal is a Broken Object-Level Authorization or broken-authentication finding (`access_control: true`, `origin_identity` → `shadow_identity`). Identical bodies score `likely_vuln_high`; differing 2xx bodies score `likely_vuln` and are flagged for manual verification. **Auth-bypass precondition:** the no-credential probe only fires on endpoints the engine has already seen reject unauthenticated access (401/403) — tracked in `authRequiredEndpoints` with a strength (2 = rejected an unauthenticated caller, 1 = rejected someone). A truly public endpoint never accumulates evidence, so it is never flagged, eliminating the public-endpoint false positive. Each oracle has its own flag (`-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`) under the `-access-probe` master toggle.
+- **Mass assignment:** After a successful write (POST/PUT/PATCH with a JSON object body), the body is re-sent with privileged fields over-posted (`isAdmin`, `role:"SuperAdmin"`, `permissions:["*"]`, `accessLevel:99999`, …). If the server echoes an injected privileged field back with its injected value, it accepted an over-posted field — reported `likely_vuln` (`mass_assignment_privileged_field_accepted`). Values are chosen to be unlikely natural states to keep false positives low.
+- **Positive injection:** On non-crash responses where a security-category payload was applied, the engine detects time-based SQLi (latency ≥ threshold and ≥3× baseline on sleep/benchmark payloads), evaluated SSTI (rare arithmetic markers such as `{{1337*1337}}` → `1787569` present but not merely reflected), and reflected XSS. The mutation registry also includes a `dotnet_deser` category of Json.NET `$type` gadget payloads for insecure-deserialization detection.
+
+### Profiles (`-profile`)
+To tame the 90-flag surface, `-profile fast|deep|security` applies a curated bundle of defaults — but only to flags the user did **not** explicitly pass (tracked via `flag.Visit`), so any individual flag still wins. `security` prioritizes the oracles and multi-identity coverage; `deep` is a balanced thorough scan; `fast` maximizes throughput for CI.
 
 ### Sequence Engine & Fallback Mechanics
 The Sequence Engine actively stitches complex API workflows (e.g., `POST /stores` → extracts ID → `PUT /stores/{id}`). 
@@ -550,6 +567,8 @@ upside-fuzzer/
 │   │   ├── mutations.go        Payload mutation categories
 │   │   ├── auth.go             JWT/header/cookie auth state and login fallback
 │   │   ├── identity.go         Multi-identity scheduling and race helpers
+│   │   ├── cluster.go          Root-cause clustering (many signatures → one bug)
+│   │   ├── oracle.go           BOLA/IDOR + auth-bypass + injection oracles
 │   │   ├── triage.go           Source-aware triage and scoring logic
 │   │   ├── poc.go              PoC shell scripts and timelines
 │   │   ├── report.go           JSON bug report builder

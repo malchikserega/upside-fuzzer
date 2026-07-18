@@ -132,6 +132,17 @@ func (f *Fuzzer) buildWorkItem(epIdx int, ep Epoch) (WorkItem, bool) {
 		return item, true
 	}
 
+	// Access-control probes (BOLA/auth-bypass) are drained eagerly: they carry a
+	// fixed identity (or none) and must not be re-decorated with a fresh one.
+	for len(f.oracleQueue) > 0 {
+		item := f.oracleQueue[0]
+		f.oracleQueue = f.oracleQueue[1:]
+		if len(item.Trace) == 0 {
+			item.Trace = f.extendTrace(nil, item)
+		}
+		return item, true
+	}
+
 	for len(f.sequenceQueue) > 0 && rand.Float64() < clampFloat(f.cfg.SequenceProb, 0.0, 1.0) {
 		item := f.sequenceQueue[0]
 		f.sequenceQueue = f.sequenceQueue[1:]

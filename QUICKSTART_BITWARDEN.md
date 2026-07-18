@@ -97,15 +97,21 @@ curl -s http://localhost:4000/specs/internal/swagger.json | head -c 200
 
 > **Port:** Bitwarden API listens on port `4000` by default. Check `docker-compose.instrumented.yml` if it differs.
 
-**Verify coverage instrumentation:**
+**Verify coverage instrumentation (do this every time — it catches silently-broken coverage):**
 
 ```bash
+# One-command smoke test: hits /alive with a fuzz request-id and asserts edges > 0
+./verify_coverage.sh
+# → OK: coverage is active (edges=N). Instrumentation verified.
+
+# Manual equivalents:
 curl -s -X POST http://localhost:4000/shm/create
 # → {"status":"synced","mode":"file-backed-mmap","bitmap_size":262144,...}
-
 curl -s http://localhost:4000/shm/coverage
 # → {"edges":N,"hits":N}  (edges > 0 confirms instrumentation is active)
 ```
+
+> **Instrumentation completeness:** the build now uses `--instrument-all-user-code` (every non-framework type in the target's own DLLs), not a `namespaces.json` allowlist — so no business namespace is silently dropped. If `verify_coverage.sh` reports `edges=0`, check the build log for `[instrumentor] Done: instrumented=0` (a no-op instrument) before running the fuzzer.
 
 ---
 

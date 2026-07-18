@@ -147,11 +147,21 @@ bool ShouldInstrument(string fullName)
     }
 
     // ── Always skip migrations, entry points, coverage infrastructure ──
+    // Entry-point types AND their nested/generated closures (e.g. Program+<>c) are
+    // excluded: their coverage probes can fire during type-initialization, BEFORE the
+    // coverage middleware binds the SHM bitmap, causing System.AccessViolationException
+    // at startup. This is why blanket --instrument-all-user-code previously crashed
+    // Bitwarden in Bit.Api.Program+<>c..cctor.
     if (fullName.Contains("Migration") ||
         fullName.Contains("DesignTimeDbContext") ||
         fullName.Contains("CoverageExtensions") ||
         fullName.EndsWith(".Program") ||
-        fullName.EndsWith(".Startup"))
+        fullName.EndsWith(".Startup") ||
+        fullName.Contains(".Program+") || fullName.Contains(".Program/") ||
+        fullName.Contains(".Startup+") || fullName.Contains(".Startup/") ||
+        fullName.Contains("+<>c") ||          // compiler lambda-cache classes (static-init)
+        fullName.Contains("<Main>") ||        // top-level-statements entry point
+        fullName.Contains("__GeneratedModule"))
     {
         skippedInfra++;
         return false;

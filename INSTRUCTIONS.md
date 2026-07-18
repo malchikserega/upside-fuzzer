@@ -509,26 +509,27 @@ Some options look like duplicates because they work at different scopes:
 
 ### Security campaign profiles
 
+> **Shortcut:** `-profile security` sets the multi-identity + oracle + source-aware bundle below automatically (any explicit flag you add still overrides it). The vulnerability oracles (`-access-probe`, `-injection-oracle`) are **on by default** and are what turn IDOR / broken-auth / mass-assignment / injection into `likely_vuln` findings rather than just 500s — pair them with a real `-auth-file` for cross-identity BOLA detection.
+
 Access-control / authz campaign for IDOR, tenant isolation, missing role checks, guest-auth bypasses:
 
 ```bash
 docker compose --profile fuzz-go run --rm void \
   -grammar /path/to/grammar \
+  -profile security \
   -auth-file ./auth.identities.json \
-  -identity-mode weighted \
-  -identity-include-guest=true \
-  -source-aware-priority=true \
-  -sequence-prob 0.45 \
+  -access-probe=true -access-probe-prob 0.75 \
   -sequence-max-depth 5 \
   -sequence-fanout 8 \
-  -race-mode=true \
-  -race-prob 0.08 \
-  -race-burst 3 \
   -skip-on-crash \
   -skip-endpoint-on-500 \
   -repro-runs 3 \
   -time-budget 30
 ```
+
+The cross-identity replay is only as strong as your `-auth-file`: provide at least two real identities (plus the auto guest) so BOLA probes have distinct principals to compare. Findings appear with `access_control: true` and `origin_identity` → `shadow_identity`; mass-assignment findings carry `mass_assignment_privileged_field_accepted`.
+
+Each oracle can be toggled independently under the `-access-probe` master switch: `-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`. The auth-bypass probe is self-limiting — it **only** fires on endpoints already observed rejecting unauthenticated access (401/403), so it never flags genuinely public endpoints. Including the auto guest identity (`-identity-include-guest`, on in the `security` profile) helps it learn which endpoints enforce auth faster and raises auth-bypass findings to `likely_vuln_high`.
 
 For very noisy targets where you do not want to revisit crash areas, add:
 
@@ -573,14 +574,17 @@ docker compose --profile fuzz-go run --rm void \
 
 ### Fast-scan profile (CI — maximize throughput, skip slow analysis)
 
+> **Shortcut:** `-profile fast` disables repro/minimize and the oracles for you. The command below adds the throughput-specific tuning on top.
+
 ```bash
 docker compose --profile fuzz-go run --rm void \
   -grammar /path/to/grammar \
+  -profile fast \
   -direct-shm \
   -time-budget 20 \
   -concurrency 64 -max-concurrency 128 \
   -request-timeout 2.5 -coverage-interval 6 \
-  -crash-triage=false -repro-runs 0 -minimize-crash=false \
+  -crash-triage=false \
   -crash-replay-count 0 -crash-boost-requests 0 \
   -no-ui
 ```

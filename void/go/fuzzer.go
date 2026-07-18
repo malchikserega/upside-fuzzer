@@ -75,6 +75,7 @@ type Fuzzer struct {
 
 	learnedByEndpoint    map[string]int
 	uniqueCrashKeys      map[string]struct{}
+	clusters             map[string]*ClusterInfo // root-cause clusters (many signatures -> one bug)
 	crashLog             []map[string]any
 	recentCrashes        []CrashRecord
 	blockedEndpoints     map[string]struct{}
@@ -118,6 +119,16 @@ type Fuzzer struct {
 	crashBoostCount map[string]int
 	// Replay queue: targeted follow-up requests queued after a unique crash.
 	replayQueue []WorkItem
+	// Access-control oracle state (BOLA/IDOR + auth-bypass probes).
+	oracleQueue      []WorkItem
+	accessProbeCount map[string]int
+	aclSeen          map[string]struct{}
+	accessFindings   int
+	// authRequiredEndpoints[endpointKey] = strength of evidence the endpoint
+	// enforces authentication: 2 = rejected an unauthenticated/guest request with
+	// 401/403 (strong), 1 = returned 401/403 to someone (weak). Auth-bypass probes
+	// only fire where this is >= 1, which removes the public-endpoint false positive.
+	authRequiredEndpoints map[string]int
 	// Replay budget consumed per endpoint to prevent single-route monopolization.
 	replayByEndpoint map[string]int
 	// Rate-limit re-auth attempts to avoid hammering the auth endpoint.
@@ -227,6 +238,7 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		clientSamples:        map[string][]string{},
 		learnedByEndpoint:    map[string]int{},
 		uniqueCrashKeys:      map[string]struct{}{},
+		clusters:             map[string]*ClusterInfo{},
 		blockedEndpoints:     map[string]struct{}{},
 		forceFormEndpoints:   map[string]struct{}{},
 		antiForgeryHarvestAt: map[string]time.Time{},
@@ -235,6 +247,10 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		crashBoost:           map[string]int{},
 		crashBoostCount:      map[string]int{},
 		replayQueue:          make([]WorkItem, 0, 64),
+		oracleQueue:           make([]WorkItem, 0, 64),
+		accessProbeCount:      map[string]int{},
+		aclSeen:               map[string]struct{}{},
+		authRequiredEndpoints: map[string]int{},
 		replayByEndpoint:     map[string]int{},
 		identities:           nil,
 		identityOrder:        nil,

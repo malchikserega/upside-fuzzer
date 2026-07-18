@@ -43,6 +43,8 @@ type AuthIdentity struct {
 
 type CrashFinding struct {
 	Signature    string
+	ClusterKey   string
+	ClusterLabel string
 	TS           string
 	ElapsedSec   string
 	Method       string
@@ -593,37 +595,179 @@ func (f *Fuzzer) triageCrash(res SendResult) map[string]any {
 		score += 0.6
 	}
 
+	// Target misconfiguration: a DI/service-resolution failure means the endpoint
+	// 500s because of how the *instrumented image was built* (e.g. Secrets Manager
+	// services not registered), not because of a bug in the application logic.
+	// These must be excluded from the vulnerability count entirely.
+	misconfig := false
+	for _, m := range []string{
+		"unable to resolve service for type", "no service for type",
+		"unable to activate type", "cannot instantiate implementation type",
+		"unable to resolve service",
+	} {
+		if strings.Contains(bodyLow, m) {
+			misconfig = true
+			break
+		}
+	}
+	if misconfig {
+		reasons = append(reasons, "target_misconfiguration")
+	}
+
+	// Benign input-validation 500s: the app threw while PARSING a malformed
+	// route/body value (bad GUID, bad base64, etc.) before any business logic ran.
+	// These are low-value robustness bugs and dominate raw crash counts; cap them
+	// so they never masquerade as confirmed unhandled exceptions in real code.
+	benignParse := false
+	for _, m := range []string{
+		"unrecognized guid format", "guid should contain 32 digits",
+		"byte array for guid must be", "illegal base64url string",
+		"illegal base64 string", "the input is not a valid base-64 string",
+		"could not be parsed", "was not recognized as a valid",
+		"input string was not in a correct format",
+	} {
+		if strings.Contains(bodyLow, m) {
+			benignParse = true
+			break
+		}
+	}
+	if benignParse {
+		score -= 2.5
+		reasons = append(reasons, "benign_input_validation")
+	}
+
+	// Exploitation signals: concrete evidence that a payload actually did something
+	// dangerous — not merely that the server threw a 500. Only these justify a
+	// "likely_vuln" rating. A bare unhandled exception is a robustness bug.
+	exploitReasons := exploitationSignals(res)
+	hasExploitSignal := len(exploitReasons) > 0
+	reasons = append(reasons, exploitReasons...)
+	if hasExploitSignal {
+		score += 3.0
+	}
 	score = clampFloat(score, 0.0, 10.0)
 
-	// Pre-auth crashes (deserialization/model_binding) are capped at needs_review:
-	// they prove the app is unstable but do NOT demonstrate unauthorized access to
-	// business logic. Elevating them to likely_vuln would inflate risk ratings.
+	// Pre-auth crashes (deserialization/model_binding) prove instability but do NOT
+	// demonstrate unauthorized access to business logic.
 	preAuth := crashLayer == "deserialization" || crashLayer == "model_binding"
 
+	// Classification honesty:
+	//   likely_vuln*                -> requires a real exploitation signal.
+	//   confirmed_unhandled_exception -> reproducible 500 with a backend stack trace,
+	//                                    i.e. a robustness/DoS bug, NOT a proven vuln.
+	//   needs_review                -> a 500 we could not attribute.
+	//   target_misconfiguration     -> build/config artifact, excluded from vuln count.
+	//   noise                       -> filtered (content-type, synthetic paths, etc.).
 	classification := "noise"
 	switch {
-	case score >= 8.0 && !preAuth:
+	case misconfig && !hasExploitSignal:
+		classification = "target_misconfiguration"
+	case hasExploitSignal && score >= 8.0 && !preAuth:
 		classification = "likely_vuln_high"
-	case score >= 6.0 && !preAuth:
+	case hasExploitSignal && score >= 6.0 && !preAuth:
 		classification = "likely_vuln"
+	case benignParse && !hasExploitSignal:
+		// Malformed-input parse exception: cap at needs_review regardless of score.
+		if score >= 4.0 {
+			classification = "needs_review"
+		}
+	case score >= 6.0 && !preAuth:
+		classification = "confirmed_unhandled_exception"
 	case score >= 4.0:
 		classification = "needs_review"
 	}
 	impact := "stability"
-	if strings.Contains(pathLow, "auth") || strings.Contains(pathLow, "login") || strings.Contains(pathLow, "role") || strings.Contains(pathLow, "admin") {
+	if hasExploitSignal {
+		impact = "exploitable"
+	} else if misconfig {
+		impact = "target_config"
+	} else if strings.Contains(pathLow, "auth") || strings.Contains(pathLow, "login") || strings.Contains(pathLow, "role") || strings.Contains(pathLow, "admin") {
 		impact = "authz/authn"
 	} else if strings.Contains(pathLow, "cart") || strings.Contains(pathLow, "order") || strings.Contains(pathLow, "payment") || strings.Contains(pathLow, "billing") {
 		impact = "business_logic"
 	}
 	return map[string]any{
 		"classification": classification,
-		"severity_score": int(math.Round(score)),
-		"score":          fmt.Sprintf("%.2f", score),
-		"dev_mode":       devMode,
-		"impact_hint":    impact,
-		"crash_layer":    crashLayer,
-		"reasons":        dedupStrings(reasons),
+		// Floor (not round) so severity_score never crosses a classification band it
+		// didn't earn — e.g. score 3.8 stays severity 3 alongside a "noise" label
+		// instead of showing a contradictory severity 4.
+		"severity_score":       int(math.Floor(score)),
+		"score":                fmt.Sprintf("%.2f", score),
+		"dev_mode":             devMode,
+		"impact_hint":          impact,
+		"crash_layer":          crashLayer,
+		"reasons":              dedupStrings(reasons),
+		"exploitation_signals": exploitReasons,
 	}
+}
+
+// exploitationSignals looks for concrete evidence that an injected payload
+// actually executed or exfiltrated data — the difference between "the server
+// erred" and "the server is vulnerable". Returns reason tags (empty = none).
+func exploitationSignals(res SendResult) []string {
+	out := []string{}
+	body := res.Body
+	bodyLow := strings.ToLower(body)
+	sentLow := strings.ToLower(res.Item.Body + " " + res.Item.Path)
+
+	// SQL injection: database engine error strings surfacing in the response.
+	for _, m := range []string{
+		"you have an error in your sql syntax", "unclosed quotation mark",
+		"quoted string not properly terminated", "syntax error at or near",
+		"sqlite3.operationalerror", "npgsql.postgresexception",
+		"microsoft.data.sqlclient.sqlexception", "system.data.sqlclient.sqlexception",
+		"ora-00933", "ora-01756", "conversion failed when converting",
+	} {
+		if strings.Contains(bodyLow, m) {
+			out = append(out, "sqli_error_reflected")
+			break
+		}
+	}
+
+	// Path traversal / LFI: contents of a well-known system file in the response.
+	if strings.Contains(body, "root:x:0:0:") || strings.Contains(body, "root:*:0:0:") ||
+		strings.Contains(bodyLow, "[boot loader]") || strings.Contains(bodyLow, "; for 16-bit app support") {
+		out = append(out, "file_read_success")
+	}
+
+	// SSRF: cloud metadata contents echoed back (only counts if we actually asked for it).
+	if strings.Contains(sentLow, "169.254.169.254") || strings.Contains(sentLow, "metadata.google") {
+		if strings.Contains(bodyLow, "ami-id") || strings.Contains(bodyLow, "iam/security-credentials") ||
+			strings.Contains(bodyLow, "instance-identity") || strings.Contains(bodyLow, "computemetadata") {
+			out = append(out, "ssrf_metadata_reflected")
+		}
+	}
+
+	// Reflected XSS: the exact script payload comes back unescaped in an HTML response.
+	ct := strings.ToLower(res.Headers["Content-Type"] + res.Headers["content-type"])
+	if strings.Contains(ct, "text/html") {
+		for _, p := range []string{"<script>alert(1)</script>", "<svg/onload=alert(1)>", "onerror=alert(document.domain)"} {
+			if strings.Contains(sentLow, strings.ToLower(p)) && strings.Contains(body, p) {
+				out = append(out, "xss_reflected_unescaped")
+				break
+			}
+		}
+	}
+
+	// Open redirect: Location header points at an attacker-controlled host we injected.
+	loc := strings.ToLower(res.Headers["Location"] + res.Headers["location"])
+	if loc != "" && strings.Contains(sentLow, "evil.com") && strings.Contains(loc, "evil.com") {
+		out = append(out, "open_redirect")
+	}
+
+	// SSTI: a distinctive arithmetic marker was EVALUATED (product present in the
+	// response) rather than merely reflected (expression text absent). The rare
+	// products keep this low-false-positive.
+	for expr, product := range map[string]string{"1337*1337": "1787569", "2340*2375": "5557500"} {
+		if strings.Contains(res.Item.Body+res.Item.Path, expr) {
+			if strings.Contains(body, product) && !strings.Contains(body, expr) {
+				out = append(out, "ssti_evaluated")
+				break
+			}
+		}
+	}
+
+	return dedupStrings(out)
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

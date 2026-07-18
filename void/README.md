@@ -63,6 +63,20 @@ Only `-direct-shm` needs to be added — this switches from HTTP polling to file
 
 ---
 
+## Profiles (fastest way to start)
+
+Instead of memorizing the 90 flags, pass a `-profile`. It sets a curated bundle of knobs; **any individual flag you also pass still overrides the profile.**
+
+| Profile | Optimizes for | Sets (unless you override) |
+|---------|---------------|----------------------------|
+| `-profile fast` | CI smoke / max throughput | `repro-runs 0`, `minimize-crash=false`, oracles off, `race-mode=false`, `sequence-prob 0.1` |
+| `-profile deep` | Thorough scan | `time-budget 60`, `repro-runs 5`, `minimize-crash`, `sequence-prob 0.5`, oracles on, `race-mode` |
+| `-profile security` | Vulnerability hunting | multi-identity + guest on, `access-probe` (prob 0.75), injection oracle, source-aware priority, `sequence-prob 0.5`, `race-mode` |
+
+```bash
+./void -profile security -auth-file auth.json -time-budget 90
+```
+
 ## When to Override Defaults
 
 Only specify flags when you need **non-default** behaviour:
@@ -196,7 +210,7 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-crash-triage` | **true** | Score crashes: noise / needs_review / likely_vuln |
+| `-crash-triage` | **true** | Classify crashes: `noise` / `needs_review` / `confirmed_unhandled_exception` / `likely_vuln[_high]` / `target_misconfiguration` |
 | `-crash-signature-mode` | `balanced` | Dedup mode: `coarse` \| `balanced` \| `strict` |
 | `-crash-signature-mutation` | `false` | Include mutation label in signature (more unique crashes) |
 | `-crash-signature-query-values` | `false` | Include query values in signature |
@@ -205,6 +219,24 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 | `-repro-timeout` | `5.0` | Timeout per repro probe (seconds) |
 | `-minimize-crash` | **true** | Delta-reduce payload/path/query for minimal PoC |
 | `-minimize-max-probes` | `24` | Max requests for minimization |
+
+### Vulnerability Oracles (ON by default)
+
+Signals that go beyond "HTTP 500 = bug". Access-control probes are most valuable with a multi-identity `-auth-file`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-access-probe` | **true** | Master toggle for all three access-control probes below |
+| `-probe-bola` | **true** | Cross-identity BOLA/IDOR replay under every other identity |
+| `-probe-auth-bypass` | **true** | No-credential replay. **Precondition:** only fires on endpoints already observed rejecting unauthenticated access with 401/403 — a truly public endpoint never triggers it, so no public-endpoint false positives. Confidence is `likely_vuln_high` when the endpoint was seen rejecting an *unauthenticated* request, else `likely_vuln` + `needs_manual_verification`. |
+| `-probe-mass-assign` | **true** | Re-send successful writes with privileged fields over-posted |
+| `-access-probe-prob` | `0.5` | Probability of firing access-control probes after a successful resource-scoped request |
+| `-access-probe-max-per-endpoint` | `6` | Max access-control probes queued per endpoint per run |
+| `-access-probe-queue-max` | `256` | Global cap on queued access-control probes |
+| `-injection-oracle` | **true** | Positive injection detection: time-based SQLi, evaluated SSTI (`{{1337*1337}}`→`1787569`), reflected XSS |
+| `-sqli-time-threshold` | `1.5` | Absolute latency (s) — also requires ≥3× baseline — that flags a sleep/benchmark SQLi payload |
+
+A cross-identity or no-credential 2xx to another principal's resource is reported as `likely_vuln_high` (identical body) or `likely_vuln` (needs manual verification), with an `access_control: true` field recording `origin_identity` → `shadow_identity`. **Mass-assignment**: after a successful write, the body is re-sent with privileged fields over-posted (`isAdmin`, `role:"SuperAdmin"`, `permissions:["*"]`, …); if the server echoes an injected privileged field back, it's reported as `likely_vuln` (`mass_assignment_privileged_field_accepted`). The run report exposes `access_control_findings` and `distinct_root_causes` counters.
 
 ### Crash Replay & Boost
 
@@ -303,6 +335,8 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`worker.go`**: Core fuzzing loop, concurrency management, and worker thread synchronization (`sync.WaitGroup`).
 - **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
 - **`triage.go`**: Source-aware priority and routing of crash severity scores.
+- **`cluster.go`**: Root-cause clustering — collapses many per-payload crash signatures into distinct bugs via normalized exception message + top application stack frame.
+- **`oracle.go`**: Vulnerability oracles beyond HTTP 500 — BOLA/IDOR and broken-auth via cross-identity/no-credential replay, plus positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS).
 - **`poc.go`**: Generation of `curl` reproducer shell scripts and Markdown exploit timelines.
 - **`report.go`**: Assembly of the final JSON crash report and vulnerability findings.
 - **`minimize.go`**: Delta-debugging logic to binary-search and strip away unnecessary JSON fields from a crashing payload.
