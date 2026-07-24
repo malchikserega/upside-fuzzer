@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"strings"
 	"time"
 )
 
-// oracle.go — Access-control oracles (BOLA/IDOR + broken authentication).
+// oracle.go — Access-control oracles (BOLA/IDOR + broken authentication +
+// differential/parser-confusion auth bypass).
 //
 // The rest of the engine treats "HTTP 500" as the only bug signal, which finds
 // robustness bugs but not access-control vulnerabilities — the #1 class of real
@@ -20,10 +22,11 @@ import (
 // broken-authentication finding, and unlike a 500 it is a genuine vulnerability.
 
 const (
-	oracleKindBOLA       = "bola"
-	oracleKindAuthBypass = "authbypass"
-	oracleKindMassAssign = "massassign"
-	unauthIdentity       = "__unauth__"
+	oracleKindBOLA         = "bola"
+	oracleKindAuthBypass   = "authbypass"
+	oracleKindMassAssign   = "massassign"
+	oracleKindDifferential = "differential"
+	unauthIdentity         = "__unauth__"
 )
 
 // privilegeFields are the security-sensitive properties a mass-assignment probe
@@ -239,6 +242,162 @@ func reflectedPrivilegeField(body string) string {
 	return ""
 }
 
+// maybeEnqueueDifferentialProbes fires parser/router-confusion auth-bypass
+// replays after a successful, resource-scoped request under an authenticated
+// identity, on endpoints we already have STRONG evidence enforce auth (a
+// plain, credential-free request was previously rejected with 401/403 --
+// authRequiredEndpoints strength 2). That precondition is what makes this a
+// distinct bug class from the plain authbypass oracle above: authbypass
+// already tests the literal unauthenticated request, so if a *confusion*
+// variant succeeds despite the literal replay failing, the confusion itself
+// (not general laxness) is what mattered — a real parser/router-confusion
+// finding (Top-20 #18).
+func (f *Fuzzer) maybeEnqueueDifferentialProbes(res SendResult) {
+	if !f.cfg.AccessProbe || !f.cfg.ProbeDifferential || res.Item.OracleKind != "" {
+		return
+	}
+	if res.Status < 200 || res.Status >= 300 {
+		return
+	}
+	if !pathHasConcreteResourceID(res.Item.Path) {
+		return
+	}
+	if !f.identityIsAuthed(res.Item.Identity) {
+		return
+	}
+	if isTrivialBody(res.Body) {
+		return
+	}
+	epKey := endpointKey(res.Item.Method, normalizeEndpointPath(res.Item.Path))
+	if f.authRequiredEndpoints[epKey] < 2 {
+		return
+	}
+	diffKey := epKey + "|diff"
+	if f.accessProbeCount[diffKey] >= f.cfg.AccessProbeMaxPerEndpoint {
+		return
+	}
+	if rand.Float64() > clampFloat(f.cfg.AccessProbeProb, 0.0, 1.0) {
+		return
+	}
+
+	originFP := stableResponseFingerprint(res.Body)
+	originLen := len(strings.TrimSpace(res.Body))
+	mk := func(technique string, mutate func(*WorkItem)) WorkItem {
+		p := res.Item
+		p.OracleKind = oracleKindDifferential
+		p.DiffTechnique = technique
+		p.NoAuth = true
+		p.Identity = unauthIdentity
+		p.OracleOriginIdentity = res.Item.Identity
+		p.OracleOriginStatus = res.Status
+		p.OracleOriginFP = originFP
+		p.OracleOriginBodyLen = originLen
+		p.SeedIdx = -1
+		p.Trace = nil
+		p.Headers = stripAuthHeaders(p.Headers)
+		mutate(&p)
+		p.MutationName = "acl_differential_" + technique
+		p.MutationLabel = "acl_probe(differential:" + technique + ")"
+		return p
+	}
+
+	enqueued := 0
+	// (1) verb confusion: GET -> HEAD only. HEAD is semantically "GET minus body",
+	// so a HEAD bypass is a genuine same-data finding; mutating verbs are excluded
+	// since changing them changes what the request DOES, not just how it's
+	// authorized, which would produce unrelated false positives.
+	if strings.EqualFold(res.Item.Method, "GET") {
+		f.oracleEnqueue(mk("verb", func(p *WorkItem) { p.Method = "HEAD" }))
+		enqueued++
+	}
+	// (2) content-type confusion: identical bytes, different declared Content-Type
+	// -- some auth/CSRF middleware only gates requests declared as JSON.
+	if ct := getHeaderCI(res.Item.Headers, "Content-Type"); strings.Contains(strings.ToLower(ct), "application/json") && strings.TrimSpace(res.Item.Body) != "" {
+		f.oracleEnqueue(mk("content-type", func(p *WorkItem) {
+			setHeaderCI(p.Headers, "Content-Type", "text/plain;charset=UTF-8")
+		}))
+		enqueued++
+	}
+	// (3) route-case confusion: ASP.NET routing is case-insensitive by default, but
+	// custom auth-attribute / reverse-proxy / WAF path matching sometimes isn't.
+	if caseVariant := swapPathSegmentCase(res.Item.Path); caseVariant != res.Item.Path {
+		f.oracleEnqueue(mk("route-case", func(p *WorkItem) { p.Path = caseVariant }))
+		enqueued++
+	}
+	// (4) param-location confusion: duplicate the path-embedded resource id as a
+	// same-named query parameter. If the framework also binds a query/route
+	// parameter of that name, the request can be routed through a different
+	// model-binding / authorization code path than the path-only request took.
+	if idVal := lastPathSegment(res.Item.Path); idVal != "" {
+		f.oracleEnqueue(mk("param-location", func(p *WorkItem) {
+			p.Path = appendQueryParam(p.Path, "id", idVal)
+		}))
+		enqueued++
+	}
+
+	if enqueued > 0 {
+		f.accessProbeCount[diffKey] += enqueued
+	}
+}
+
+// swapPathSegmentCase flips the case of the first letter of every non-empty
+// path segment (preserving any query string), for the route-case differential
+// probe. Returns the input unchanged if there's no letter to flip (e.g. an
+// all-numeric/UUID-only path).
+func swapPathSegmentCase(path string) string {
+	base, query := path, ""
+	if i := strings.Index(path, "?"); i >= 0 {
+		base, query = path[:i], path[i:]
+	}
+	segments := strings.Split(base, "/")
+	changed := false
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		r := []rune(seg)
+		switch {
+		case r[0] >= 'a' && r[0] <= 'z':
+			r[0] -= 'a' - 'A'
+		case r[0] >= 'A' && r[0] <= 'Z':
+			r[0] += 'a' - 'A'
+		default:
+			continue
+		}
+		segments[i] = string(r)
+		changed = true
+	}
+	if !changed {
+		return path
+	}
+	return strings.Join(segments, "/") + query
+}
+
+// lastPathSegment returns the final non-empty path segment (query string and
+// trailing slash stripped), for the param-location differential probe.
+func lastPathSegment(path string) string {
+	base := path
+	if i := strings.Index(base, "?"); i >= 0 {
+		base = base[:i]
+	}
+	base = strings.TrimRight(base, "/")
+	idx := strings.LastIndex(base, "/")
+	if idx < 0 {
+		return base
+	}
+	return base[idx+1:]
+}
+
+// appendQueryParam appends a key=value query parameter to path, using ? or &
+// depending on whether path already carries a query string.
+func appendQueryParam(path, key, value string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + url.QueryEscape(key) + "=" + url.QueryEscape(value)
+}
+
 func (f *Fuzzer) oracleEnqueue(item WorkItem) {
 	if len(f.oracleQueue) >= f.cfg.AccessProbeQueueMax {
 		f.oracleQueue = f.oracleQueue[1:]
@@ -299,6 +458,16 @@ func (f *Fuzzer) handleOracleResult(res SendResult) {
 		if identical {
 			reasons = append(reasons, "identical_response_to_authenticated")
 		}
+	case oracleKindDifferential:
+		// Only enqueued on endpoints with STRONG evidence of auth enforcement
+		// (authRequiredEndpoints strength 2, checked at enqueue time), so a hit
+		// here means the confusion technique itself bypassed a real check.
+		class = "likely_vuln_high"
+		severity = 9
+		reasons = append(reasons, "differential_auth_bypass:"+res.Item.DiffTechnique, "endpoint_rejected_unauth_401_403")
+		if identical {
+			reasons = append(reasons, "identical_response_to_authenticated")
+		}
 	case oracleKindBOLA:
 		if identical {
 			class = "likely_vuln_high"
@@ -322,6 +491,12 @@ func (f *Fuzzer) handleOracleResult(res SendResult) {
 func (f *Fuzzer) recordAccessControlFinding(res SendResult, kind, class string, severity int, reasons []string, identical bool) {
 	normPath := normalizeEndpointPath(res.Item.Path)
 	dedupKey := "acl|" + kind + "|" + res.Item.Method + "|" + normPath + "|" + res.Item.OracleOriginIdentity + "->" + res.Item.Identity
+	if kind == oracleKindDifferential {
+		// All differential probes on an endpoint share Identity=unauthIdentity, so
+		// the technique must be part of the key or the 4 techniques would dedup
+		// against each other instead of being tracked as distinct findings.
+		dedupKey += "|" + res.Item.DiffTechnique
+	}
 	if _, ok := f.aclSeen[dedupKey]; ok {
 		return
 	}
@@ -329,7 +504,7 @@ func (f *Fuzzer) recordAccessControlFinding(res SendResult, kind, class string, 
 	f.accessFindings++
 
 	shadowLabel := res.Item.Identity
-	if kind == oracleKindAuthBypass {
+	if kind == oracleKindAuthBypass || kind == oracleKindDifferential {
 		shadowLabel = "<no-auth>"
 	}
 	sig := hashWithFNV(dedupKey)
@@ -345,6 +520,9 @@ func (f *Fuzzer) recordAccessControlFinding(res SendResult, kind, class string, 
 		"shadow_status":   res.Status,
 		"identical_body":  identical,
 		"reasons":         dedupStrings(reasons),
+	}
+	if kind == oracleKindDifferential {
+		triage["technique"] = res.Item.DiffTechnique
 	}
 	f.addEvent(fmt.Sprintf("ACL %s  %s %s  %s -> %s  (%d)", strings.ToUpper(kind),
 		res.Item.Method, truncate(normalizePath(res.Item.Path), 48),

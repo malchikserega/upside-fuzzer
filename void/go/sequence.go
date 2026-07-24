@@ -15,6 +15,13 @@ import (
 // sequence.go — Stateful sequences: producer→consumer chain discovery,
 // runtime value extraction from requests/responses, followup prioritization.
 
+// stateNoveltyBonus is the Energy award for a sequence step reaching a
+// never-seen workflow-state signature (Top-20 #12). Chosen to be comparable to
+// a solid multi-edge CoverageDelta hit (edgeShare of a few units per request in
+// practice), so state novelty competes with, rather than being drowned out by,
+// ordinary coverage-driven energy.
+const stateNoveltyBonus = 5.0
+
 func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	source := res.Item
 	if source.SeqDepth >= maxInt(1, f.cfg.SequenceMaxDepth) {
@@ -57,21 +64,41 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		state.Energy += float64(res.CoverageDelta)
 	}
 
+	// Top-20 #12 -- state-reward sequence search: reward reaching a workflow
+	// SHAPE (ordered method+normpath+status-class triples) never seen before in
+	// this run, not just a new edge. This is deliberately coarse (no resource
+	// lifecycle/typed state graph -- see ARCHITECTURE_REVIEW.md §5) but it is
+	// enough to make the sequence engine's own search prioritize genuinely novel
+	// multi-step workflows over re-treading ones it has already explored, which
+	// plain edge-coverage reward can't distinguish (a 3rd identical GET after a
+	// POST looks the same to the coverage bitmap as the 1st).
+	sig := sequenceStateSignature(state)
+	newState := false
+	if _, seen := f.seenStateSigs[sig]; !seen {
+		f.seenStateSigs[sig] = struct{}{}
+		newState = true
+		state.Energy += stateNoveltyBonus
+		f.newStatesFound++
+		if f.newStatesFound <= 5 || f.newStatesFound%25 == 0 {
+			f.addEvent(fmt.Sprintf("NEW STATE  seq(d%d) %s  (%d total)", state.Depth+1, truncate(sig, 80), f.newStatesFound))
+		}
+	}
+
 	// Extract values and bind to this sequence context
 	info := f.depIndex[source.TemplateID]
 	producedDeps := mapKeys(info.Writes)
 	producedIDKeys := mapKeys(info.IDWrites)
 	entityIDs := extractEntityIDs(res.Body, res.Headers)
-	
+
 	provKey := fmt.Sprintf("%s %s", source.Method, source.Path)
-	
+
 	if rid := inferResourceIDKeyFromPath(source.Path); rid != "" {
 		for _, eid := range entityIDs {
 			state.Values[rid] = eid
 			state.Values["id"] = eid
 			state.Provenance[rid] = provKey
 			state.Provenance["id"] = provKey
-			
+
 			// Also add to global runtime store for baseline epoch (fallback)
 			_ = f.runtime.addValue(rid, eid)
 			_ = f.runtime.addValue("id", eid)
@@ -104,8 +131,14 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		f.maybePersistSequence(res)
 		return 0
 	}
-	
+
 	fanout := minInt(maxInt(1, f.cfg.SequenceFanout), len(followups))
+	if newState {
+		// A sequence that just reached a never-seen workflow shape gets one extra
+		// branch of search budget -- it's exactly the kind of exploration DeepREST/
+		// EvoMaster's state-based search prioritizes over re-treading known states.
+		fanout = minInt(fanout+1, len(followups))
+	}
 	enqueued := 0
 	for _, tid := range followups[:fanout] {
 		// Clone state for branching
@@ -131,16 +164,16 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		if rand.Float64() >= 0.75 {
 			mode = "mutate"
 		}
-		
+
 		item, err := f.renderTemplateContext(tid, mode, 1, -1, dummy)
 		if err != nil {
 			continue
 		}
-		
+
 		if len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
 			item.Path = rePathParam.ReplaceAllString(item.Path, entityIDs[0])
 		}
-		
+
 		item.SeqDepth = nextState.Depth
 		item.SeqState = nextState
 		item.EpochName = "Sequence"
@@ -160,11 +193,11 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		f.sequenceQueue = append(f.sequenceQueue, item)
 		enqueued++
 	}
-	
+
 	if enqueued == 0 {
 		f.maybePersistSequence(res)
 	}
-	
+
 	return enqueued
 }
 
@@ -173,12 +206,12 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 	if state == nil || state.Depth < 2 { // Depth is 0-indexed, so 2 means length 3
 		return
 	}
-	
+
 	// Must have produced some coverage overall
 	if state.Energy <= 0 {
 		return
 	}
-	
+
 	// Must be mostly successful
 	successCount := 0
 	for _, step := range state.History {
@@ -189,9 +222,56 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 	if float64(successCount)/float64(len(state.History)) < 0.5 {
 		return
 	}
-	
+
+	// Dedup by final workflow shape (Top-20 #12): many sequences reach the exact
+	// same (method,normpath,status-class) shape via different concrete IDs/values
+	// -- those are equivalent workflows for reporting purposes, so only the first
+	// one is persisted to disk. Addresses ARCHITECTURE_REVIEW.md §5 weakness #3
+	// ("no dedup of equivalent workflows").
+	sig := sequenceStateSignature(state)
+	if _, dup := f.persistedWorkflowSigs[sig]; dup {
+		return
+	}
+	f.persistedWorkflowSigs[sig] = struct{}{}
+
 	// Save to disk
 	f.persistWorkflow(state)
+	f.workflowsPersisted++
+}
+
+// sequenceStateSignature computes a coarse state signature for a sequence: the
+// ordered SHAPE of (method, normalized-path, status-class) steps taken so far.
+// Two sequences that reach the same shape via different concrete IDs/payloads
+// are treated as the same "state" -- intentionally coarse (no resource
+// lifecycle/typed state graph), but enough to reward reaching a new workflow
+// shape instead of only a new coverage edge (Top-20 #12).
+func sequenceStateSignature(state *SequenceState) string {
+	parts := make([]string, 0, len(state.History))
+	for _, step := range state.History {
+		// normalizeEndpointPath (not normalizePath) so different concrete resource
+		// ids collapse to the same route template -- otherwise every sequence would
+		// look "new" purely because it touched a different numeric/UUID id.
+		parts = append(parts, fmt.Sprintf("%s %s:%d", step.Method, normalizeEndpointPath(step.Path), statusClass(step.Status)))
+	}
+	return strings.Join(parts, "|")
+}
+
+// statusClass buckets an HTTP status into a coarse class for state-signature
+// purposes (2xx/3xx/4xx/5xx), so e.g. 200 vs 201 don't count as different states
+// but 200 vs 404 do.
+func statusClass(status int) int {
+	switch {
+	case status >= 200 && status < 300:
+		return 2
+	case status >= 300 && status < 400:
+		return 3
+	case status >= 400 && status < 500:
+		return 4
+	case status >= 500:
+		return 5
+	default:
+		return 0
+	}
 }
 
 func (f *Fuzzer) persistWorkflow(state *SequenceState) {
@@ -200,11 +280,11 @@ func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 	}
 	outDir := filepath.Join(filepath.Dir(f.cfg.TimelineDir), "workflows")
 	_ = os.MkdirAll(outDir, 0o755)
-	
+
 	fnameBase := fmt.Sprintf("workflow_d%d_%s", state.Depth+1, state.ID)
 	fpathJSON := filepath.Join(outDir, fnameBase+".json")
 	fpathSH := filepath.Join(outDir, fnameBase+".sh")
-	
+
 	buf, err := json.MarshalIndent(state, "", "  ")
 	if err == nil {
 		_ = os.WriteFile(fpathJSON, buf, 0o644)
@@ -214,15 +294,15 @@ func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 	sb.WriteString("#!/bin/bash\n")
 	sb.WriteString(fmt.Sprintf("# Auto-generated Deep Workflow Reproduction Script (Depth: %d, Energy: %.0f)\n\n", state.Depth+1, state.Energy))
 	sb.WriteString(fmt.Sprintf("TARGET=\"%s\"\n\n", f.target))
-	
+
 	for i, step := range state.History {
 		sb.WriteString(fmt.Sprintf("# Step %d: %s %s (Expected Status: %d, Mut: %s)\n", i+1, step.Method, step.Path, step.Status, step.MutationLabel))
 		sb.WriteString(fmt.Sprintf("curl -i -X %s \"$TARGET%s\" \\\n", step.Method, step.Path))
-		
+
 		for k, v := range step.Headers {
 			sb.WriteString(fmt.Sprintf("  -H '%s: %s' \\\n", k, strings.ReplaceAll(v, "'", "'\\''")))
 		}
-		
+
 		if step.Body != "" {
 			sb.WriteString(fmt.Sprintf("  -d '%s'\n", strings.ReplaceAll(step.Body, "'", "'\\''")))
 		} else {
@@ -230,7 +310,7 @@ func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 		}
 		sb.WriteString("\n")
 	}
-	
+
 	_ = os.WriteFile(fpathSH, []byte(sb.String()), 0o755)
 }
 
@@ -428,6 +508,7 @@ func (f *Fuzzer) learnFromResponse(body string, headers map[string]string) int {
 	}
 	return learned
 }
+
 var (
 	depNameNoise = map[string]struct{}{
 		"v1": {}, "v2": {}, "v3": {}, "api": {}, "exchange": {}, "post": {}, "put": {}, "get": {}, "delete": {},
@@ -664,6 +745,7 @@ func extractEntityIDs(body string, headers map[string]string) []string {
 	}
 	return uniqStrings(filterUsefulStrings(out))
 }
+
 // enqueueCrashReplay queues n follow-up work items after a unique crash is found.
 // It re-renders the crashing template with varying mutation modes to find bug variants.
 func (f *Fuzzer) enqueueCrashReplay(item WorkItem, n int) {

@@ -219,3 +219,125 @@ func TestIsTimeBasedSQLiHit(t *testing.T) {
 		t.Errorf("a non-sleep payload must not flag time-based SQLi even if slow")
 	}
 }
+
+// TestSwapPathSegmentCase covers the Top-20 #18 route-case differential probe.
+func TestSwapPathSegmentCase(t *testing.T) {
+	if got := swapPathSegmentCase("/orders/123"); got != "/Orders/123" {
+		t.Errorf("expected /Orders/123, got %q", got)
+	}
+	// No letter anywhere to flip -> unchanged.
+	if got := swapPathSegmentCase("/123/456"); got != "/123/456" {
+		t.Errorf("expected an all-numeric path to be unchanged, got %q", got)
+	}
+	// Query string must be preserved verbatim.
+	if got := swapPathSegmentCase("/orders/123?x=1"); got != "/Orders/123?x=1" {
+		t.Errorf("expected query string preserved, got %q", got)
+	}
+}
+
+// TestLastPathSegmentAndAppendQueryParam covers the Top-20 #18 param-location
+// differential probe's building blocks.
+func TestLastPathSegmentAndAppendQueryParam(t *testing.T) {
+	if got := lastPathSegment("/orders/123"); got != "123" {
+		t.Errorf("expected 123, got %q", got)
+	}
+	if got := lastPathSegment("/orders/123/"); got != "123" {
+		t.Errorf("expected trailing slash stripped, got %q", got)
+	}
+	if got := lastPathSegment("/orders/123?x=1"); got != "123" {
+		t.Errorf("expected query string stripped, got %q", got)
+	}
+	if got := appendQueryParam("/orders/123", "id", "123"); got != "/orders/123?id=123" {
+		t.Errorf("expected ?id=123 appended, got %q", got)
+	}
+	if got := appendQueryParam("/orders/123?x=1", "id", "123"); got != "/orders/123?x=1&id=123" {
+		t.Errorf("expected &id=123 appended to an existing query, got %q", got)
+	}
+}
+
+// TestMaybeEnqueueDifferentialProbesGatedOnStrongAuthEvidence verifies the
+// Top-20 #18 differential oracle only fires with STRONG evidence the endpoint
+// enforces auth (authRequiredEndpoints strength 2) -- weak evidence (strength
+// 1, "rejected someone" but not necessarily a truly unauthenticated caller)
+// must not trigger it, since that's exactly what distinguishes this oracle
+// from the plain authbypass replay.
+func TestMaybeEnqueueDifferentialProbesGatedOnStrongAuthEvidence(t *testing.T) {
+	epKey := endpointKey("GET", normalizeEndpointPath("/orders/123"))
+	mkFuzzer := func(strength int) *Fuzzer {
+		return &Fuzzer{
+			cfg: Config{
+				AccessProbe:               true,
+				ProbeDifferential:         true,
+				AccessProbeProb:           1.0,
+				AccessProbeMaxPerEndpoint: 10,
+				AccessProbeQueueMax:       256,
+			},
+			identities:            []AuthIdentity{{Name: "alice", Token: "tok123"}},
+			authRequiredEndpoints: map[string]int{epKey: strength},
+			accessProbeCount:      map[string]int{},
+			oracleQueue:           make([]WorkItem, 0, 8),
+		}
+	}
+	res := SendResult{
+		Item: WorkItem{
+			Method:   "GET",
+			Path:     "/orders/123",
+			Identity: "alice",
+			Headers:  map[string]string{"Content-Type": "application/json"},
+			Body:     `{"note":"n/a"}`,
+		},
+		Status: 200,
+		Body:   `{"id":123,"total":42.50,"items":["a","b","c"]}`,
+	}
+
+	weak := mkFuzzer(1)
+	weak.maybeEnqueueDifferentialProbes(res)
+	if len(weak.oracleQueue) != 0 {
+		t.Fatalf("expected no differential probes with only weak (strength=1) auth evidence, got %d", len(weak.oracleQueue))
+	}
+
+	strong := mkFuzzer(2)
+	strong.maybeEnqueueDifferentialProbes(res)
+	wantTechniques := map[string]bool{"verb": false, "content-type": false, "route-case": false, "param-location": false}
+	for _, p := range strong.oracleQueue {
+		if p.OracleKind != oracleKindDifferential {
+			t.Errorf("expected OracleKind=%q, got %q", oracleKindDifferential, p.OracleKind)
+		}
+		if !p.NoAuth {
+			t.Errorf("differential probes must strip auth (NoAuth=true)")
+		}
+		if _, known := wantTechniques[p.DiffTechnique]; !known {
+			t.Errorf("unexpected DiffTechnique %q", p.DiffTechnique)
+		}
+		wantTechniques[p.DiffTechnique] = true
+	}
+	for technique, seen := range wantTechniques {
+		if !seen {
+			t.Errorf("expected a %q differential probe given the fixture request shape, none enqueued", technique)
+		}
+	}
+}
+
+// TestApplyProfileGatesProbeDifferential mirrors the existing probe-gating
+// coverage for the three older access-control probes (Top-20 #18).
+func TestApplyProfileGatesProbeDifferential(t *testing.T) {
+	cfg := Config{Profile: "fast", ProbeDifferential: true}
+	applyProfile(&cfg, map[string]bool{})
+	if cfg.ProbeDifferential {
+		t.Errorf("fast profile should disable probe-differential")
+	}
+
+	cfg2 := Config{Profile: "fast", ProbeDifferential: true}
+	applyProfile(&cfg2, map[string]bool{"probe-differential": true})
+	if !cfg2.ProbeDifferential {
+		t.Errorf("explicit -probe-differential=true must survive the fast profile")
+	}
+
+	for _, p := range []string{"deep", "security"} {
+		cfg3 := Config{Profile: p}
+		applyProfile(&cfg3, map[string]bool{})
+		if !cfg3.ProbeDifferential {
+			t.Errorf("%s profile should enable probe-differential", p)
+		}
+	}
+}

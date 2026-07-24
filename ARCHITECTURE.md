@@ -274,9 +274,9 @@ This works regardless of how many project DLLs were instrumented — they all ge
 ## 5. Coverage Reporting Protocol
 
 ### `POST /shm/create` — Initialize
-- Allocates SHM using the current configured size (256KB by default; minimum 64KB), or opens the existing tmpfs file
+- Allocates SHM using the current configured size (see "Bitmap Sizing" below; 256KB default, minimum 64KB, maximum 8MB), or opens the existing tmpfs file
 - Calls `SyncSharpFuzz()` to link all loaded DLLs
-- Returns `{"status": "synced", "mode": "...", "bitmap_size": 262144}` (or the configured size)
+- Returns `{"status": "synced", "mode": "...", "bitmap_size": 262144}` (or the configured/auto-sized size)
 
 ### `GET /shm/coverage` — Global Stats
 - Reads the shared bitmap via pointer arithmetic
@@ -285,15 +285,23 @@ This works regardless of how many project DLLs were instrumented — they all ge
 
 ### `POST /shm/reset` — Reset Bitmap
 - Zeroes the shared bitmap
-- Used between fuzzing sessions or before per-request measurement
+- Used between fuzzing sessions; the Go engine also calls this mid-run when the bitmap is both saturated and stagnant (see "Bitmap Sizing" below)
 
 ### `GET /shm/coverage/traces` — Legacy
 - Maintained for legacy compatibility but largely superseded by header-based injection.
 
 ### `GET /shm/health` — Instrumentation facts (Top-20 #4)
-- Returns `{"shm_bound": bool, "mode": "...", "total_classes": N, "linked_assemblies": N, "app_assemblies": [...]}`.
-- **Deliberately reports facts, not a verdict.** SharpFuzz's `Trace.SharedMem` type lives only in `SharpFuzz.Common.dll` — never in the app's own IL-rewritten assemblies — so "is assembly X linked" cannot be measured by type reflection on the .NET side; an app assembly that is instrumented correctly will *never* show up as having its own `Trace` type. `app_assemblies` is a diagnostic list of assembly names the runtime has observed loaded that aren't framework/SharpFuzz code (same `frameworkPrefixes` denylist as `instrumentor/Program.cs`, kept in sync manually), useful when diagnosing a failure — not a pass/fail signal by itself.
+- Returns `{"shm_bound": bool, "mode": "...", "total_classes": N, "linked_assemblies": N, "instrumented_types": N, "app_assemblies": [...]}`.
+- **Deliberately reports facts, not a verdict.** SharpFuzz's `Trace.SharedMem` type lives only in `SharpFuzz.Common.dll` — never in the app's own IL-rewritten assemblies — so "is assembly X linked" cannot be measured by type reflection on the .NET side; an app assembly that is instrumented correctly will *never* show up as having its own `Trace` type. `app_assemblies` is a diagnostic list of assembly names the runtime has observed loaded that aren't framework/SharpFuzz code (same `frameworkPrefixes` denylist as `instrumentor/Program.cs`, kept in sync manually), useful when diagnosing a failure — not a pass/fail signal by itself. `instrumented_types` (Top-20 #17) is the real build-time instrumented-type count — see "Bitmap Sizing" below.
 - The actual fail-closed decision is made **engine-side** — see §7's "Self-verifying, fail-closed instrumentation" below.
+
+### Bitmap Sizing (Top-20 #17)
+Previously the SHM bitmap was a fixed 256KB regardless of application size, so large apps (Bitwarden, BTCPay) collided heavily while tiny ones wasted memory scanning a mostly-empty map. The bitmap is now sized from the **real instrumented-type count** captured at build time:
+1. `instrumentor/Program.cs` counts the types it actually instruments (`instrumentedCount`) and, on success, appends a line to `.upsidefuzz_instrumented.jsonl` next to the DLL it just rewrote: `{"assembly":"Foo.dll","instrumented_types":N}`. A multi-assembly app (one `instrumentor.dll` invocation per DLL during the Docker build) accumulates one line per assembly.
+2. At runtime, `CoverageRuntime`/`CoverageExtensions`'s `ResolveInstrumentedTypeCount()` reads that file from `AppContext.BaseDirectory` and sums `instrumented_types` across all lines.
+3. `ResolveShmSize()` uses that sum — **only when the `SHM_SIZE` env var isn't pinned explicitly** — to compute a size: ~512 bitmap bytes per instrumented type, rounded up to a power of two, clamped to `[65536, 8388608]` (64KB–8MB). SharpFuzz exposes no public branch/edge count, so instrumented *type* count is a proxy, not a literal edge count — documented as such rather than overclaimed.
+4. On the Go side, `SHMCoverageReader.Init()` (direct-shm mode) trusts the **actual on-disk file size** as ground truth instead of truncating it down to whatever `-coverage-bitmap-size` happened to be passed. This fixed a real latent bug: since the .NET side now sizes the file dynamically, a stale/mismatched flag value used to silently truncate the Go side's view of a properly-sized file, dropping real coverage from the untruncated remainder. A size mismatch is now only ever a diagnostic printf, never a truncation.
+5. The periodic full-bitmap reset (previously: saturation > 85% alone, on a 90s timer) now also requires **stagnation** — no new edge for ≥30 seconds (`worker.go::shouldResetCoverageBitmap`) — so a reset only fires when there's actual evidence hash collisions are corrupting the signal, not just because a byte-percentage threshold was crossed while the fuzzer was still making real progress.
 
 ### AFL-Style Hit-Count Buckets (bucketed virgin map)
 Coverage novelty is measured with **AFL-style hit-count buckets**, not binary edge-presence. Each edge's raw 8-bit hit count is classified into a log-scale bucket — `1, 2, 3, 4–7, 8–15, 16–31, 32–127, 128+` — via a 256-entry lookup table (`CountClass` in `CoverageExtensions.cs`, `countClass` in `coverage.go`). A **bucket bit never before seen for an edge** counts as new coverage, tracked in a persistent per-edge bucket bitmask (the "virgin map": `seenBuckets` C#-side, `seen []byte` Go-side).
@@ -459,6 +467,43 @@ values become available to `pickCustomPayloadValue`/`customPayloadCandidates`
 that doesn't match either shape yields an empty map, never an error; an unrelated JSON
 4xx body (e.g. `{"count":5}`) is defensively excluded from being mistaken for a
 field→messages map.
+
+### State-Reward Sequence Search (Top-20 #12)
+
+`sequence.go::sequenceStateSignature` computes a coarse workflow-*shape*
+signature for a `SequenceState`: the ordered `(method, normalized-path,
+status-class)` triples of its `History`, where `normalizeEndpointPath`
+collapses concrete resource IDs to a route template and `statusClass` buckets
+status codes into 2xx/3xx/4xx/5xx. Two sequences that reach the same shape via
+different concrete IDs or payloads are the same "state" for reward purposes —
+deliberately coarse (no explicit resource-lifecycle model), but enough to
+distinguish *genuinely new exploration* from re-treading a known workflow,
+which the coverage bitmap alone cannot: a 3rd identical `GET` after a `POST`
+looks the same to the bitmap as the 1st, but carries no new information for
+the sequence search.
+
+`enqueueSequenceFollowups` tracks every signature seen this run
+(`f.seenStateSigs`, a plain map — sequence processing runs entirely on the
+single main-loop goroutine that drains `resultCh`, so no locking is needed).
+Reaching a never-seen signature:
+- Awards a state-novelty energy bonus (`stateNoveltyBonus = 5.0`, chosen to be
+  comparable to a solid multi-edge `CoverageDelta` hit) to the sequence's
+  `Energy`, which feeds `maybePersistSequence`'s "did this sequence produce
+  real value" gate.
+- Widens that step's fanout by one extra branch (capped at `len(followups)`),
+  giving newly-discovered states one more unit of search budget than a
+  re-tread of a known shape gets.
+
+`maybePersistSequence` additionally dedups the on-disk workflow report
+(`persistWorkflow`, JSON+curl repro scripts) by **final** shape
+(`f.persistedWorkflowSigs`): two sequences reaching the identical shape via
+different concrete data are only written to disk once, closing the "no dedup
+of equivalent workflows" gap. `printFinalReport` surfaces both counters:
+`Sequence engine: new_states_found=N unique_workflows_persisted=M`.
+
+This is explicitly a *coarse* state-reward mechanism, not the full typed
+state-graph / coverage-directed-fanout search DeepREST/EvoMaster implement —
+see `ARCHITECTURE_REVIEW.md` §5 for what remains open.
 
 ### Self-verifying, fail-closed instrumentation (Top-20 #4)
 
@@ -628,6 +673,13 @@ Because a 500 is only a robustness signal, UpsideFuzz adds oracles that reuse th
 - **BOLA/IDOR + broken auth:** After any successful resource-scoped request under an authenticated identity, the identical request is replayed under every *other* identity and with *no* credentials. A 2xx returning a real body to a different or anonymous principal is a Broken Object-Level Authorization or broken-authentication finding (`access_control: true`, `origin_identity` → `shadow_identity`). Identical bodies score `likely_vuln_high`; differing 2xx bodies score `likely_vuln` and are flagged for manual verification. **Auth-bypass precondition:** the no-credential probe only fires on endpoints the engine has already seen reject unauthenticated access (401/403) — tracked in `authRequiredEndpoints` with a strength (2 = rejected an unauthenticated caller, 1 = rejected someone). A truly public endpoint never accumulates evidence, so it is never flagged, eliminating the public-endpoint false positive. Each oracle has its own flag (`-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`) under the `-access-probe` master toggle.
 - **Mass assignment:** After a successful write (POST/PUT/PATCH with a JSON object body), the body is re-sent with privileged fields over-posted (`isAdmin`, `role:"SuperAdmin"`, `permissions:["*"]`, `accessLevel:99999`, …). If the server echoes an injected privileged field back with its injected value, it accepted an over-posted field — reported `likely_vuln` (`mass_assignment_privileged_field_accepted`). Values are chosen to be unlikely natural states to keep false positives low.
 - **Positive injection:** On non-crash responses where a security-category payload was applied, the engine detects time-based SQLi (latency ≥ threshold and ≥3× baseline on sleep/benchmark payloads), evaluated SSTI (rare arithmetic markers such as `{{1337*1337}}` → `1787569` present but not merely reflected), and reflected XSS. The mutation registry also includes a `dotnet_deser` category of Json.NET `$type` gadget payloads for insecure-deserialization detection.
+- **Differential / parser-confusion auth bypass (Top-20 #18):** `oracle.go::maybeEnqueueDifferentialProbes` fires after a successful, resource-scoped request under an authenticated identity, but **only** on endpoints with *strong* evidence of auth enforcement — `authRequiredEndpoints` strength 2, meaning a plain credential-free request was already rejected with 401/403. That precondition is what makes this a distinct class from plain auth-bypass: it's not "does removing auth work" (already tested), it's "does removing auth work *when combined with a confusion technique* that already-failed literal replay didn't use." Four independent NoAuth probe variants, each gated on being structurally applicable to the origin request:
+  - **verb** — GET origin replayed as HEAD only (semantically "GET minus body", so a bypass is a genuine same-data finding; mutating verbs are excluded since they'd change request semantics, not just authorization).
+  - **content-type** — identical body bytes, `Content-Type` swapped from `application/json` to `text/plain;charset=UTF-8` (some auth/CSRF middleware only gates requests declared as JSON).
+  - **route-case** — `swapPathSegmentCase` flips the first letter of each path segment (ASP.NET routing is case-insensitive by default; custom auth-attribute/WAF/reverse-proxy path matching sometimes isn't).
+  - **param-location** — `appendQueryParam` duplicates the path-embedded resource id as a same-named query parameter (tests whether a differently-sourced same-named parameter routes through a different model-binding/authorization path; deliberately duplicates the *same* id rather than a differently-owned one — true cross-tenant object-ownership testing needs the ownership-matrix infra that is Top-20 #8, still open).
+
+  A 2xx with a real, non-error-shaped body on any variant is `likely_vuln_high` (`differential_auth_bypass:<technique>`), reusing `recordAccessControlFinding` with the technique folded into both the dedup key (so all 4 techniques on one endpoint are tracked as distinct findings, not deduped against each other) and the triage `technique` field. Gated by `-probe-differential` under the `-access-probe` master toggle.
 
 ### Profiles (`-profile`)
 To tame the 90-flag surface, `-profile fast|deep|security` applies a curated bundle of defaults — but only to flags the user did **not** explicitly pass (tracked via `flag.Visit`), so any individual flag still wins. `security` prioritizes the oracles and multi-identity coverage; `deep` is a balanced thorough scan; `fast` maximizes throughput for CI.

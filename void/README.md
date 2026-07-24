@@ -198,7 +198,7 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 | `-shm-path` | `/coverage_shm/bitmap` | Path to the mmap bitmap file |
 | `-shm-read-mode` | `file` | SHM read mode: `file` \| `mmap` \| `auto` |
 | `-coverage-interval` | `1` | Read coverage every N completed requests |
-| `-coverage-bitmap-size` | `262144` | SHM bitmap size in bytes |
+| `-coverage-bitmap-size` | `262144` | SHM bitmap size hint in bytes. Diagnostic only in `-direct-shm` mode (Top-20 #17): the engine now trusts the real on-disk SHM file size (which the .NET side auto-sizes from the real instrumented-type count, ~64KB–8MB) rather than truncating to this value — a mismatch just logs a note instead of silently dropping coverage |
 | `-allow-degraded-coverage` | `false` | Continue even if the fail-closed startup health check (Top-20 #4) reports degraded instrumentation. Off by default — the engine refuses to start a run whose coverage bitmap doesn't move under real warm-up traffic, since that run would otherwise burn its whole time budget finding nothing. See "Self-verifying, fail-closed instrumentation" below. |
 
 ### Sequences (stateful multi-step chains)
@@ -207,8 +207,10 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 |------|---------|-------------|
 | `-sequence-prob` | `0.30` | Probability of scheduling a sequence step |
 | `-sequence-max-depth` | `3` | Max chain length (create → read → update → delete) |
-| `-sequence-fanout` | `6` | Max follow-up requests per successful step |
+| `-sequence-fanout` | `6` | Max follow-up requests per successful step (widened by 1 for a step that just reached a never-seen workflow shape — Top-20 #12) |
 | `-sequential-baseline` | `false` | Run baseline epoch sequentially instead of concurrent |
+
+**State-reward search (Top-20 #12):** a sequence step reaching a workflow *shape* (ordered method+normpath+status-class, concrete IDs collapsed) never seen this run earns a state-novelty energy bonus and one extra fanout branch — rewarding new *states*, not just new coverage edges. `printFinalReport` shows `Sequence engine: new_states_found=N unique_workflows_persisted=M`; the latter also dedups the on-disk workflow reports (`workflows/*.json`+`.sh`) by final shape so equivalent workflows aren't all dumped to disk.
 
 ### Crash Analysis (all ON by default)
 
@@ -230,10 +232,11 @@ Signals that go beyond "HTTP 500 = bug". Access-control probes are most valuable
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-access-probe` | **true** | Master toggle for all three access-control probes below |
+| `-access-probe` | **true** | Master toggle for all four access-control probes below |
 | `-probe-bola` | **true** | Cross-identity BOLA/IDOR replay under every other identity |
 | `-probe-auth-bypass` | **true** | No-credential replay. **Precondition:** only fires on endpoints already observed rejecting unauthenticated access with 401/403 — a truly public endpoint never triggers it, so no public-endpoint false positives. Confidence is `likely_vuln_high` when the endpoint was seen rejecting an *unauthenticated* request, else `likely_vuln` + `needs_manual_verification`. |
 | `-probe-mass-assign` | **true** | Re-send successful writes with privileged fields over-posted |
+| `-probe-differential` | **true** | (Top-20 #18) Verb (GET→HEAD)/content-type (JSON→text/plain)/route-case/param-location confusion, replayed with no credentials. **Precondition:** only fires on endpoints with *strong* auth evidence (a plain unauthenticated request was already rejected) — a hit means the confusion technique itself, not general laxness, bypassed the check. `likely_vuln_high`, tagged `differential_auth_bypass:<technique>` |
 | `-access-probe-prob` | `0.5` | Probability of firing access-control probes after a successful resource-scoped request |
 | `-access-probe-max-per-endpoint` | `6` | Max access-control probes queued per endpoint per run |
 | `-access-probe-queue-max` | `256` | Global cap on queued access-control probes |

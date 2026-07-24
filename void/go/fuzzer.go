@@ -48,6 +48,16 @@ type Fuzzer struct {
 	corpus        []Seed
 	seedSampler   *FenwickSampler
 
+	// State-reward sequence search (Top-20 #12): seenStateSigs tracks every
+	// distinct workflow-shape signature (see sequence.go::sequenceStateSignature)
+	// reached this run, for novelty reward + fanout widening; persistedWorkflowSigs
+	// dedups the on-disk workflow report by final shape so equivalent workflows
+	// (same shape, different concrete IDs) aren't all dumped to disk.
+	seenStateSigs         map[string]struct{}
+	persistedWorkflowSigs map[string]struct{}
+	newStatesFound        int
+	workflowsPersisted    int
+
 	endpointStats map[string]*EndpointStats
 	mutationStats map[string]*MutationStats
 	authBlocked   map[string]*AuthBlockedState
@@ -252,6 +262,8 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		aclSeen:               map[string]struct{}{},
 		authRequiredEndpoints: map[string]int{},
 		replayByEndpoint:      map[string]int{},
+		seenStateSigs:         map[string]struct{}{},
+		persistedWorkflowSigs: map[string]struct{}{},
 		identities:            nil,
 		identityOrder:         nil,
 		identityCursor:        0,

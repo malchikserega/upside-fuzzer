@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestFetchCoverageHealthParsesFields covers the /shm/health JSON contract
@@ -79,5 +80,73 @@ func TestCheckCoverageHealthUnreachableFailsClosed(t *testing.T) {
 	f2 := &Fuzzer{cfg: Config{AllowDegradedCoverage: true}, target: "http://127.0.0.1:1", client: http.DefaultClient}
 	if err := f2.checkCoverageHealth(); err != nil {
 		t.Fatalf("expected -allow-degraded-coverage to override an unreachable health check, got error: %v", err)
+	}
+}
+
+// TestFetchCoverageHealthParsesInstrumentedTypes verifies the Top-20 #17
+// instrumented_types field (real build-time instrumented-type count, used to
+// auto-size the SHM bitmap) round-trips through the /shm/health JSON contract,
+// and that its absence (a build predating this field) decodes to 0 rather than
+// erroring -- old and new coverage runtimes must both be readable.
+func TestFetchCoverageHealthParsesInstrumentedTypes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"shm_bound":true,"mode":"file-backed-mmap","total_classes":3,` +
+			`"linked_assemblies":1,"instrumented_types":42,"app_assemblies":["PlantedBugApi"]}`))
+	}))
+	defer srv.Close()
+
+	health, err := fetchCoverageHealth(srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetchCoverageHealth failed: %v", err)
+	}
+	if health.InstrumentedTypes != 42 {
+		t.Errorf("expected instrumented_types=42, got %d", health.InstrumentedTypes)
+	}
+
+	srvOld := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"shm_bound":true,"mode":"heap","total_classes":0,"linked_assemblies":0,"app_assemblies":[]}`))
+	}))
+	defer srvOld.Close()
+	healthOld, err := fetchCoverageHealth(srvOld.Client(), srvOld.URL)
+	if err != nil {
+		t.Fatalf("fetchCoverageHealth failed on a pre-#17 payload: %v", err)
+	}
+	if healthOld.InstrumentedTypes != 0 {
+		t.Errorf("expected instrumented_types=0 when the field is absent, got %d", healthOld.InstrumentedTypes)
+	}
+}
+
+// TestShouldResetCoverageBitmap verifies the Top-20 #17 reset gating: a reset
+// now requires BOTH high saturation AND genuine stagnation (no new edge
+// recently), not saturation alone -- so a bitmap reset never discards progress
+// mid-productive-run purely because a byte-percentage threshold was crossed.
+func TestShouldResetCoverageBitmap(t *testing.T) {
+	now := time.Now()
+
+	// Saturated but still actively finding edges (lastEdgeEvent just now) -> no reset.
+	if shouldResetCoverageBitmap(90.0, 65536, now, time.Time{}, now) {
+		t.Errorf("must not reset while still actively finding edges, even at high saturation")
+	}
+
+	// Saturated AND stagnant (last edge 60s ago) AND never reset before -> reset.
+	if !shouldResetCoverageBitmap(90.0, 65536, now.Add(-60*time.Second), time.Time{}, now) {
+		t.Errorf("expected reset when saturated and stagnant")
+	}
+
+	// Stagnant but NOT saturated -> no reset (nothing to gain from wiping a map that isn't full).
+	if shouldResetCoverageBitmap(50.0, 65536, now.Add(-60*time.Second), time.Time{}, now) {
+		t.Errorf("must not reset when saturation is low, regardless of stagnation")
+	}
+
+	// Saturated and stagnant, but reset only 10s ago -> too soon, no reset (avoids tight loops).
+	if shouldResetCoverageBitmap(90.0, 65536, now.Add(-60*time.Second), now.Add(-10*time.Second), now) {
+		t.Errorf("must not reset again within the cooldown window")
+	}
+
+	// No bitmap capacity known yet -> never reset (capacity<=0 guard).
+	if shouldResetCoverageBitmap(90.0, 0, now.Add(-60*time.Second), time.Time{}, now) {
+		t.Errorf("must not reset when coverageCapacity is unknown (0)")
 	}
 }

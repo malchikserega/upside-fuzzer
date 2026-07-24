@@ -103,6 +103,7 @@ type Config struct {
 	ProbeBOLA                   bool // cross-identity BOLA/IDOR replay
 	ProbeAuthBypass             bool // no-credential replay (gated by 401/403 precondition)
 	ProbeMassAssign             bool // privileged-field over-posting
+	ProbeDifferential           bool // verb/content-type/route-case parser-confusion auth-bypass replay
 	AccessProbeProb             float64
 	AccessProbeMaxPerEndpoint   int
 	AccessProbeQueueMax         int
@@ -354,12 +355,16 @@ type WorkItem struct {
 	SeqDepth      int
 	SeqState      *SequenceState
 	// Access-control oracle fields (set only on replayed probes; see oracle.go).
-	OracleKind           string // "" for normal items, else "bola" | "authbypass"
+	OracleKind           string // "" for normal items, else "bola" | "authbypass" | "massassign" | "differential"
 	NoAuth               bool   // strip all credentials from this probe
 	OracleOriginIdentity string
 	OracleOriginStatus   int
 	OracleOriginFP       string
 	OracleOriginBodyLen  int
+	// DiffTechnique names which differential-oracle variant produced this probe
+	// (Top-20 #18): "verb" | "content-type" | "route-case" | "param-location".
+	// Only set when OracleKind == oracleKindDifferential.
+	DiffTechnique string
 }
 
 type SendResult struct {

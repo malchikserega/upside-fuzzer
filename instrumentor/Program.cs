@@ -223,6 +223,24 @@ try
     Console.WriteLine($"[instrumentor] Done: instrumented={instrumentedCount} " +
                       $"skipped_framework={skippedFramework} skipped_generated={skippedGenerated} " +
                       $"skipped_infra={skippedInfra} skipped_no_match={skippedNoMatch}");
+
+    // Top-20 #17: persist the real instrumented-type count next to the DLL so the
+    // runtime coverage hook can size the SHM bitmap from actual app surface instead
+    // of a fixed 256KB guess (see fuzz-prep-multi.py::ResolveShmSize). SharpFuzz
+    // doesn't expose a public branch/edge count, so instrumented TYPE count is used
+    // as a proxy. Appended (not overwritten) because a multi-DLL app runs this
+    // instrumentor once per assembly -- each RUN line contributes one line here.
+    try
+    {
+        var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dllPath)) ?? ".", ".upsidefuzz_instrumented.jsonl");
+        var line = "{\"assembly\":\"" + Path.GetFileName(dllPath).Replace("\"", "") +
+                   "\",\"instrumented_types\":" + instrumentedCount + "}";
+        File.AppendAllText(metaPath, line + "\n");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[instrumentor] WARNING: failed to write instrumentation meta file: {ex.Message}");
+    }
 }
 catch (SharpFuzz.InstrumentationException ex) when (ex.Message.Contains("already instrumented"))
 {

@@ -152,6 +152,12 @@ type CoverageHealth struct {
 	TotalClasses     int      `json:"total_classes"`
 	LinkedAssemblies int      `json:"linked_assemblies"`
 	AppAssemblies    []string `json:"app_assemblies"`
+	// InstrumentedTypes is the real instrumented-type count captured at build time
+	// by instrumentor/Program.cs (Top-20 #17), used by the .NET side to auto-size
+	// the SHM bitmap instead of a fixed 256KB guess. 0 on a build predating this
+	// field or when the meta file couldn't be written -- callers must treat 0 as
+	// "unknown", not "zero types instrumented".
+	InstrumentedTypes int `json:"instrumented_types"`
 }
 
 // fetchCoverageHealth queries the target's /shm/health control endpoint. It
@@ -201,7 +207,7 @@ func (f *Fuzzer) checkCoverageHealth() error {
 		msg := fmt.Sprintf("coverage health check failed: %v", err)
 		return f.failOrWarnDegraded(msg)
 	}
-	fmt.Printf("Coverage health: shm_bound=%v mode=%s app_assemblies=%v\n", health.ShmBound, health.Mode, health.AppAssemblies)
+	fmt.Printf("Coverage health: shm_bound=%v mode=%s instrumented_types=%d app_assemblies=%v\n", health.ShmBound, health.Mode, health.InstrumentedTypes, health.AppAssemblies)
 	if !health.ShmBound {
 		return f.failOrWarnDegraded("coverage instrumentation degraded: shared coverage bitmap is not bound (shm_bound=false)")
 	}
@@ -271,7 +277,6 @@ type SHMCoverageReader struct {
 }
 
 func (s *SHMCoverageReader) Init() error {
-	desired := maxInt(minSHMBitmapSize, s.size)
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		fi, err := os.Stat(s.path)
@@ -292,13 +297,25 @@ func (s *SHMCoverageReader) Init() error {
 		_ = f.Close()
 		return err
 	}
+	// Top-20 #17: trust the actual on-disk file size, not the (possibly stale)
+	// -coverage-bitmap-size flag. The .NET side now sizes this file dynamically
+	// from the real instrumented-type count (fuzz-prep-multi.py::ResolveShmSize),
+	// so it can legitimately be larger than any size the Go side was told to
+	// expect. Previously this clamped mapSize down to the flag's value whenever
+	// the real file was bigger, silently reading only the first N bytes of the
+	// bitmap and dropping real coverage from the untruncated remainder -- a
+	// footgun now that the two sides can disagree on size by design.
 	mapSize := int(fi.Size())
-	if desired > 0 && mapSize > desired {
-		mapSize = desired
-	}
 	if mapSize < minSHMBitmapSize {
 		_ = f.Close()
 		return fmt.Errorf("shm file too small: %d bytes (need at least %d)", mapSize, minSHMBitmapSize)
+	}
+	if desired := s.size; desired > 0 && desired != mapSize {
+		// Purely diagnostic: the .NET side now sizes this file itself (from the real
+		// instrumented-type count when SHM_SIZE isn't pinned -- Top-20 #17), so a
+		// mismatch here is expected whenever -coverage-bitmap-size wasn't also passed
+		// as the SHM_SIZE env var on the target container. Not an error.
+		fmt.Printf("Coverage bitmap: actual SHM file size %d bytes differs from -coverage-bitmap-size %d (using actual size)\n", mapSize, desired)
 	}
 	s.f = f
 	s.mapSize = mapSize

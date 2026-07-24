@@ -238,7 +238,7 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 				}
 			}
 
-				elapsed := time.Since(f.startTime).Seconds()
+			elapsed := time.Since(f.startTime).Seconds()
 			reqPerSec := 0.0
 			if elapsed > 0 {
 				reqPerSec = float64(f.totalDone) / elapsed
@@ -600,6 +600,7 @@ func (f *Fuzzer) printFinalReport() {
 		fmt.Printf("Coverage: %d -> %d (+%d)\n", f.startEdges, f.currentEdges, f.currentEdges-f.startEdges)
 	}
 	fmt.Printf("Latency avg=%.1fms errors=%d crashes=%d uniq=%d\n", avgLat, f.totalErrors, f.totalCrashes, f.uniqueCrashes)
+	fmt.Printf("Sequence engine: new_states_found=%d unique_workflows_persisted=%d\n", f.newStatesFound, f.workflowsPersisted)
 	if f.cfg.AutoAntiForgery {
 		fmt.Printf("Anti-forgery tokens learned=%d pool=%d\n", atomic.LoadInt64(&f.antiForgeryLearned), f.antiForgeryTokenPoolSize())
 	}

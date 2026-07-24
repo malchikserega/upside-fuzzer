@@ -256,7 +256,8 @@ curl -s http://localhost:<PORT>/swagger/v1/swagger.json | head -c 200
 ## 5. Step 3: Verify Instrumentation
 
 ```bash
-# 1. Initialize SHM — allocates the shared bitmap (256KB by default), syncs SharpFuzz across all DLLs
+# 1. Initialize SHM — allocates the shared bitmap (auto-sized from the real instrumented-type
+#    count captured at build time, 256KB default/64KB min/8MB max — see Top-20 #17), syncs SharpFuzz across all DLLs
 curl -s -X POST http://localhost:<PORT>/shm/create
 # → {"status":"synced","mode":"file-backed-mmap","bitmap_size":262144,...}
 
@@ -590,7 +591,9 @@ docker compose --profile fuzz-go run --rm void \
 
 The cross-identity replay is only as strong as your `-auth-file`: provide at least two real identities (plus the auto guest) so BOLA probes have distinct principals to compare. Findings appear with `access_control: true` and `origin_identity` → `shadow_identity`; mass-assignment findings carry `mass_assignment_privileged_field_accepted`.
 
-Each oracle can be toggled independently under the `-access-probe` master switch: `-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`. The auth-bypass probe is self-limiting — it **only** fires on endpoints already observed rejecting unauthenticated access (401/403), so it never flags genuinely public endpoints. Including the auto guest identity (`-identity-include-guest`, on in the `security` profile) helps it learn which endpoints enforce auth faster and raises auth-bypass findings to `likely_vuln_high`.
+Each oracle can be toggled independently under the `-access-probe` master switch: `-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`, `-probe-differential`. The auth-bypass probe is self-limiting — it **only** fires on endpoints already observed rejecting unauthenticated access (401/403), so it never flags genuinely public endpoints. Including the auto guest identity (`-identity-include-guest`, on in the `security` profile) helps it learn which endpoints enforce auth faster and raises auth-bypass findings to `likely_vuln_high`.
+
+`-probe-differential` (Top-20 #18) goes a step further: on endpoints with *strong* evidence of auth enforcement, it replays 4 confusion variants with no credentials — a GET reissued as HEAD, the same JSON body declared as `text/plain`, a path with segment casing flipped, and the path-embedded resource id duplicated as a query parameter. Because the plain unauthenticated replay on that same endpoint already failed (that's the precondition), a 2xx on one of these variants means the confusion technique itself — not general laxness — let the request through; findings carry `differential_auth_bypass:<technique>` and a `technique` field (`verb`/`content-type`/`route-case`/`param-location`) in `triage`.
 
 For very noisy targets where you do not want to revisit crash areas, add:
 

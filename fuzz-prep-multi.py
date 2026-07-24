@@ -993,6 +993,11 @@ namespace UpsideFuzz.Coverage
         private const string SHM_PATH = "/coverage_shm/bitmap";
         private const int DEFAULT_SHM_SIZE = 262144;
         private const int MIN_SHM_SIZE = 65536;
+        private const int MAX_SHM_SIZE = 8 * 1024 * 1024;
+        // Top-20 #17: real instrumented-type count captured at build time by
+        // instrumentor/Program.cs, used both to auto-size SHM_SIZE below (when the
+        // env var isn't explicitly set) and reported via /shm/health for transparency.
+        internal static readonly int InstrumentedTypeCount = ResolveInstrumentedTypeCount();
         internal static readonly int SHM_SIZE = ResolveShmSize();
 
         private static IntPtr globalShmAddr = IntPtr.Zero;
@@ -1095,6 +1100,34 @@ namespace UpsideFuzz.Coverage
             foreach (var a in AppDomain.CurrentDomain.GetAssemblies()) LinkAssembly(a);
         }
 
+        // ResolveInstrumentedTypeCount reads the JSONL meta file instrumentor/Program.cs
+        // appends next to the app's DLLs (one line per instrumented assembly) and sums
+        // instrumented_types across them. Returns 0 if the file is absent (e.g. a build
+        // predating this feature, or the meta write failed) -- callers must treat 0 as
+        // "unknown", not "zero types instrumented".
+        private static int ResolveInstrumentedTypeCount()
+        {
+            try
+            {
+                var metaPath = Path.Combine(AppContext.BaseDirectory, ".upsidefuzz_instrumented.jsonl");
+                if (!File.Exists(metaPath)) return 0;
+                int total = 0;
+                const string key = "\"instrumented_types\":";
+                foreach (var line in File.ReadAllLines(metaPath))
+                {
+                    var idx = line.IndexOf(key, StringComparison.Ordinal);
+                    if (idx < 0) continue;
+                    int start = idx + key.Length;
+                    int end = start;
+                    while (end < line.Length && char.IsDigit(line[end])) end++;
+                    if (end > start && int.TryParse(line.Substring(start, end - start), out var n))
+                        total += n;
+                }
+                return total;
+            }
+            catch { return 0; }
+        }
+
         private static int ResolveShmSize()
         {
             try
@@ -1102,6 +1135,24 @@ namespace UpsideFuzz.Coverage
                 var raw = Environment.GetEnvironmentVariable("SHM_SIZE");
                 if (int.TryParse(raw, out var parsed))
                     return parsed < MIN_SHM_SIZE ? MIN_SHM_SIZE : parsed;
+            }
+            catch { }
+            // Top-20 #17: size the bitmap from the real instrumented-type count instead
+            // of a fixed 256KB guess, when the caller hasn't pinned SHM_SIZE explicitly.
+            // SharpFuzz exposes no public branch/edge count, so instrumented TYPE count
+            // is used as a proxy -- budget ~512 bitmap bytes per instrumented type
+            // (generous enough to keep hash collisions rare for typical controller/
+            // service-sized classes), rounded up to a power of two and clamped to
+            // [MIN_SHM_SIZE, MAX_SHM_SIZE] so very small or very large apps stay sane.
+            try
+            {
+                if (InstrumentedTypeCount > 0)
+                {
+                    long estimate = (long)InstrumentedTypeCount * 512;
+                    int size = MIN_SHM_SIZE;
+                    while (size < estimate && size < MAX_SHM_SIZE) size <<= 1;
+                    return size;
+                }
             }
             catch { }
             return DEFAULT_SHM_SIZE;
@@ -1296,6 +1347,7 @@ namespace UpsideFuzz.Coverage
                 return WriteJson(context, "{\"linked_assemblies\":" + linkCount + ",\"total_classes\":" + totalClasses +
                     ",\"shm_bound\":" + (shmBound ? "true" : "false") +
                     ",\"mode\":\"" + (isFileBacked ? "file-backed-mmap" : "heap") + "\"" +
+                    ",\"instrumented_types\":" + InstrumentedTypeCount +
                     ",\"app_assemblies\":" + JsonStringArray(seenAppAssemblies.Keys) + "}");
             }
             context.Response.StatusCode = 404;
@@ -1548,6 +1600,11 @@ namespace {ns_prefix}.{subdir_name}
         private const string SHM_PATH = "/coverage_shm/bitmap";
         private const int DEFAULT_SHM_SIZE = 262144;
         private const int MIN_SHM_SIZE = 65536;
+        private const int MAX_SHM_SIZE = 8 * 1024 * 1024;
+        // Top-20 #17: real instrumented-type count captured at build time by
+        // instrumentor/Program.cs, used both to auto-size SHM_SIZE below (when the
+        // env var isn't explicitly set) and reported via /shm/health for transparency.
+        private static readonly int InstrumentedTypeCount = ResolveInstrumentedTypeCount();
         private static readonly int SHM_SIZE = ResolveShmSize();
 
         private static IntPtr globalShmAddr = IntPtr.Zero;
@@ -1642,6 +1699,33 @@ namespace {ns_prefix}.{subdir_name}
             return novel;
         }}
 
+        // ResolveInstrumentedTypeCount reads the JSONL meta file instrumentor/Program.cs
+        // appends next to the app's DLLs (one line per instrumented assembly) and sums
+        // instrumented_types across them. Returns 0 if the file is absent (e.g. a build
+        // predating this feature) -- callers must treat 0 as "unknown", not "zero types".
+        private static int ResolveInstrumentedTypeCount()
+        {{
+            try
+            {{
+                var metaPath = Path.Combine(AppContext.BaseDirectory, ".upsidefuzz_instrumented.jsonl");
+                if (!File.Exists(metaPath)) return 0;
+                int total = 0;
+                const string key = "\\"instrumented_types\\":";
+                foreach (var line in File.ReadAllLines(metaPath))
+                {{
+                    var idx = line.IndexOf(key, StringComparison.Ordinal);
+                    if (idx < 0) continue;
+                    int start = idx + key.Length;
+                    int end = start;
+                    while (end < line.Length && char.IsDigit(line[end])) end++;
+                    if (end > start && int.TryParse(line.Substring(start, end - start), out var n))
+                        total += n;
+                }}
+                return total;
+            }}
+            catch {{ return 0; }}
+        }}
+
         private static int ResolveShmSize()
         {{
             try
@@ -1651,6 +1735,22 @@ namespace {ns_prefix}.{subdir_name}
                 {{
                     if (parsed < MIN_SHM_SIZE) return MIN_SHM_SIZE;
                     return parsed;
+                }}
+            }}
+            catch {{ }}
+            // Top-20 #17: size the bitmap from the real instrumented-type count instead
+            // of a fixed 256KB guess, when SHM_SIZE isn't pinned explicitly. SharpFuzz
+            // exposes no public branch/edge count, so instrumented TYPE count is used as
+            // a proxy -- budget ~512 bitmap bytes per instrumented type, rounded up to a
+            // power of two and clamped to [MIN_SHM_SIZE, MAX_SHM_SIZE].
+            try
+            {{
+                if (InstrumentedTypeCount > 0)
+                {{
+                    long estimate = (long)InstrumentedTypeCount * 512;
+                    int size = MIN_SHM_SIZE;
+                    while (size < estimate && size < MAX_SHM_SIZE) size <<= 1;
+                    return size;
                 }}
             }}
             catch {{ }}
@@ -1920,6 +2020,7 @@ namespace {ns_prefix}.{subdir_name}
                     mode = isFileBacked ? "file-backed-mmap" : "heap",
                     total_classes = totalClasses,
                     linked_assemblies = isSynced ? 1 : 0,
+                    instrumented_types = InstrumentedTypeCount,
                     app_assemblies = seenAppAssemblies.Keys.ToArray()
                 }});
             }});

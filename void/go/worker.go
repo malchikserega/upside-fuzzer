@@ -519,6 +519,9 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		f.maybeEnqueueAccessProbes(res)
 		// Mass-assignment: re-send this successful write with privileged fields over-posted.
 		f.maybeEnqueueMassAssignProbe(res)
+		// Differential/parser-confusion: verb/content-type/route-case/param-location
+		// variants replayed with no auth on endpoints known to enforce it (Top-20 #18).
+		f.maybeEnqueueDifferentialProbes(res)
 	}
 
 	// Positive injection oracles on non-crash responses (reflected XSS, evaluated
@@ -554,19 +557,39 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		f.lastEdgeEvent = time.Now()
 	}
 
-	// When the bitmap is > 85% full, coverage feedback becomes noise (hash collisions dominate).
-	// Periodically reset so the fuzzer can still distinguish new paths — especially important
-	// for runs > 30 minutes against large applications.
-	if sat := f.coverageSaturationPct(); sat > 85.0 && f.coverageCapacity > 0 {
-		if f.lastCoverageReset.IsZero() || time.Since(f.lastCoverageReset) > 90*time.Second {
-			if err := f.coverage.Reset(); err == nil {
-				f.addEvent(fmt.Sprintf("COVERAGE bitmap reset (sat=%.1f%% → 0%%)", sat))
-				f.currentEdges = 0
-				f.coverageSaturationWarned = false
-				f.lastCoverageReset = time.Now()
-			}
+	// When the bitmap is > 85% full AND we've genuinely stopped finding new edges,
+	// coverage feedback has become noise (hash collisions dominate) -- reset so the
+	// fuzzer can still distinguish new paths on long runs against large apps.
+	// Top-20 #17: this used to reset on saturation alone, discarding real progress
+	// mid-run even while still finding new edges purely because a byte-percentage
+	// crossed a fixed threshold. Requiring stagnation too (see
+	// shouldResetCoverageBitmap) means a reset only fires when there's actual
+	// evidence collisions are corrupting the signal, not just that the map is full
+	// -- which now that the map is real-surface-sized (fuzz-prep-multi.py::
+	// ResolveShmSize) should also just happen less often on its own.
+	if sat := f.coverageSaturationPct(); shouldResetCoverageBitmap(sat, f.coverageCapacity, f.lastEdgeEvent, f.lastCoverageReset, time.Now()) {
+		if err := f.coverage.Reset(); err == nil {
+			f.addEvent(fmt.Sprintf("COVERAGE bitmap reset (sat=%.1f%% → 0%%, stagnant)", sat))
+			f.currentEdges = 0
+			f.coverageSaturationWarned = false
+			f.lastCoverageReset = time.Now()
 		}
 	}
+}
+
+// shouldResetCoverageBitmap decides whether the coverage bitmap should be
+// wiped: only when it's both near-full (collisions likely dominating the
+// signal) AND stagnant (no new edge recently, so we're not just resetting
+// mid-productive-run) AND not reset too recently (avoids tight reset loops).
+func shouldResetCoverageBitmap(satPct float64, coverageCapacity int, lastEdgeEvent, lastCoverageReset, now time.Time) bool {
+	if satPct <= 85.0 || coverageCapacity <= 0 {
+		return false
+	}
+	stagnant := lastEdgeEvent.IsZero() || now.Sub(lastEdgeEvent) > 30*time.Second
+	if !stagnant {
+		return false
+	}
+	return lastCoverageReset.IsZero() || now.Sub(lastCoverageReset) > 90*time.Second
 }
 
 func (f *Fuzzer) coverageSaturationPct() float64 {
@@ -970,6 +993,7 @@ func (f *Fuzzer) ensureMutationStats(name string) *MutationStats {
 	}
 	return ms
 }
+
 // clientErrorEnumHintRe extracts enum/valid-value hints from a validation error
 // message, e.g. "must be one of [Pending, Paid, Shipped]" or
 // "Valid values: Pending, Paid, Shipped" -- ASP.NET's common phrasing for
