@@ -160,4 +160,35 @@ You can find the reproduced CURL scripts for any 500 Internal Server Errors in `
 
 ---
 
+## The same thing, via the `upsidefuzz` CLI
+
+Step 2 (instrument) and Step 4 (grammar) map directly onto CLI subcommands. Steps 3
+(swagger sanitize) and 5 (cookie login) are SimplCommerce-specific helper scripts with no
+generic CLI equivalent — keep running those exactly as documented above, then hand their
+output to the CLI subcommands. Step 6's fuzz run switches from the Docker-Compose
+`smartfuzzer` service to `upsidefuzz fuzz` running `void` directly against the same
+published port:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz instrument --src ./simplcommerce --out ./simplcommerce_prep --main src/SimplCommerce.WebHost
+
+upsidefuzz up --dir ./simplcommerce_prep --services simpldb instrumented --wait-secs 40
+
+# Step 3 (swagger download + fix_swagger_paths.py) stays manual -- see above -- then:
+upsidefuzz verify --base http://localhost:7777
+
+upsidefuzz grammar simplcommerce_prep/swagger-sanitized.json --src ./simplcommerce --out grammars/simplcommerce
+
+# Step 5 (get_cookie.py) stays manual -- see above -- then, instead of editing
+# docker-compose.instrumented.yml's smartfuzzer service, just export what it wrote:
+export $(cat simplcommerce_prep/fuzzer.env | xargs)   # loads AUTH_COOKIE
+upsidefuzz fuzz --grammar grammars/simplcommerce --target http://localhost:7777 \
+  --profile security --time-budget 15
+```
+
+See [docs/CLI.md](docs/CLI.md) for the full subcommand reference.
+
+---
+
 **→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](SIMPLCOMMERCE_REPORT.md)**

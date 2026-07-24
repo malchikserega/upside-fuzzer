@@ -23,7 +23,8 @@
 9. [Step 8: Run the Fuzzer](#step-8-run-the-fuzzer) — two modes: [Host mode](#mode-a-host-mode-no-image-build-http-coverage) (no image build) and [Docker sidecar](#mode-b-docker-sidecar-direct-shm-fastest-coverage) (direct-shm)
 10. [Step 8b: Web UI Dashboard](#step-8b-web-ui-dashboard)
 11. [Step 9: View Results](#step-9-view-results)
-12. [Troubleshooting](#troubleshooting)
+12. [The same thing, via the `upsidefuzz` CLI](#the-same-thing-via-the-upsidefuzz-cli)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -627,6 +628,47 @@ Treat time-based SQLi/SSRF oracle hits as **leads, not confirmed vulns** — ver
 > the auth-bypass oracle's own signal. Both are fixed as of this doc's revision — if you're
 > running an older checkout, `git pull` first. See `ARCHITECTURE_REVIEW.md`'s
 > Inconsistencies section for the full writeups.
+
+---
+
+## The same thing, via the `upsidefuzz` CLI
+
+Bitwarden's bring-up is genuinely multi-stage (mssql healthcheck → migrator run-to-completion
+→ *then* api/identity) — that dependency chain isn't representable by a single `up` call, so
+**Step 3's bring-up stays exactly as documented above** (plain `docker compose` commands).
+Steps 2, 3's verify, and 7's grammar compile map onto CLI subcommands; Steps 4-6 (auth token,
+identity file, DB population) and Step 7's `sanitize_swagger.py` patch are Bitwarden-specific
+helper scripts with no generic CLI equivalent — keep running those exactly as documented,
+then hand their output to the CLI subcommands:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+
+# Step 2:
+upsidefuzz instrument --src ./bitwarden_src --out ./bitwarden_prep --main src/Api
+
+# Step 3's bring-up stays manual (the multi-stage dependency chain above) -- then verify:
+upsidefuzz verify --base http://localhost:4000 --probe /api/accounts/profile
+
+# Steps 4-6 (get_apikey.py, auth identity file, DB population) stay manual -- see above.
+
+# Step 7's sanitize_swagger.py patch stays manual too; feed the CLI the already-sanitized file:
+upsidefuzz grammar bitwarden_prep/internal_swagger.json --src ./bitwarden_src --out grammars/bitwarden
+
+# Step 8, Mode A (host mode) equivalent:
+export $(cat bitwarden_prep/fuzzer.env | xargs)   # loads AUTH_TOKEN
+upsidefuzz fuzz --grammar grammars/bitwarden --target http://localhost:4000 \
+  --profile security --skip-endpoint-on-500 --time-budget 15 \
+  --auth-file bitwarden_prep/auth.identities.json   # if you built one in Step 5
+
+upsidefuzz down --dir ./bitwarden_prep --volumes
+```
+
+Mode B (Docker sidecar, direct-shm) has no CLI equivalent yet — `upsidefuzz fuzz` always runs
+`void` directly against the target's published port (like Mode A), not as a separate
+networked sidecar container reading the shared-memory volume directly. Use the manual Mode B
+command in Step 8 above if you specifically want that faster read path. See
+[docs/CLI.md](docs/CLI.md) for the full subcommand reference.
 
 ---
 

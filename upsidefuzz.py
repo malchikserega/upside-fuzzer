@@ -177,6 +177,7 @@ def cmd_build(args: argparse.Namespace) -> None:
     compose_args = ["build"]
     if args.no_cache:
         compose_args.append("--no-cache")
+    compose_args += getattr(args, "services", None) or []
     _compose(Path(args.dir), compose_args)
 
 
@@ -184,7 +185,8 @@ def cmd_up(args: argparse.Namespace) -> None:
     if not args.skip_build:
         cmd_build(args)
     _banner(f"3. Starting containers in {args.dir}")
-    _compose(Path(args.dir), ["up", "-d"])
+    services = getattr(args, "services", None) or []
+    _compose(Path(args.dir), ["up", "-d"] + services)
     if args.wait_url:
         wait_url = _containerize_url(args.wait_url)
         if not _wait_for_http(wait_url, args.wait_timeout):
@@ -272,7 +274,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         inject_mode=args.inject_mode, exclude_namespaces=args.exclude_namespaces,
     ))
     cmd_up(argparse.Namespace(
-        dir=out, skip_build=False, no_cache=args.no_cache,
+        dir=out, skip_build=False, no_cache=args.no_cache, services=args.services,
         wait_url=args.target, wait_timeout=args.wait_timeout, wait_secs=0,
     ))
     if not args.skip_verify:
@@ -359,12 +361,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("build", help="docker compose build the instrumented image")
     sp.add_argument("--dir", required=True, help="Instrumented output directory")
     sp.add_argument("--no-cache", action="store_true")
+    sp.add_argument("--services", nargs="*", help="Build only these compose services (default: all)")
     sp.set_defaults(func=cmd_build)
 
     sp = sub.add_parser("up", help="Build and start the instrumented containers")
     sp.add_argument("--dir", required=True)
     sp.add_argument("--no-cache", action="store_true")
     sp.add_argument("--skip-build", action="store_true", help="Skip `docker compose build`, just `up -d`")
+    sp.add_argument("--services", nargs="*", help="Build/start only these compose services (default: all) -- "
+                                                    "needed for multi-service targets where you don't want "
+                                                    "every service (e.g. eShopOnWeb: sqlserver eshoppublicapi)")
     sp.add_argument("--wait-url", help="Poll this URL until it responds (e.g. http://localhost:8080/health)")
     sp.add_argument("--wait-timeout", type=float, default=180.0)
     sp.add_argument("--wait-secs", type=float, default=0.0, help="Fixed sleep fallback if --wait-url is not given")
@@ -420,6 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--exclude-namespaces")
     sp.add_argument("--inject-mode", choices=["hook", "source"], default="hook")
     sp.add_argument("--no-cache", action="store_true")
+    sp.add_argument("--services", nargs="*", help="Build/start only these compose services (default: all)")
     sp.add_argument("--target", default="http://localhost:8080", help="Where the instrumented app will be reachable")
     sp.add_argument("--wait-timeout", type=float, default=180.0)
     sp.add_argument("--probe", help="Real GET endpoint for verify-hook.sh's coverage-growth check")

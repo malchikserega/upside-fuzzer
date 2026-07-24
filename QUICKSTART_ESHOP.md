@@ -277,6 +277,46 @@ cd .. && rm -rf eshprep
 
 ---
 
+## The same thing, via the `upsidefuzz` CLI
+
+Steps 2–7 above, as CLI subcommands — verified end to end (2026-07-24) against this exact
+target, both natively and through the zero-install Docker launcher. eShopOnWeb only starts
+two services (`sqlserver eshoppublicapi`, not the whole compose file), so pass `--services`:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz instrument --src ./esh --out ./eshprep --main PublicApi
+
+upsidefuzz up --dir ./eshprep --services sqlserver eshoppublicapi \
+  --wait-url http://localhost:5200/api/catalog-brands --wait-timeout 120
+
+upsidefuzz verify --base http://localhost:5200 --probe /api/catalog-items
+
+upsidefuzz grammar http://localhost:5200/swagger/v1/swagger.json --src ./esh --out grammars/eshop
+
+upsidefuzz fuzz --grammar grammars/eshop --target http://localhost:5200 \
+  --profile security --time-budget 15
+
+upsidefuzz down --dir ./eshprep
+```
+
+Or all at once with `run` (works cleanly here since eShopOnWeb has no non-standard steps —
+no swagger patching, no multi-stage bring-up):
+
+```bash
+upsidefuzz run --src ./esh --out ./eshprep --main PublicApi \
+  --services sqlserver eshoppublicapi \
+  --target http://localhost:5200 --probe /api/catalog-items \
+  --swagger http://localhost:5200/swagger/v1/swagger.json \
+  --profile security --time-budget 15
+```
+
+See [docs/CLI.md](docs/CLI.md) for the full subcommand reference, and its "The `localhost`
+gotcha" section if you're wondering why `--target`/`--swagger` "just work" in Docker mode
+despite the CLI and the target running as separate containers.
+
+---
+
 ## Quick Reference
 
 | Step | Command |

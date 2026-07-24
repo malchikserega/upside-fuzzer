@@ -77,6 +77,10 @@ upsidefuzz up --dir ./my-project-fuzz --wait-url http://localhost:8080/health --
 upsidefuzz down --dir ./my-project-fuzz --volumes
 ```
 
+Pass `--services name1 name2` to `build`/`up`/`run` to build/start only specific compose
+services instead of the whole file — needed for multi-service targets where you don't want
+every service up (e.g. eShopOnWeb's `sqlserver eshoppublicapi`, not its MVC frontend too).
+
 `up` builds (unless `--skip-build`) then starts the stack, and — if `--wait-url` is given —
 polls it until it responds (any HTTP status counts as "up"; only connection failures keep
 retrying). Without `--wait-url`, pass `--wait-secs N` for a fixed sleep instead, matching
@@ -178,6 +182,31 @@ before using it — both for its own health-check polling *and* for the `TARGET_
 `SHM_HOST` environment variables passed to `void`, since `void` also runs inside this same
 container. Native mode does nothing here (no rewrite needed — a natively-run process
 already shares the host's actual network).
+
+---
+
+## Working with specific targets
+
+Every target has its own quirks (multi-stage bring-up, basic-auth-protected Swagger,
+malformed OpenAPI specs needing a patch script, cookie vs. bearer auth) that the CLI
+doesn't try to abstract away — the individual subcommands are building blocks, and each
+target's quickstart shows exactly how to combine them, with the target-specific manual
+steps kept as manual steps:
+
+| Target | CLI section |
+|---|---|
+| eShopOnWeb | [QUICKSTART_ESHOP.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_ESHOP.md#the-same-thing-via-the-upsidefuzz-cli) — `run` works end to end, no non-standard steps |
+| BTCPayServer | [QUICKSTART_BTCPAYSERVER.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_BTCPAYSERVER.md#the-same-thing-via-the-upsidefuzz-cli) — basic-auth swagger download stays manual |
+| SimplCommerce | [QUICKSTART_SIMPLCOMMERCE.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_SIMPLCOMMERCE.md#the-same-thing-via-the-upsidefuzz-cli) — swagger sanitize + cookie login stay manual |
+| Bitwarden (fresh) | [QUICKSTART_BITWARDEN.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli) — multi-stage bring-up (mssql → migrator → api/identity) stays manual |
+| Bitwarden (already set up) | [BITWARDEN_FUZZ_RUNBOOK.md § 8](../BITWARDEN_FUZZ_RUNBOOK.md#8-the-same-thing-via-the-upsidefuzz-cli) |
+
+The common pattern across all of them: whatever step is genuinely target-specific (a login
+script, a swagger patch, a non-standard bring-up order) stays exactly as documented in the
+manual walkthrough; everything else — `instrument`/`up`/`verify`/`grammar`/`fuzz`/`down` —
+becomes one CLI call. `run` (the all-in-one) only fits targets with no non-standard steps
+in between (eShopOnWeb, and most single-service targets you add yourself) — plug the
+individual subcommands together for anything more involved, exactly like the tables above.
 
 ---
 

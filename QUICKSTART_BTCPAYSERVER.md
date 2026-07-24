@@ -164,4 +164,37 @@ ls crashes/pocs/
 
 ---
 
+## The same thing, via the `upsidefuzz` CLI
+
+Steps 2, 3, and 6 above map onto CLI subcommands. Steps 4 (`get_apikey.py`), 5 (basic-auth
+swagger download), and the swagger patch in Step 6 are BTCPayServer-specific helper scripts
+with no generic CLI equivalent — keep running those exactly as documented above, then hand
+their output to the CLI subcommands:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz instrument --src ./btcpayserver --out ./btcpayserver_prep --main BTCPayServer
+
+upsidefuzz up --dir ./btcpayserver_prep --services instrumented --wait-secs 45
+
+# Steps 4-5 (get_apikey.py, basic-auth curl) stay manual -- see above -- then:
+upsidefuzz verify --base http://localhost:7777   # --probe is optional; omit if you don't have
+                                                  # a known-good unauthenticated GET endpoint handy
+
+# Step 6's fix_swagger_paths.py patch stays manual too; feed the CLI the already-patched file:
+upsidefuzz grammar btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
+
+# Host mode (HTTP coverage polling) -- the direct-shm sidecar command in Step 8 above still
+# works unchanged if you specifically want the faster direct-shm read path; the CLI's `fuzz`
+# always runs void directly rather than as a separate networked sidecar container, so it
+# talks to the target over the published host port instead:
+export $(cat btcpayserver_prep/fuzzer.env | xargs)   # loads the auth header get_apikey.py wrote
+upsidefuzz fuzz --grammar grammars/btcpay --target http://localhost:7777 \
+  --profile security --time-budget 15
+```
+
+See [docs/CLI.md](docs/CLI.md) for the full subcommand reference.
+
+---
+
 **→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md)**

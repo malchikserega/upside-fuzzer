@@ -232,6 +232,31 @@ docker compose -f docker-compose.instrumented.yml --profile fuzz run --rm --no-d
 
 ---
 
+## 8. The same thing, via the `upsidefuzz` CLI
+
+Sections 2, 4, and 5's host-mode invocation map onto CLI subcommands (from the repo root,
+one level up from `bitwarden_prep/`) — the multi-stage bring-up in §1 stays manual (mssql
+healthcheck → migrator → api/identity isn't representable by a single CLI call), and §3's
+auth-file creation script stays manual too:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz verify --base http://localhost:4000 --probe /api/accounts/profile
+
+upsidefuzz grammar bitwarden_prep/swagger.json --src ./bitwarden_src --out grammars/bitwarden
+
+export $(cat bitwarden_prep/fuzzer.env | xargs)   # loads AUTH_TOKEN, if you're using single-auth
+upsidefuzz fuzz --grammar grammars/bitwarden --target http://localhost:4000 \
+  --profile security --skip-endpoint-on-500 --time-budget 15 \
+  --auth-file bitwarden_prep/auth.identities.json   # if you built one in §3
+```
+
+Full walkthrough, including the fresh-clone setup steps and the Docker-sidecar (direct-shm)
+mode this CLI doesn't yet cover: [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli).
+Full subcommand reference: [docs/CLI.md](docs/CLI.md).
+
+---
+
 ## Troubleshooting cheat-sheet
 
 | Symptom | Cause / Fix |
