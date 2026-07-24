@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """
-export-templates.py  —  UpsideFuzz grammar exporter
+export-templates.py  —  DEPRECATED legacy fallback, not the primary path.
+
+RESTler has been retired (ARCHITECTURE_REVIEW.md Top-20 #9/#10). The current
+`compile-grammar.sh` (grammarc/ + analyzer/) writes `templates.export.json` directly —
+it never produces or touches a `grammar.py` file, and never invokes this script.
+
+This script is kept ONLY so grammar directories generated *before* the migration (which
+have a `grammar.py` but no `templates.export.json`) keep working without manual
+regeneration: void/go/template.go's `exportTemplates()` auto-invokes it at Void startup
+in exactly that one case. If you're generating a grammar for the first time, or
+regenerating an existing one, use `compile-grammar.sh` instead — you will never need
+this script.
+
 Parses RESTler grammar.py and exports request templates to JSON
 (TemplateExport format consumed by the Go fuzzer).
 
@@ -9,7 +21,7 @@ Supports RESTler old-style grammars:
     from engine.core import requests
     req = requests.Request([...])   ← list of segment-producing primitives
 
-Usage:
+Usage (legacy grammars only):
     python3 export-templates.py --grammar-dir <dir> --out <output.json>
     python3 export-templates.py --grammar-dir . --out templates.export.json
 """

@@ -190,16 +190,22 @@ func flipJSONScalar(v any) any {
 	}
 }
 
-func mutateAny(value, valueType string) (string, string) {
+// hint carries the segment's optional per-field constraint metadata (Top-20 #14) into
+// the mutators below, so a field with a declared min/max/length/pattern/enum gets
+// boundary-aware candidates blended into its otherwise-generic mutation pool. nil is
+// always valid (no schema hint attached — e.g. custom_payload segments today) and
+// every mutator below falls back to exactly its pre-existing generic behavior in that
+// case, so this is purely additive.
+func mutateAny(value, valueType string, hint *Segment) (string, string) {
 	t := strings.ToLower(strings.TrimSpace(valueType))
 	switch t {
 	case "string", "group", "unknown", "custom_payload", "custom_payload_header", "custom_payload_query", "custom_payload_uuid4_suffix":
-		val, subcat := mutateStringCategorized(value)
+		val, subcat := mutateStringCategorized(value, hint)
 		return val, subcat
 	case "int", "integer":
-		return mutateInt(value), "mutate_int"
+		return mutateInt(value, hint), "mutate_int"
 	case "number", "float", "double", "decimal":
-		return mutateNumber(value), "mutate_number"
+		return mutateNumber(value, hint), "mutate_number"
 	case "bool", "boolean":
 		return mutateBool(value), "mutate_bool"
 	case "datetime", "date", "date-time":
@@ -209,17 +215,17 @@ func mutateAny(value, valueType string) (string, string) {
 	case "object":
 		return mutateObject(value), "mutate_object"
 	default:
-		val, subcat := mutateStringCategorized(value)
+		val, subcat := mutateStringCategorized(value, hint)
 		return val, subcat
 	}
 }
 
-func mutateHavoc(value, valueType string, depth int) (string, string) {
+func mutateHavoc(value, valueType string, depth int, hint *Segment) (string, string) {
 	v := value
 	names := []string{}
 	for i := 0; i < clampInt(depth, 1, 4); i++ {
 		var n string
-		v, n = mutateAny(v, valueType)
+		v, n = mutateAny(v, valueType, hint)
 		names = append(names, n)
 	}
 	return v, "havoc(" + strings.Join(names, "+") + ")"
@@ -227,7 +233,15 @@ func mutateHavoc(value, valueType string, depth int) (string, string) {
 
 // mutateStringCategorized picks a payload using MOpt-weighted category selection.
 // Returns (mutated_value, sub_category_label) for tracking which category succeeds.
-func mutateStringCategorized(v string) (string, string) {
+// When hint declares length bounds, exact-boundary-length candidates are blended in
+// ahead of the generic categories; when hint declares enum values, a valid-value /
+// near-miss-invalid pair is blended in too.
+func mutateStringCategorized(v string, hint *Segment) (string, string) {
+	if hint != nil {
+		if cands := fieldConstraintStringCandidates(v, hint); len(cands) > 0 && rand.Float64() < 0.35 {
+			return cands[rand.Intn(len(cands))], "mcat_field_constraint"
+		}
+	}
 	// 10% chance: value-derived mutations (reverse, null byte) that don't fit a category.
 	if rand.Float64() < 0.10 {
 		misc := []string{reverse(v), v + "\x00"}
@@ -237,20 +251,74 @@ func mutateStringCategorized(v string) (string, string) {
 	return cat.Payloads[rand.Intn(len(cat.Payloads))], "mcat_" + cat.Name
 }
 
+// fieldConstraintStringCandidates builds boundary/enum-aware string candidates from a
+// segment's declared constraints (Top-20 #14). Empty when the hint carries none.
+func fieldConstraintStringCandidates(v string, hint *Segment) []string {
+	var cands []string
+	if hint.MinLength != nil {
+		min := *hint.MinLength
+		cands = append(cands, strings.Repeat("a", max0(min-1)), strings.Repeat("a", min))
+	}
+	if hint.MaxLength != nil {
+		max := *hint.MaxLength
+		cands = append(cands, strings.Repeat("b", max), strings.Repeat("c", max+1))
+	}
+	if len(hint.EnumValues) > 0 {
+		valid := hint.EnumValues[rand.Intn(len(hint.EnumValues))]
+		cands = append(cands, valid, valid+"_INVALID", strings.ToUpper(valid)+strings.ToLower(valid))
+	}
+	if hint.Pattern != "" {
+		// v1 scope: no regex-negation engine, just a couple of generic
+		// almost-certainly-non-matching probes alongside the field's own current value.
+		cands = append(cands, "", v+"\x00", "!!!"+v+"!!!")
+	}
+	return cands
+}
+
 func mutateString(v string) string {
-	val, _ := mutateStringCategorized(v)
+	val, _ := mutateStringCategorized(v, nil)
 	return val
 }
 
-func mutateInt(v string) string {
+func max0(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// mutateInt blends {min-1,min,min+1,max-1,max,max+1} from hint.Minimum/Maximum (when
+// set) into the existing generic candidate list, then picks uniformly at random from
+// the union — additive, not a replacement, so behavior without a hint is unchanged.
+func mutateInt(v string, hint *Segment) string {
 	x, _ := strconv.Atoi(strings.TrimSpace(v))
 	cands := []int{0, 1, -1, 2, -2, 127, 128, -128, 255, 256, 32767, 32768, 65535, 65536, math.MaxInt32, math.MinInt32, x + 1, x - 1, x * 2}
+	if hint != nil {
+		if hint.Minimum != nil {
+			min := int(*hint.Minimum)
+			cands = append(cands, min-1, min, min+1)
+		}
+		if hint.Maximum != nil {
+			max := int(*hint.Maximum)
+			cands = append(cands, max-1, max, max+1)
+		}
+	}
 	return strconv.Itoa(cands[rand.Intn(len(cands))])
 }
 
-func mutateNumber(v string) string {
+func mutateNumber(v string, hint *Segment) string {
 	x, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
 	cands := []string{"0.0", "-0.0", "0.1", "-0.1", "1e308", "-1e308", "1e-308", "999999999.999999", "0.0000000001", "3.141592653589793", fmt.Sprintf("%f", x+0.001), fmt.Sprintf("%f", x*-1.0)}
+	if hint != nil {
+		if hint.Minimum != nil {
+			min := *hint.Minimum
+			cands = append(cands, fmt.Sprintf("%v", min-1), fmt.Sprintf("%v", min), fmt.Sprintf("%v", min+1))
+		}
+		if hint.Maximum != nil {
+			max := *hint.Maximum
+			cands = append(cands, fmt.Sprintf("%v", max-1), fmt.Sprintf("%v", max), fmt.Sprintf("%v", max+1))
+		}
+	}
 	return cands[rand.Intn(len(cands))]
 }
 

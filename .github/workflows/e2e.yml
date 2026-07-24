@@ -1,0 +1,46 @@
+name: E2E (planted-bug regression gate)
+
+# Top-20 #7: proves the whole pipeline -- instrument -> coverage -> grammar -> fuzz ->
+# detect -- still works end to end against fixtures/planted-bug-api/, not just that each
+# stage runs without error. This is the first CI this project has ever had; it protects
+# grammarc/ + analyzer/ (Top-20 #9/#10) and the constraint-aware mutation engine
+# (Top-20 #14), none of which had any automated coverage before scripts/e2e-test.sh.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run E2E regression check
+        run: ./scripts/e2e-test.sh
+
+      - name: Upload crash/summary artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            /tmp/e2e-planted-bug-run/crashes.jsonl
+            /tmp/e2e-planted-bug-run/summary.json
+            /tmp/e2e-planted-bug-run/report.json
+          if-no-files-found: warn

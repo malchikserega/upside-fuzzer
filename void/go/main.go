@@ -44,6 +44,7 @@ func parseFlags() Config {
 	flag.BoolVar(&cfg.DirectSHM, "direct-shm", false, "Read coverage bitmap directly from SHM file")
 	flag.StringVar(&cfg.SHMPath, "shm-path", "/coverage_shm/bitmap", "Path to mmap bitmap")
 	flag.StringVar(&cfg.SHMReadMode, "shm-read-mode", "file", "Direct SHM read mode: file|mmap|auto")
+	flag.BoolVar(&cfg.AllowDegradedCoverage, "allow-degraded-coverage", false, "Continue even if /shm/health reports degraded instrumentation (no app assembly linked). Default: refuse to start a blind run.")
 	flag.BoolVar(&cfg.SkipOnCrash, "skip-on-crash", false, "Remove only the crashing template after any 5xx")
 	flag.BoolVar(&cfg.SkipEndpointOn500, "skip-endpoint-on-500", false, "Stop fuzzing endpoint after first HTTP 500")
 	flag.BoolVar(&cfg.SequentialBaseline, "sequential-baseline", false, "Run baseline epoch sequentially")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -240,6 +242,24 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 	req.Header.Set("X-Fuzz-Request-Id", "fz-"+strconv.FormatUint(requestID, 36))
 	// Access-control auth-bypass probes are sent with NO credentials so the
 	// absence of auth alone determines whether access is (wrongly) granted.
+	// The rendered request already carries a literal placeholder in req.Header from
+	// the item.Headers loop above -- in particular the static
+	// "Authorization: Bearer TOKEN\r\n" segment every template carries (see
+	// grammarc/emit_templates.py). Any identity that legitimately has no bearer token
+	// (an explicit NoAuth probe, or a scheduled identity -- e.g. "guest", see
+	// identity.go -- with an empty Token) MUST have that placeholder deleted, not just
+	// left un-overridden, or the request goes out with a malformed literal bearer
+	// token instead of true "no credentials". Confirmed live against a fresh Bitwarden
+	// instrumented build: before this fix, a large share of total traffic (not just
+	// NoAuth-flagged probes -- ordinary "guest"-identity scheduling was the bigger
+	// contributor) hit SecurityTokenMalformedException ("JWT is not well formed")
+	// server-side instead of the clean 401 real credential-free traffic gets, which
+	// also muddies the auth-bypass oracle's own precondition/result signal (a parse
+	// failure is not the same server code path as an authorization check).
+	//
+	// idHeaders (e.g. a cookie-based identity's Cookie header) is applied whenever we
+	// have real credentials to send at all -- it's independent of idToken, since some
+	// identities authenticate via cookie/API-key rather than bearer token.
 	if !item.NoAuth {
 		idHeaders, idToken, _ := f.identityAuth(item.Identity)
 		for k, v := range idHeaders {
@@ -250,7 +270,12 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 		}
 		if idToken != "" {
 			req.Header.Set("Authorization", "Bearer "+idToken)
+		} else if _, hasAuthHeader := idHeaders["Authorization"]; !hasAuthHeader {
+			req.Header.Del("Authorization")
 		}
+	} else {
+		req.Header.Del("Authorization")
+		req.Header.Del("Cookie")
 	}
 
 	resp, err := httpClient.Do(req)
@@ -945,7 +970,94 @@ func (f *Fuzzer) ensureMutationStats(name string) *MutationStats {
 	}
 	return ms
 }
+// clientErrorEnumHintRe extracts enum/valid-value hints from a validation error
+// message, e.g. "must be one of [Pending, Paid, Shipped]" or
+// "Valid values: Pending, Paid, Shipped" -- ASP.NET's common phrasing for
+// EnumDataType/RegularExpression/custom-validator failure messages.
+var clientErrorEnumHintRe = regexp.MustCompile(`(?i)(?:must be one of|valid values?)[:\s]*\[?([^.\]\n]+)\]?`)
+
+// mineClientErrorFields (Top-20 #11, "CMPLOG-lite") extracts field->candidate-value
+// hints from a 4xx response body, so the fuzzer can learn the values a validation
+// wall actually wants instead of only ever guessing. Best-effort and defensive: any
+// non-matching shape yields an empty map, never an error.
+//
+// Two shapes recognized, both keyed by ASP.NET's conventional field->messages map:
+//  1. ValidationProblemDetails/ModelState JSON: {"errors": {"Field": ["msg", ...]}},
+//     or the flatter {"Field": ["msg", ...]} some minimal-API validators emit directly.
+//  2. Free-text enum/valid-value hints inside each message string (see
+//     clientErrorEnumHintRe), split on comma/pipe into individual candidate values.
+func mineClientErrorFields(body string) map[string][]string {
+	out := map[string][]string{}
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return out
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
+		return out
+	}
+
+	fieldErrors, _ := raw["errors"].(map[string]any)
+	if fieldErrors == nil {
+		// Fall back to treating the whole body as the field->messages map, but only
+		// if it actually looks like one (every value is a string or []any of
+		// strings) -- otherwise an unrelated JSON body (e.g. {"count":5}) would
+		// spuriously "mine" nonsense keys.
+		looksLikeFieldMap := len(raw) > 0
+		for _, v := range raw {
+			switch v.(type) {
+			case string, []any:
+				continue
+			default:
+				looksLikeFieldMap = false
+			}
+		}
+		if looksLikeFieldMap {
+			fieldErrors = raw
+		}
+	}
+	if fieldErrors == nil {
+		return out
+	}
+
+	for field, v := range fieldErrors {
+		var messages []string
+		switch tv := v.(type) {
+		case string:
+			messages = []string{tv}
+		case []any:
+			for _, m := range tv {
+				if ms, ok := m.(string); ok {
+					messages = append(messages, ms)
+				}
+			}
+		default:
+			continue
+		}
+		for _, msg := range messages {
+			m := clientErrorEnumHintRe.FindStringSubmatch(msg)
+			if m == nil {
+				continue
+			}
+			for _, part := range strings.FieldsFunc(m[1], func(r rune) bool { return r == ',' || r == '|' }) {
+				val := strings.Trim(strings.TrimSpace(part), `"'`)
+				if val != "" {
+					out[field] = append(out[field], val)
+				}
+			}
+		}
+	}
+	return out
+}
+
 func (f *Fuzzer) recordClientErrorSample(method, path string, status int, body string) {
+	for field, values := range mineClientErrorFields(body) {
+		for _, v := range values {
+			f.runtime.addValue(field, v)
+		}
+	}
+
 	k := endpointKey(method, normalizePath(path))
 	s := f.clientSamples[k]
 	if len(s) >= 5 {

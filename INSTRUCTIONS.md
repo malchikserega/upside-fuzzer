@@ -38,9 +38,9 @@ Install the following on any new system before running UpsideFuzz:
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| **Docker** + **Docker Compose v2** | Docker 24+, Compose 2.x | Build & run instrumented containers |
-| **Python** | 3.9+ | Run `fuzz-prep-multi.py` and `enhance-grammar.py` |
-| **.NET SDK** | 8+ | RESTler grammar compiler (`compile-grammar.sh`) |
+| **Docker** + **Docker Compose v2** | Docker 24+, Compose 2.x | Build & run instrumented containers (not needed for grammar compilation itself) |
+| **Python** | 3.9+ | Run `fuzz-prep-multi.py` and `grammarc/` (stdlib-only, no `pip install` needed) |
+| **.NET SDK** | 8+ | `analyzer/` — the Roslyn syntax-tree analyzer `compile-grammar.sh` runs when `--src` is given |
 | **Go** (optional) | 1.22+ | Only if you build the Go fuzzer binary locally |
 | **sqlpackage** (optional) | Microsoft build | Import `.bacpac` into SQL Server from the host for targets that require manual SQL Server restores |
 
@@ -110,14 +110,17 @@ dotnet --version        # 8.0+
 └────────────────────────────┬────────────────────────────────────────────┘
                              │
               compile-grammar.sh swagger.json --src <src>
-              (RESTler compile + enhance-grammar.py enrichment)
+              (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree
+               analysis — first-party, no RESTler, no Docker for this step)
                              │
                              ▼
 ┌────────────────────────────┐     ┌────────────────────────────────────┐
-│  grammar.py                │     │  dict.json                         │
+│  templates.export.json     │     │  dict.json                         │
 │  • Request templates       │     │  • Domain-specific tokens          │
-│  • Fuzzable fields         │     │  • Enum values, IDs, strings       │
-│  • Producer→Consumer deps  │     │  • From OpenAPI + C# source        │
+│  • Fuzzable/custom_payload │     │  • Enum values, IDs, strings       │
+│  • Producer→Consumer deps  │     │  • From OpenAPI + real C# Roslyn   │
+│    (written directly)      │     │    constraints (type/property-     │
+│                             │     │    scoped, not global-name)        │
 └────────────┬───────────────┘     └─────────────────────────────────── ┘
              │
     docker compose --profile fuzz-go run --rm void -grammar <grammar_dir>
@@ -149,6 +152,25 @@ python3 /path/to/upside-fuzzer/fuzz-prep-multi.py \
 | `--src` | Path to the .NET solution (source, NOT instrumented) |
 | `--out` | Output directory for the instrumented copy |
 | `--main` | Web API project name (required for multi-project solutions) |
+| `--inject-mode` | `hook` (default, zero-edit) or `source` (legacy source editing). See below. |
+
+### Injection mode (`--inject-mode`)
+
+| Mode | What it does | When to use |
+|------|--------------|-------------|
+| `hook` *(default)* | **Zero-edit.** Generates a self-contained `UpsideFuzz.Coverage` assembly and wires it via `DOTNET_STARTUP_HOOKS` + `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`. The target's `Program.cs`/`Startup.cs`/`.csproj` are never modified. Coverage is linked at load time, including lazily/dynamically loaded modules (via an `AssemblyLoad` handler). Verify with `curl /shm/health`. | Almost always — most robust and universal. |
+| `source` | **Legacy.** Injects `CoverageExtensions.cs` into the main project and edits `Program.cs`/`Startup.cs` to add the middleware/endpoints. | Only if you need the middleware *inside* the app's exception handler for maximal production-mode exception-type fidelity, or a target where startup hooks are disallowed. |
+
+Both modes expose the identical `/shm/*` endpoints and `X-Coverage-Delta` header — every step after instrumentation is the same.
+
+New command (explicit, equivalent to the default):
+```bash
+python3 fuzz-prep-multi.py --src <SOURCE_DIR> --out <OUTPUT_DIR> --main <PROJECT> --inject-mode hook
+```
+Legacy behavior (previous releases):
+```bash
+python3 fuzz-prep-multi.py --src <SOURCE_DIR> --out <OUTPUT_DIR> --main <PROJECT> --inject-mode source
+```
 
 **Example:**
 ```bash
@@ -253,6 +275,27 @@ curl -s http://localhost:<PORT>/shm/coverage
 - Wrong project `--main` → re-run `fuzz-prep-multi.py` pointing to the correct web project
 - Auth required → test your endpoints with curl adding the auth header
 
+### Self-verifying, fail-closed startup check (Top-20 #4)
+
+You don't have to run the checks above manually before every session — the Go
+fuzzer does an equivalent check automatically at startup, right after loading
+templates: it sends a few real unmutated warm-up requests and refuses to start
+if the coverage bitmap doesn't gain any new edges (even if `/shm/health`
+reports `shm_bound: true` — a target can be reachable and report app
+assemblies loaded while still never having been actually IL-rewritten). You'll
+see this in the fuzzer's own startup output:
+
+```
+Coverage health: shm_bound=true mode=file-backed-mmap app_assemblies=[Api Core]
+Coverage health OK: warm-up probe (3 request(s)) produced 10 new edge(s)
+```
+
+If it instead exits with `run failed: coverage instrumentation degraded: ...`,
+work through the manual checks above rather than passing
+`-allow-degraded-coverage` — a run that overrides this will complete but find
+nothing, since the coverage feedback loop the whole scheduler depends on is
+broken.
+
 ---
 
 ## 6. Step 4: Compile the Grammar
@@ -265,43 +308,56 @@ cd /path/to/upside-fuzzer
 # Download swagger from running instrumented app
 curl -s http://localhost:<PORT>/swagger/v1/swagger.json -o swagger.json
 
-# Compile grammar (with source-aware enhancement)
-./compile-grammar.sh swagger.json --src <SOURCE_DIR>
+# Compile grammar (with Roslyn source-aware enhancement) — writes directly to grammars/<project>/
+./compile-grammar.sh swagger.json --src <SOURCE_DIR> --out grammars/<project>
 
 # Or with a custom dictionary for domain-specific values:
-./compile-grammar.sh swagger.json --dict custom-dict.json --src <SOURCE_DIR>
-
-# Save to grammars/<project>/
-mkdir -p grammars/<project>
-cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/<project>/
+./compile-grammar.sh swagger.json --dict custom-dict.json --src <SOURCE_DIR> --out grammars/<project>
 ```
+
+That's the whole step — `templates.export.json` and `dict.json` land directly in
+`grammars/<project>/`, no manual `cp`, no separate export step, no Docker.
 
 > **Swagger tip:** If a target exposes both a public swagger and a fuzz-specific/internal OpenAPI document, prefer the richer spec as long as it still matches the running API surface you fuzz.
 
 ### What `compile-grammar.sh` does
 
-1. Runs **RESTler compiler** against the OpenAPI spec → produces `grammar.py` (typed request templates + producer/consumer dependency chains) and `dict.json`
-2. Runs **`enhance-grammar.py`** (post-processor) that enriches the outputs with:
-   - OpenAPI constraints: `enum` values, `format`, `minimum/maximum`, `pattern` regex
-   - C# source constraints: `[Required]`, `[Range]`, `[StringLength]`, `[RegularExpression]`, FluentValidation chains, enum declarations
-   - Multipart form-data: autogenerated seed templates for `multipart/form-data` endpoints
+RESTler has been retired (Top-20 #9/#10 — see `ARCHITECTURE_REVIEW.md`). The pipeline is
+now two first-party components, with **no Docker or external compiler involved**:
+
+1. **`grammarc/`** (Python, stdlib-only) parses the OpenAPI spec directly ($ref/allOf/oneOf/anyOf
+   resolution, v2+v3 parameter/body shapes), infers producer/consumer id relationships by
+   path/name convention, synthesizes boundary values, and serializes request bodies straight
+   to segments.
+2. **`analyzer/`** (C#, real `Microsoft.CodeAnalysis.CSharp` syntax-tree parsing — not regex),
+   run automatically when `--src` is given, extracts **type/property-scoped** constraints:
+   `[Required]`, `[Range]`, `[StringLength]`, `[RegularExpression]`, FluentValidation chains,
+   enum declarations, `[Authorize]`/route metadata. Scoped by `(fully-qualified type, property)`
+   — not a global property name, which is what the old regex-based `enhance-grammar.py`
+   used and which could cross-contaminate unrelated DTOs that happen to share a field name
+   (verified on eShopOnWeb: two unrelated classes both named `CreateCatalogItemRequest`).
+3. `grammarc/roslyn_merge.py` merges the two, Roslyn winning per-field on a scoped match, and
+   emits `templates.export.json` + `dict.json` directly to `--out`.
+4. Multipart form-data endpoints get autogenerated seed templates the same way.
 
 ### Grammar folder and template export for Void
 
-RESTler’s compiler produces **`grammar.py`** and **`dict.json`**. The Go fuzzer (Void) additionally loads **`templates.export.json`** — a JSON export of request templates produced by [`void/export-templates.py`](void/export-templates.py). Generate it **on the host** before starting Void:
+The Go fuzzer (Void) loads **`templates.export.json`** + **`dict.json`** directly from the
+directory passed via `-grammar` — `compile-grammar.sh` writes both there already, no
+extra export step needed for grammars generated by the current pipeline.
 
-```bash
-cd /path/to/upside-fuzzer
-python3 void/export-templates.py \
-  --grammar-dir restler_output/Compile \
-  --out restler_output/Compile/templates.export.json
-```
+`void/export-templates.py` (an old `grammar.py` → JSON converter) still exists as a
+**legacy fallback** for grammar directories generated before this migration and not yet
+regenerated: `void/go/template.go`'s `exportTemplates()` invokes it automatically at Void
+startup only if `templates.export.json` is missing but a `grammar.py` is present. If you
+regenerate with the current `compile-grammar.sh`, you'll never hit this path. If you do
+see `exec: "python3": executable file not found in $PATH` against an old grammar
+directory, either regenerate it with `compile-grammar.sh` (recommended — removes the
+dependency entirely) or rebuild `void/Dockerfile.go`, which still bundles `python3` for
+this fallback.
 
-Point Void at that directory with `-grammar` (a folder containing `grammar.py` and `dict.json`). If the JSON is not beside them, pass `-templates-json` explicitly.
-
-**Why:** Void needs `python3` only when it must export templates from `grammar.py` at runtime. The current `void/Dockerfile.go` installs `python3` and copies `export-templates.py`, but older/custom images may not. If a legacy image exits with `exec: "python3": executable file not found in $PATH`, either rebuild the current image, export templates on the host, or ensure `templates.export.json` is at least as new as `grammar.py`.
-
-You may mount any folder that holds these files as `/grammar` in Compose (for example `../restler_output/Compile:/grammar:ro` instead of `../grammars/bitwarden`), or copy the three artifacts into `grammars/<project>/`.
+You may mount any folder holding `templates.export.json`/`dict.json` as `/grammar` in
+Compose (e.g. `../grammars/bitwarden:/grammar:ro`).
 
 ---
 
@@ -414,7 +470,7 @@ docker run --rm -it \
   -e AUTH_TOKEN='eyJhbGciOi...' \
   -v mytarget_coverage_shm:/coverage_shm \
   -v "$REPO/void:/fuzzer" \
-  -v "$REPO/restler_output/Compile:/grammar:ro" \
+  -v "$REPO/grammars/my-target:/grammar:ro" \
   -v "$REPO/my-target/src:/src:ro" \
   void-fuzzer:latest \
   -grammar /grammar -templates-json /grammar/templates.export.json \
@@ -638,39 +694,27 @@ Use this target when you want anti-forgery tokens, cookie-based auth, and a modu
 
 ## 10. Custom Dictionary Format
 
-The `--dict` flag to `compile-grammar.sh` accepts a JSON file that provides domain-specific values to seed the fuzzer's mutation engine.
+The `--dict` flag to `compile-grammar.sh` accepts a JSON file that provides domain-specific values to seed the fuzzer's mutation engine. `grammarc/emit_dict.py` writes (and `void/go/store.go` reads) a simple **flat map**: each key is a request field/payload name, each value an array of candidate strings.
 
-### Structure
-
-```json
-{
-  "fuzzableString": ["value1", "value2"],
-  "fuzzableInt": ["1", "42", "999"],
-  "customFieldName": ["domain-specific-value"],
-  "restler_custom_payload": {
-    "fieldName": ["exact-value-1", "exact-value-2"]
-  },
-  "restler_custom_payload_unquoted": {
-    "numericField": ["123", "456"]
-  },
-  "restler_custom_payload_query": {
-    "queryParam": ["filter-value"]
-  }
-}
-```
-
-### Top-level arrays
-
-Any top-level key whose value is an array of strings is treated as a pool of values for that semantic type:
+### Structure (recommended — what `grammarc` itself emits)
 
 ```json
 {
-  "fuzzableString": ["hello", "world", "<script>", "' OR 1=1--"],
-  "fuzzableInt": ["0", "-1", "2147483647"]
+  "currencyCode": ["USD", "EUR", "GBP", "JPY"],
+  "countryId": ["US", "DE", "GB", "FR"],
+  "userId": ["usr-001", "usr-002"],
+  "amount": ["0", "1", "100", "99999.99", "-1"]
 }
 ```
 
-### RESTler payload containers
+Keys are matched to request field/payload names case-insensitively with canonical
+normalization (`void/go/store.go::candidatesForKey`) — `currencyCode`, `currency_code`,
+and `CurrencyCode` all resolve to the same pool.
+
+### Legacy nested containers (still supported, not required)
+
+For backward compatibility, `void/go/store.go` also special-cases exactly four
+RESTler-era nested container names if you hand-write a dictionary using them:
 
 | Key | Description |
 |-----|-------------|
@@ -679,37 +723,57 @@ Any top-level key whose value is an array of strings is treated as a pool of val
 | `restler_custom_payload_query` | Values for URL query parameters |
 | `restler_custom_payload_header` | Values for HTTP headers |
 
-**Inside each container**, keys are matched to request field names (case-insensitive, canonical normalization):
-
 ```json
 {
   "restler_custom_payload": {
-    "currencyCode": ["USD", "EUR", "GBP", "JPY"],
-    "countryId": ["US", "DE", "GB", "FR"],
-    "userId": ["usr-001", "usr-002"]
+    "currencyCode": ["USD", "EUR", "GBP", "JPY"]
   }
 }
 ```
 
-### Real-world example: commerce and billing fields
-
-```json
-{
-  "restler_custom_payload": {
-    "currencyCode": ["USD", "EUR", "GBP", "CHF", "SEK", "PLN"],
-    "billingCurrency": ["USD", "EUR", "GBP"],
-    "amount": ["0", "1", "100", "99999.99", "-1"]
-  },
-  "fuzzableString": ["test", "INVALID", ""],
-  "fuzzableInt": ["0", "1", "-1", "2147483647"]
-}
-```
+`grammarc` never emits this nested shape itself (flat keys are simpler and match the
+same lookup path) — but if you pass `--dict` pointing at an old dictionary that uses it,
+`grammarc/emit_dict.py::merge_external_dict` flattens it into top-level keys automatically,
+so either format works as `--dict` input.
 
 ### Tips
 
 - Keys are normalized: `userId`, `user_id`, `UserId`, `user-id` all match the same canonical key.
 - Values containing `{{`, `${`, `#{}` are filtered out by the runtime store to avoid injection feedback loops.
 - Nested `dictionaries:` wrapper is supported (backward compat with old format).
+- **Two paths reach the same pool now.** A field's boundary values land in `dict.json`
+  (via `grammarc/boundary.py`) *and*, since Top-20 #14, directly on the segment itself
+  (`min_length`/`max_length`/`minimum`/`maximum`/`pattern`/`enum_values` in
+  `templates.export.json`) — the mutation engine (`mutation_engine.go`) consults the
+  segment's own constraints first for boundary-value candidates, blended additively into
+  its existing generic mutation pool; `dict.json` remains the channel for
+  runtime-harvested/correlated values and anything from a custom `--dict`. You don't need
+  to choose between them — both are populated automatically by `compile-grammar.sh`.
+- **400-body responses feed the dictionary too, automatically** (Top-20 #11,
+  "CMPLOG-lite"). If a target's validation-error responses follow ASP.NET's standard
+  `{"errors":{"Field":["msg"]}}` shape, or a message contains phrasing like `"must be one
+  of [...]"`, the engine mines field names/candidate values out of them at runtime and
+  feeds them into the same value pool `pickCustomPayloadValue` draws from — no
+  configuration needed, this happens for every 4xx response the fuzzer sees.
+
+---
+
+## 10a. Running the E2E regression check locally
+
+Before trusting a change to `grammarc/`, `analyzer/`, or the mutation engine, run the
+same check CI runs (`.github/workflows/e2e.yml`) against the bundled planted-bug fixture
+(`fixtures/planted-bug-api/`, see its own README.md for what's planted and why):
+
+```bash
+./scripts/e2e-test.sh
+```
+
+This instruments the fixture, brings up the container, runs `verify-hook.sh`, compiles
+the grammar, runs a short live fuzz session, and asserts both that real coverage was
+recorded (`coverage_end_edges > 0`) and that the planted bug (a `GET /items?pageSize=`
+`ArgumentOutOfRangeException` → 500) was actually detected — not just that every step
+exited zero. Takes about 2–3 minutes end to end (Docker build + a 1-minute fuzz run);
+tears down its own containers on exit regardless of pass/fail.
 
 ---
 
@@ -757,9 +821,9 @@ Use these gates to evaluate whether a fuzzing run reached meaningful depth.
 | Docker build fails on instrumentation | DLL not found | Check publish output path in Dockerfile; run `docker build --progress=plain .` |
 | All writes are 401/403 | Auth token expired or wrong role | Refresh `AUTH_TOKEN`; verify the user has write permissions |
 | Coverage is flat after warmup | All endpoints exhausted or API too slow | Increase `-sequence-prob`, reduce `-concurrency` |
-| Fuzzer exits immediately | grammar.py parse error | Check Python syntax: `python3 -c "import grammar"` from grammar dir |
-| `exec: "python3": executable file not found` inside Void | Legacy/custom Void image without Python | Rebuild current `void/Dockerfile.go` or export templates on the host (`void/export-templates.py`); see [Template export](#grammar-folder-and-template-export-for-void) |
-| Void exits at startup (templates JSON missing / load error) | Path from `-templates-json` has no file or stale grammar | Run `export-templates.py` to the exact path your Compose `command` uses, or place `templates.export.json` next to `grammar.py`; see [Template export](#grammar-folder-and-template-export-for-void) and the target quickstarts above |
+| Fuzzer exits immediately | Malformed `templates.export.json`/`dict.json` | Regenerate with `compile-grammar.sh` (check its console output for `skipped=N > 0`); validate JSON with `python3 -m json.tool grammars/<project>/templates.export.json > /dev/null` |
+| `exec: "python3": executable file not found` inside Void | Only hit against a **pre-migration** grammar directory (has `grammar.py`, no `templates.export.json`) — Void's legacy `export-templates.py` fallback needs `python3` | Regenerate the grammar with the current `compile-grammar.sh` (removes the dependency entirely — the primary path never calls `export-templates.py`), or rebuild `void/Dockerfile.go`, which still bundles `python3` for this fallback |
+| Void exits at startup (templates JSON missing / load error) | `-grammar`/`-templates-json` points at a directory without `templates.export.json` | Re-run `compile-grammar.sh <swagger> --out <that directory>`; it writes `templates.export.json` there directly — no separate export step needed |
 
 ---
 

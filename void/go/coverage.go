@@ -16,6 +16,46 @@ import (
 
 // coverage.go — CoverageReader interface, HTTPCoverageReader (via /shm/ endpoints),
 // SHMCoverageReader (direct file-backed SHM for Docker sidecar mode).
+//
+// Coverage novelty uses AFL-style hit-count buckets. Each edge's raw 8-bit hit
+// count is classified into a log-scale bucket (1, 2, 3, 4-7, 8-15, 16-31,
+// 32-127, 128+). A bucket bit never seen before for that edge counts as new
+// coverage — so an edge executed once is distinguished from the same edge
+// executed 50 or 5000 times, which is what lets the fuzzer drive deeper into
+// loops, retries, pagination and state machines instead of plateauing the
+// moment every edge has been touched at least once. `seen[i]` holds the OR of
+// all bucket bits observed for edge i (the bucketed "virgin map").
+
+// countClass maps a raw hit count (0..255) to its AFL-style bucket bit.
+var countClass = buildCountClass()
+
+func buildCountClass() [256]byte {
+	var t [256]byte
+	for i := 0; i < 256; i++ {
+		c := byte(i)
+		switch {
+		case c == 0:
+			t[i] = 0
+		case c == 1:
+			t[i] = 1
+		case c == 2:
+			t[i] = 2
+		case c == 3:
+			t[i] = 4
+		case c <= 7:
+			t[i] = 8
+		case c <= 15:
+			t[i] = 16
+		case c <= 31:
+			t[i] = 32
+		case c <= 127:
+			t[i] = 64
+		default:
+			t[i] = 128
+		}
+	}
+	return t
+}
 
 type CoverageReader interface {
 	Init() error
@@ -98,6 +138,123 @@ func (h *HTTPCoverageReader) Reset() error {
 func (h *HTTPCoverageReader) Capacity() int { return h.capacity }
 
 func (h *HTTPCoverageReader) Close() error { return nil }
+
+// CoverageHealth mirrors the /shm/health JSON emitted by the generated C#
+// coverage runtime (fuzz-prep-multi.py, both hook and source inject modes).
+// It reports facts only, not a verdict: SharpFuzz's Trace type lives in
+// SharpFuzz.Common.dll, never in the app's own IL-rewritten assemblies, so
+// per-assembly "linked" status can't be measured by type reflection on the
+// .NET side. The fail-closed ok/degraded decision (Top-20 #4) is made here,
+// engine-side, via checkCoverageHealth's warm-up probe.
+type CoverageHealth struct {
+	ShmBound         bool     `json:"shm_bound"`
+	Mode             string   `json:"mode"`
+	TotalClasses     int      `json:"total_classes"`
+	LinkedAssemblies int      `json:"linked_assemblies"`
+	AppAssemblies    []string `json:"app_assemblies"`
+}
+
+// fetchCoverageHealth queries the target's /shm/health control endpoint. It
+// works regardless of coverage-read mode (HTTP polling or direct-shm) because
+// the .NET app always serves this endpoint over its normal HTTP listener —
+// direct-shm mode only changes how the Go engine *reads* the bitmap file, not
+// how the .NET side reports link status.
+func fetchCoverageHealth(client *http.Client, host string) (*CoverageHealth, error) {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(host, "/")+"/shm/health", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("/shm/health status=%d body=%s", resp.StatusCode, string(b))
+	}
+	var health CoverageHealth
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&health); err != nil {
+		return nil, fmt.Errorf("/shm/health decode failed: %w", err)
+	}
+	return &health, nil
+}
+
+// checkCoverageHealth verifies instrumentation is actually producing coverage
+// before the real fuzzing run starts, and by default fails closed (refuses to
+// start) if it isn't. Top-20 #4 — self-verifying, fail-closed instrumentation.
+//
+// /shm/health alone can't answer this: SharpFuzz uses one flat shared bitmap
+// with hashed offsets and no per-assembly attribution, so there is no honest
+// way to ask "did assembly X specifically get instrumented" from the .NET
+// side. The only architecturally sound signal is empirical: send a few real,
+// unmutated requests and check whether the shared bitmap actually gains new
+// edges. A target that is reachable, has shm_bound=true, and even reports app
+// assemblies loaded can still be completely uninstrumented (wrong image,
+// wrong --src, a namespace excluded by --exclude-namespaces) — in which case
+// every request would return 200/404/whatever normally, and a fuzzing run
+// would silently burn its whole time budget without a single real edge. This
+// check is what would have caught that: it fails closed on exactly that case.
+func (f *Fuzzer) checkCoverageHealth() error {
+	health, err := fetchCoverageHealth(f.client, f.target)
+	if err != nil {
+		msg := fmt.Sprintf("coverage health check failed: %v", err)
+		return f.failOrWarnDegraded(msg)
+	}
+	fmt.Printf("Coverage health: shm_bound=%v mode=%s app_assemblies=%v\n", health.ShmBound, health.Mode, health.AppAssemblies)
+	if !health.ShmBound {
+		return f.failOrWarnDegraded("coverage instrumentation degraded: shared coverage bitmap is not bound (shm_bound=false)")
+	}
+
+	if len(f.activeIDs) == 0 {
+		// Templates aren't loaded yet at this call site in some configurations;
+		// nothing to probe with, so fall back to the shm_bound-only signal above.
+		return nil
+	}
+
+	before, _ := f.coverage.GetEdges()
+	probed := 0
+	for _, tid := range f.activeIDs {
+		if probed >= 3 {
+			break
+		}
+		item, err := f.renderTemplate(tid, "none", 0, -1)
+		if err != nil {
+			continue
+		}
+		f.sendOne(item)
+		probed++
+	}
+	if probed == 0 {
+		return f.failOrWarnDegraded("coverage instrumentation degraded: could not render any warm-up request from the loaded templates to verify coverage")
+	}
+	after, err := f.coverage.GetEdges()
+	if err != nil {
+		return f.failOrWarnDegraded(fmt.Sprintf("coverage health check failed: could not read coverage after warm-up probe: %v", err))
+	}
+	f.currentEdges = after
+	if after <= before {
+		msg := fmt.Sprintf(
+			"coverage instrumentation degraded: sent %d real warm-up request(s) but the coverage bitmap gained no new edges "+
+				"(before=%d after=%d). App assemblies seen by the runtime: %v. This usually means the IL rewrite never reached "+
+				"the target's own assemblies (wrong image, wrong --src, or a namespace excluded by --exclude-namespaces)",
+			probed, before, after, health.AppAssemblies)
+		return f.failOrWarnDegraded(msg)
+	}
+	fmt.Printf("Coverage health OK: warm-up probe (%d request(s)) produced %d new edge(s)\n", probed, after-before)
+	return nil
+}
+
+// failOrWarnDegraded is the shared fail-closed/override policy: by default it
+// refuses to start (returns an error); with -allow-degraded-coverage it warns
+// and continues instead.
+func (f *Fuzzer) failOrWarnDegraded(msg string) error {
+	if f.cfg.AllowDegradedCoverage {
+		fmt.Printf("Coverage health WARNING (continuing due to -allow-degraded-coverage): %s\n", msg)
+		return nil
+	}
+	return errors.New(msg + " — refusing to start a possibly-blind fuzzing run. Pass -allow-degraded-coverage to override (not recommended).")
+}
 
 type SHMCoverageReader struct {
 	path       string
@@ -185,28 +342,37 @@ func (s *SHMCoverageReader) GetEdges() (int, error) {
 		s.zeroBuf = make([]byte, len(buf))
 		s.edges = 0
 	}
-	// Word-level scan: read 8 bytes at a time as uint64 and skip zero words.
-	// Standard AFL optimization — ~8× fewer branches for sparse bitmaps.
+	// Bucketed virgin-map scan: classify each edge's raw hit count into an
+	// AFL-style bucket bit; a bucket not yet recorded for that edge is new
+	// coverage. Skip all-zero 8-byte words (sparse-bitmap fast path — an all-zero
+	// word can only yield bucket 0, i.e. no novelty).
 	n := len(buf)
 	i := 0
 	for ; i+8 <= n; i += 8 {
-		word := binary.LittleEndian.Uint64(buf[i:])
-		seenWord := binary.LittleEndian.Uint64(s.seen[i:])
-		newBits := word & ^seenWord
-		if newBits == 0 {
+		if binary.LittleEndian.Uint64(buf[i:]) == 0 {
 			continue
 		}
 		for j := 0; j < 8; j++ {
-			if buf[i+j] != 0 && s.seen[i+j] == 0 {
-				s.seen[i+j] = 1
+			c := buf[i+j]
+			if c == 0 {
+				continue
+			}
+			bucket := countClass[c]
+			if s.seen[i+j]&bucket == 0 {
+				s.seen[i+j] |= bucket
 				s.edges++
 			}
 		}
 	}
 	// Handle tail bytes.
 	for ; i < n; i++ {
-		if buf[i] != 0 && s.seen[i] == 0 {
-			s.seen[i] = 1
+		c := buf[i]
+		if c == 0 {
+			continue
+		}
+		bucket := countClass[c]
+		if s.seen[i]&bucket == 0 {
+			s.seen[i] |= bucket
 			s.edges++
 		}
 	}

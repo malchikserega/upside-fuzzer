@@ -38,6 +38,8 @@ python3 fuzz-prep-multi.py \
   --main BTCPayServer
 ```
 
+> **Zero-edit by default** (`--inject-mode hook`): the target's `Program.cs`/`Startup.cs`/`.csproj` are not modified; coverage is wired via `DOTNET_STARTUP_HOOKS` + an ASP.NET hosting-startup assembly, and lazily-loaded assemblies are linked at load time. To use the legacy source-injection path instead, append `--inject-mode source`. After the stack is up, verify: `curl -s http://localhost:8080/shm/health` → `{"linked_assemblies":N,...}`.
+
 This creates an instrumented copy in `./btcpayserver_prep/` with:
 - SharpFuzz IL instrumentation for all business logic DLLs
 - Docker Compose configuration adapted for testing
@@ -85,25 +87,25 @@ curl -s -u admin@btcpayserver.local:Password123! http://localhost:7777/swagger/v
 
 ## Step 6: Compile the grammar
 
+RESTler is retired (Top-20 #9/#10) — one command (`grammarc/` + `analyzer/`), no Docker,
+writes `templates.export.json` + `dict.json` directly to `--out`:
+
 ```bash
 cd ..  # back to upside-fuzzer root
 
-# Compile grammar (RESTler compiler + source-aware enhancement)
 # Note: BTCPayServer's Swagger JSON has a malformed reference that needs to be patched
 python3 fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
-./compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver
 
-# Save grammar files
-mkdir -p grammars/btcpay
-cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/btcpay/
-
-# Export templates for the Go fuzzer
-python3 void/export-templates.py \
-  --grammar-dir grammars/btcpay \
-  --out grammars/btcpay/templates.export.json
+# Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis)
+./compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
 ```
 
-> **Pro Tip:** Open `grammars/btcpay/dict.json` and augment the `restler_fuzzable_string` array with domain-specific professional terms (e.g., `"BTC"`, `"SATS"`, `"HighSpeed"`, `"Settled"`, `"xpub661..."`). This significantly increases the probability of passing strict API validation checks, allowing the fuzzer to explore deeper state transitions rather than being blocked at the schema validation layer.
+> **Pro Tip:** Open `grammars/btcpay/dict.json` (a flat `{fieldName: [values...]}` map) and add domain-specific professional terms under the relevant field-name keys (e.g., `"currency": ["BTC","SATS"]`, `"speedPolicy": ["HighSpeed"]`, `"status": ["Settled"]`, an `xpub`-shaped key for `"xpub661..."`-style values). This significantly increases the probability of passing strict API validation checks, allowing the fuzzer to explore deeper state transitions rather than being blocked at the schema validation layer.
+>
+> This complements two things that already happen automatically during the fuzz run: fields
+> with a real declared constraint get boundary-aware mutation (`ARCHITECTURE_REVIEW.md`
+> Top-20 #14), and 400 validation-error responses get mined for required fields/valid values
+> fed back into the same dictionary at runtime (Top-20 #11).
 
 ---
 
@@ -141,7 +143,7 @@ docker run -it --rm \
 
 **What happens:**
 - The fuzzer automatically loads the authorization header from `fuzzer.env`. *(Note: the underlying auth parsing logic universally supports arbitrary custom headers like `Authorization: token <key>` without breaking standard `Bearer` tokens for other projects).*
-- The exported templates retain full RESTler Producer/Consumer mapping, allowing the Sequence Engine to test deep stateful workflows automatically.
+- The compiled templates carry `grammarc/dependencies.py`'s producer/consumer id mapping, allowing the Sequence Engine to test deep stateful workflows automatically.
 - The fuzzer reads the coverage bitmap directly from the shared `coverage_shm` tmpfs volume.
 - Runs with high concurrency and deep fuzzing sequences for 15 minutes.
 

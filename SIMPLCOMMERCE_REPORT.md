@@ -2,6 +2,11 @@
 
 **→ [Back to README](README.md) · [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) · [Docs Index](docs/INDEX.md)**
 
+> 📌 **Historical run report — 2026-07-07, RESTler-era pipeline.** Point-in-time campaign
+> comparison, not living documentation; predates the RESTler retirement
+> (`ARCHITECTURE_REVIEW.md` Top-20 #9/#10) and its numbers are not guaranteed reproducible
+> against the current pipeline.
+
 ## Executive Summary
 A comprehensive security audit of **SimplCommerce** was performed using two consecutive 1-hour fuzzing campaigns:
 1. **Baseline Campaign (1 Hour):** Utilized a default dictionary to map the massive application graph.

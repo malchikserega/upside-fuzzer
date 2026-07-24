@@ -44,6 +44,8 @@ python3 fuzz-prep-multi.py \
   --namespaces examples/simplcommerce/simpl_namespaces.json
 ```
 
+> **Zero-edit by default** (`--inject-mode hook`): the target's `Program.cs`/`Startup.cs`/`.csproj` are not modified. SimplCommerce loads its store modules **dynamically at runtime** — the hook's `AssemblyLoad` handler links those module assemblies to coverage as they load (the legacy one-shot linker missed them). To use the legacy source-injection path instead, append `--inject-mode source`. After startup, verify module coverage is linked: `curl -s http://localhost:8080/shm/health` → `linked_assemblies` should climb as modules load.
+
 **Docker Workdir Adjustment**:
 Because SimplCommerce compiles its modular DLLs into the `src/SimplCommerce.WebHost/out` directory during the Docker build stage, you must edit the generated `Dockerfile` in `simplcommerce_prep` to ensure the instrumentor runs in the right path.
 
@@ -62,7 +64,7 @@ RUN dotnet /instrumentor/instrumentor.dll out out
 
 ## Step 3: Sanitize Swagger
 
-SimplCommerce's automatically generated Swagger definition contains some redundant or invalid path parameters that conflict with the RESTler compiler.
+SimplCommerce's automatically generated Swagger definition contains some redundant or invalid path parameters that a strict OpenAPI parser (including `grammarc/oas.py`, RESTler's first-party replacement — see `ARCHITECTURE_REVIEW.md` Top-20 #9) chokes on.
 
 Start the instrumented stack, download the swagger, then run the provided patch helper:
 
@@ -81,21 +83,19 @@ The checked-in helper rewrites the downloaded swagger into `simplcommerce_prep/s
 
 ## Step 4: Compile the Grammar
 
-Compile the sanitized swagger file into the RESTler grammar and export it for the UpsideFuzzer Go engine:
+RESTler is retired (Top-20 #9/#10) — compile the sanitized swagger file directly with
+`grammarc/` + `analyzer/` (one command, no Docker), writing `templates.export.json` +
+`dict.json` straight to `grammars/simplcommerce/`:
 
 ```bash
-# Compile grammar (RESTler compiler + source-aware enhancement)
-./compile-grammar.sh simplcommerce_prep/swagger-sanitized.json --src ./simplcommerce
-
-# Save grammar files
-mkdir -p grammars/simplcommerce
-cp restler_output/Compile/grammar.py restler_output/Compile/dict.json grammars/simplcommerce/
-
-# Export templates for the Go fuzzer
-python3 void/export-templates.py \
-  --grammar-dir grammars/simplcommerce \
-  --out grammars/simplcommerce/templates.export.json
+./compile-grammar.sh simplcommerce_prep/swagger-sanitized.json --src ./simplcommerce --out grammars/simplcommerce
 ```
+
+No extra flags needed for two things that run automatically during the fuzz run below:
+constrained fields get boundary-aware mutation (`ARCHITECTURE_REVIEW.md` Top-20 #14), and
+400 validation-error responses get mined for required fields/valid values fed back into the
+runtime dictionary (Top-20 #11) — useful here given SimplCommerce's anti-forgery/Identity
+validation layer.
 
 ---
 

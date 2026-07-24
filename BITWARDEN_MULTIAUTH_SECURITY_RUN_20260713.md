@@ -4,6 +4,10 @@ This report summarizes a 15-minute validation campaign against the local instrum
 
 **→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Docs Index](docs/INDEX.md)**
 
+> 📌 **Historical run report — 2026-07-13.** Point-in-time validation snapshot, not living
+> documentation; not guaranteed reproducible against the current pipeline (see
+> `ARCHITECTURE_REVIEW.md` Top-20 #9/#10 for what's changed since).
+
 ## Run Setup
 
 Artifacts:

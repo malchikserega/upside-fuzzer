@@ -42,8 +42,8 @@ The benchmark workflow uses these standard locations in the current repo checkou
 - Prepared instrumented copies in `benchmarks/prepared/`
 - Temporary compose/Dockerfile helpers in `benchmarks/tmp/`
 - Final benchmark helpers:
-  - [compile-grammar.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/compile-grammar.sh)
-  - [sanitize-swagger-for-restler.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/sanitize-swagger-for-restler.sh)
+  - [compile-grammar.sh](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/compile-grammar.sh) — **note:** as of the RESTler retirement (`ARCHITECTURE_REVIEW.md` Top-20 #9, 2026-07-23), this script no longer runs RESTler at all — it's now `grammarc/`+`analyzer/`. For a RESTler-baseline benchmark rerun, you need RESTler's own standalone compiler (outside this repo) to produce the `RESTler` side of the comparison; this script only produces the `Void` side now.
+  - ~~`sanitize-swagger-for-restler.sh`~~ — **deleted** along with RESTler retirement; it stripped `deepObject`/nested-`$ref` query params RESTler's compiler couldn't parse. If re-running a RESTler-baseline benchmark, recover it from git history (`git log --all --full-history -- sanitize-swagger-for-restler.sh`) or reimplement the same swagger sanitization ad hoc — it is not needed for the `Void` side of the comparison.
   - [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/build_fair_endpoint_comparison.py)
 
 The historical `benchmarks/collect_void_go_metrics.py` helper referenced later in this file is not currently present in this checkout. Restore or recreate an equivalent metrics collector before running the full paper workflow.
@@ -763,6 +763,8 @@ curl -sf "http://127.0.0.1:8096/api-docs/openapi.json" > "$TMP/jellyfin.openapi.
 Sanitize the OpenAPI to the same 309-operation subset used in the paper:
 
 ```bash
+# NOTE: sanitize-swagger-for-restler.sh was deleted along with the RESTler retirement
+# (see the note in §2 above) — recover it from git history for a RESTler-baseline rerun.
 "$ROOT/sanitize-swagger-for-restler.sh" --in "$TMP/jellyfin.openapi.json" --out "$TMP/jellyfin.restler.json"
 
 jq '

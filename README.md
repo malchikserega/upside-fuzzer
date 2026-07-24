@@ -1,5 +1,7 @@
 # UpsideFuzz — Coverage-Guided REST API Fuzzer for .NET
 
+[![E2E](https://github.com/malchikserega/upside-fuzzer/actions/workflows/e2e.yml/badge.svg)](https://github.com/malchikserega/upside-fuzzer/actions/workflows/e2e.yml)
+
 > **Automated black-box → grey-box fuzzing for any .NET 8+ web API.**  
 > Transforms a standard .NET solution into a coverage-instrumented fuzzing target, then drives it with a Go-based grammar-fed fuzzer with real-time SHM feedback.
 
@@ -20,11 +22,11 @@ graph TD
     B["Instrumented Copy (/shm added)"]:::dotNet -->|docker compose up| C
     
     swagger["swagger.json"]:::output -->|compile-grammar.sh| E
-    
+    srcRoslyn[".NET Source (optional)"]:::dotNet -->|analyzer/ (Roslyn)| E
+
     C[("Running API + Live SHM Coverage")]:::output
-    E["grammar.py + dict.json"]:::python
-    
-    E -->|deploy-grammar.sh| F
+    E["templates.export.json + dict.json"]:::python
+
     C -->|Feedback Loop| F
     
     F{"void Fuzzer Engine (Go)"}:::go
@@ -47,8 +49,11 @@ graph TD
   Running API with live SHM coverage bitmap
        │
   compile-grammar.sh swagger.json [--dict dict.json] [--src ./src]
-       │                             ← sanitizes swagger, runs RESTler compiler,
-  grammar.py + dict.json               enhances with OpenAPI enums + C# constraints
+       │                             ← parses OpenAPI directly (grammarc/), optionally
+       │                               runs analyzer/ (real Roslyn syntax-tree analysis)
+       │                               over --src for type-scoped C# constraints;
+       │                               no RESTler, no Docker for this step
+  templates.export.json + dict.json
        │
   void             ← coverage-guided fuzzing: epoch scheduling, adaptive
        │                        concurrency, MOpt mutations, stateful sequences
@@ -70,9 +75,11 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ## How it Works
 
+*New to this project? [**docs/HOW_IT_WORKS.md**](docs/HOW_IT_WORKS.md) explains the problem UpsideFuzz solves, why grey-box coverage + security oracles beat black-box REST fuzzers, and — in plain language — what BOLA/mass-assignment/injection oracles actually catch. The four bullets below are the short mechanism summary; that page is the "why."*
+
 ![Fuzzing Pipeline Animation](pipeline-animation/pipeline.gif)
 
-1. **Semantic Source Extraction (SSE)**: The fuzzer parses the target's `.cs` files to extract validation rules (`[StringLength]`, `[Range]`, custom regexes, enum values) and uses them to intelligently enrich the RESTler black-box grammar.
+1. **Semantic Source Extraction (SSE)**: `analyzer/` — a real `Microsoft.CodeAnalysis.CSharp` syntax-tree analyzer, not regex — parses the target's `.cs` files to extract validation rules (`[StringLength]`, `[Range]`, FluentValidation chains, enum values, `[Authorize]`/route metadata) scoped by actual type+property, then `grammarc/` merges them into a first-party OpenAPI-derived grammar (no RESTler).
 2. **IL Rewriting**: The `fuzz-prep-multi.py` script injects a `SharpFuzz` coverage hook into every basic block of the compiled .NET target.
 3. **Direct SHM or HTTP Coverage**: The Go engine reads execution paths in real-time either directly from an mmap'd shared memory bitmap, or via a lightning-fast HTTP endpoint injected into the target's pipeline.
 4. **Stateful Sequence Fanout**: When a `POST` creates a resource (e.g., `invoiceId`), the sequence engine tracks it and fans out subsequent `GET` / `PUT` / `DELETE` requests using that exact identifier.
@@ -81,10 +88,10 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 | Category | What it does |
 |----------|-------------|
-| **Instrumentation** | Multi-project .NET solution support — instruments all business-logic DLLs, skips tests/migrations/generated code |
-| **Coverage** | 256KB SHM bitmap shared across all DLLs via reflection — file-backed mmap, zero HTTP overhead in Docker sidecar mode |
-| **Grammar** | OpenAPI → RESTler grammar → enhanced with enums, format constraints, C# `[Range]`/`[StringLength]`/FluentValidation, multipart |
-| **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories (incl. .NET `$type` deserialization gadgets) |
+| **Instrumentation** | Multi-project .NET solution support — instruments all business-logic DLLs, skips tests/migrations/generated code. **Zero-edit by default** (`--inject-mode hook`): `DOTNET_STARTUP_HOOKS` + an ASP.NET hosting-startup assembly link coverage at load time (incl. lazily-loaded modules) without touching the target's `Program.cs`/`Startup.cs`/`.csproj`. Legacy source-editing available via `--inject-mode source`. **Self-verifying, fail-closed**: the fuzzer sends a real warm-up probe at startup and refuses to run (unless `-allow-degraded-coverage`) if the coverage bitmap doesn't actually move — no more silently fuzzing blind for a whole time budget |
+| **Coverage** | 256KB SHM bitmap shared across all DLLs via reflection — file-backed mmap, zero HTTP overhead in Docker sidecar mode. **AFL-style hit-count buckets** (loop-depth aware) with a bucketed virgin map; per-request novelty attributed via a single-scan, first-observer-wins `X-Coverage-Delta` (no concurrency smearing, no double bitmap scan) |
+| **Grammar** | First-party OpenAPI 2/3 → typed grammar compiler (`grammarc/`, no RESTler, no Docker for this step). Optional `analyzer/` Roslyn syntax-tree pass (not regex) extracts type/property-scoped `[Range]`/`[StringLength]`/FluentValidation/`[Authorize]` constraints, merged with precedence over OpenAPI-derived ones. Producer/consumer id inference, boundary-value synthesis, multipart |
+| **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories (incl. .NET `$type` deserialization gadgets). **Constraint-aware boundary mutation**: fields with a declared OpenAPI/Roslyn min/max/length/enum get exact boundary values blended into mutation (verified ~7x more hits on a known bug class in the same time budget). **CMPLOG-lite**: mines ASP.NET's 400-body validation errors for required field names/enum values, feeding them back into the runtime dictionary |
 | **Sequences** | Producer→consumer chains (POST→GET→PUT→DELETE), runtime value extraction, configurable fanout |
 | **Bug finding** | Crash triage, repro verification, payload minimization, PoC generation, race condition probing, multi-identity auth |
 | **Vulnerability oracles** | Beyond HTTP 500s: **BOLA/IDOR + broken-auth** via cross-identity and no-credential replay; **mass-assignment** via privileged-field over-posting; **positive injection** detection (time-based SQLi, evaluated SSTI, reflected XSS) |
@@ -99,7 +106,25 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 ```
 .
 ├── fuzz-prep-multi.py          Instrument a .NET project for fuzzing
-├── sanitize-swagger-for-restler.sh  Fix deepObject/nested params before RESTler
+├── compile-grammar.sh          One-command grammar compile (grammarc/ + analyzer/, no Docker)
+│
+├── grammarc/                   First-party OpenAPI → typed grammar compiler (Python, stdlib-only)
+│   ├── oas.py                  OpenAPI 2/3 parser ($ref/allOf/oneOf/anyOf resolution)
+│   ├── body_serializer.py      Schema → request-body segment serializer
+│   ├── dependencies.py         Producer/consumer id inference (path/name convention)
+│   ├── roslyn_merge.py         Merges analyzer/'s type-scoped constraints over OpenAPI's
+│   ├── boundary.py             Boundary-value synthesis (min-1/max+1, canned formats, etc.)
+│   ├── multipart.py            Multipart/form-data template synthesis
+│   ├── emit_templates.py       Writes templates.export.json (Go engine contract)
+│   ├── emit_dict.py            Writes dict.json (Go engine contract)
+│   └── cli.py                  Orchestration entry point (python3 -m grammarc.cli)
+│
+├── analyzer/                   Roslyn syntax-tree analyzer (C# tool, Microsoft.CodeAnalysis.CSharp)
+│   ├── Program.cs
+│   ├── ConstraintWalker.cs      DataAnnotations, type/property-scoped
+│   ├── FluentValidationWalker.cs
+│   ├── RouteAuthWalker.cs      [Authorize]/route metadata (controller + minimal-API styles)
+│   └── analyzer.csproj
 │
 ├── void/
 │   ├── go/
@@ -109,7 +134,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── coverage.go         SHM bitmap parsing and HTTP coverage reader
 │   │   ├── sequence.go         Stateful producer/consumer chains
 │   │   ├── store.go            Knowledge extraction, ID harvesting, and dedup
-│   │   ├── template.go         RESTler grammar parsing and payload rendering
+│   │   ├── template.go         templates.export.json parsing and payload rendering
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler and weights
 │   │   ├── mutations.go        MOpt payload mutation categories
 │   │   ├── crash.go            Crash deduplication, signature generation, JSONL logging
@@ -124,7 +149,10 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── ui.go               Live terminal dashboard
 │   │   ├── utils.go            HTTP and string utility functions
 │   │   └── types.go            Core data structures
-│   ├── export-templates.py     RESTler grammar.py → JSON templates
+│   ├── export-templates.py     Legacy fallback: converts an old grammar.py → JSON templates
+│   │                           (only used for pre-migration grammars not yet regenerated
+│   │                           with grammarc/ — the primary path writes templates.export.json
+│   │                           directly and never touches this script)
 │   └── Dockerfile.go           Docker image for Go sidecar
 │
 ├── instrumentor/               SharpFuzz instrumentor (C# tool)
@@ -137,7 +165,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 └── ARCHITECTURE.md             Platform internals, diagrams, design decisions
 ```
 
-> **`restler_bin/` and `grammars/` may already exist in this workspace** during active research runs. They are still generated artifacts: `compile-grammar.sh` can refresh `restler_bin/` from Docker and regenerate grammars/templates per target as needed.
+> **`grammars/` may already exist in this workspace** during active research runs — it's a generated artifact; `compile-grammar.sh` regenerates it per target as needed. `restler_bin/`/`restler_input/`/`restler_output/` may also still be present from before the RESTler retirement (Top-20 #9) — they're inert now and can be deleted; nothing in the current pipeline reads or writes them.
 
 ---
 
@@ -158,6 +186,7 @@ pip install -r requirements.txt
 ### 2. Instrument your .NET project
 
 ```bash
+# Zero-edit instrumentation (default): no changes to the target's Program.cs/Startup.cs/.csproj
 python3 fuzz-prep-multi.py \
   --src ./my-project \
   --out ./my-project-fuzz \
@@ -167,6 +196,10 @@ cd my-project-fuzz
 docker compose build && docker compose up -d
 sleep 45  # wait for DB migration + startup
 ```
+
+> **Injection mode.** `--inject-mode hook` (default) uses `DOTNET_STARTUP_HOOKS` + an ASP.NET hosting-startup assembly (`UpsideFuzz.Coverage`) and never edits your source. To fall back to the legacy behavior that injects `CoverageExtensions.cs` and patches `Program.cs`/`Startup.cs`, pass `--inject-mode source`. Both modes expose the same `/shm/*` endpoints and `X-Coverage-Delta` header, so all later steps are identical.
+>
+> Verify the hook is live after startup: `curl -s http://localhost:8080/shm/health` → `{"linked_assemblies":N,...}` (N > 0).
 
 ### 3. Verify instrumentation
 
@@ -183,8 +216,12 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 
 ./compile-grammar.sh swagger.json \
   --dict my-domain-dict.json \   # optional: domain-specific values
-  --src ./my-project             # optional: C# source for constraint extraction
+  --src ./my-project              # optional: runs the Roslyn analyzer for type-scoped constraints
+  # --out grammars/my-project     # optional, defaults to grammars/<swagger-basename>/
 ```
+
+One command, no Docker, no RESTler — writes `templates.export.json` + `dict.json` directly to
+`--out` (default `grammars/<swagger-basename>/`).
 
 ### 5. Run the fuzzer
 
@@ -193,7 +230,7 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 ```bash
 export AUTH_TOKEN="<your-jwt-token>"
 docker compose --profile fuzz-go run --rm void \
-  -grammar restler_output/Compile \
+  -grammar grammars/my-project \
   -direct-shm \
   -time-budget 60
 ```
@@ -202,7 +239,7 @@ For access-control testing with several roles or tenants, prefer an auth identit
 
 ```bash
 docker compose --profile fuzz-go run --rm void \
-  -grammar restler_output/Compile \
+  -grammar grammars/my-project \
   -auth-file ./auth.identities.json \
   -identity-mode weighted \
   -direct-shm \
@@ -216,7 +253,7 @@ docker compose --profile fuzz-go run --rm void \
 ```bash
 export TARGET_HOST="http://localhost:8080"
 export AUTH_TOKEN="<your-jwt-token>"
-./void/go/void -grammar restler_output/Compile -time-budget 60
+./void/go/void -grammar grammars/my-project -time-budget 60
 ```
 
 ### 6. Monitor crashes
@@ -304,8 +341,10 @@ Access-control findings additionally carry an `access_control: true` field with 
 
 | Document | Description |
 |----------|-------------|
+| **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** | Start here if you're new: the problem this solves, why grey-box + oracles beat black-box fuzzing, and a plain-language explainer of the BOLA/mass-assignment/injection oracles |
 | **[INSTRUCTIONS.md](INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
+| **[ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |
 | **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** | Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance |
 | **[void/README.md](void/README.md)** | Go fuzzer: full CLI reference, startup output guide, build for any platform |
 | **[TARGET_CANDIDATES.md](TARGET_CANDIDATES.md)** | Implemented targets and future fuzzing candidates |

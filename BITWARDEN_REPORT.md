@@ -2,6 +2,13 @@
 
 **→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Multi-Auth Run Report](BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md) · [Docs Index](docs/INDEX.md)**
 
+> 📌 **Historical run report — 2026-07-13.** This is a point-in-time snapshot of one specific
+> campaign, not living reference documentation, and its numbers are not guaranteed
+> reproducible against the current pipeline (the grammar compiler has since been fully
+> replaced — see `ARCHITECTURE_REVIEW.md` Top-20 #9/#10). For an example of findings from
+> the *current* pipeline, see the "Example findings" section in
+> [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md).
+
 ## Executive Summary
 A **30-minute authenticated fuzzing campaign** was executed against the instrumented Bitwarden test stand using UpsideFuzz with direct SHM coverage guidance, a Bitwarden-specific security dictionary, source-aware prioritization, race mode, and aggressive endpoint skipping on crashes.
 

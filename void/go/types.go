@@ -43,6 +43,7 @@ type Config struct {
 	DirectSHM                   bool
 	SHMPath                     string
 	SHMReadMode                 string
+	AllowDegradedCoverage       bool
 	SkipOnCrash                 bool
 	SkipEndpointOn500           bool
 	SequentialBaseline          bool
@@ -118,6 +119,17 @@ type Segment struct {
 	Quoted     bool   `json:"quoted,omitempty"`
 	PayloadKey string `json:"payload_key,omitempty"`
 	Name       string `json:"name,omitempty"`
+
+	// Optional per-field constraint metadata (Top-20 #14), sourced from
+	// grammarc/oas.py::FieldHint (OpenAPI + Roslyn-merged). Absent/zero-valued on any
+	// template.export.json generated before this was added -- plain json.Unmarshal
+	// leaves these nil/empty, so old grammars decode and mutate exactly as before.
+	MinLength  *int     `json:"min_length,omitempty"`
+	MaxLength  *int     `json:"max_length,omitempty"`
+	Minimum    *float64 `json:"minimum,omitempty"`
+	Maximum    *float64 `json:"maximum,omitempty"`
+	Pattern    string   `json:"pattern,omitempty"`
+	EnumValues []string `json:"enum_values,omitempty"`
 }
 
 type Template struct {

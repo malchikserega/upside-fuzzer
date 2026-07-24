@@ -32,6 +32,23 @@ class ProjectInfo:
     root_namespace: str = ""
 
 
+# Mirrors instrumentor/Program.cs's `frameworkPrefixes` — kept in sync manually.
+# Used to decide, per solution, whether `--instrument-all-user-code` is safe (see
+# `_collides_with_framework_denylist` / MultiAnalysisResult.instrument_all_safe).
+FRAMEWORK_DENYLIST_PREFIXES = [
+    "System.", "Microsoft.", "SharpFuzz.", "Mono.", "Internal.",
+    "Newtonsoft.", "Swashbuckle.", "NSwag.", "FluentValidation.",
+    "Serilog.", "MediatR.", "AutoMapper.", "Dapper.",
+    "Npgsql.", "MySqlConnector.", "StackExchange.",
+    "Polly.", "Grpc.", "Google.Protobuf.",
+]
+
+
+def _collides_with_framework_denylist(root_namespace: str) -> bool:
+    probe = root_namespace + "."
+    return any(probe.startswith(prefix) for prefix in FRAMEWORK_DENYLIST_PREFIXES)
+
+
 @dataclass
 class MultiAnalysisResult:
     """Aggregated results across all projects"""
@@ -42,6 +59,8 @@ class MultiAnalysisResult:
     total_files: int
     instrumented_projects: int
     sdk_version: Optional[str] = None
+    exclude_namespaces: List[str] = field(default_factory=list)
+    instrument_all_safe: bool = False
 
 
 class MultiProjectAnalyzer:
@@ -113,6 +132,53 @@ class MultiProjectAnalyzer:
         m = re.search(r'<RootNamespace>(.*?)</RootNamespace>', csproj_content)
         return m.group(1) if m else csproj_stem
 
+    @staticmethod
+    def _target_framework_from_xml(content: str) -> Optional[str]:
+        """Pull the highest net* TFM out of a <TargetFramework(s)> tag, if present."""
+        m = re.search(r'<TargetFrameworks?>(.*?)</TargetFrameworks?>', content)
+        if not m:
+            return None
+        fw_value = m.group(1)
+        if ';' in fw_value:
+            frameworks = [f.strip() for f in fw_value.split(';')]
+            net_versions = [f for f in frameworks if f.startswith('net') and not f.startswith('netstandard')]
+            return sorted(net_versions, reverse=True)[0] if net_versions else frameworks[0]
+        return fw_value
+
+    def _resolve_target_framework(self, csproj_content: str, csproj_path: Path) -> str:
+        """Resolve the effective TargetFramework for a project.
+
+        Many modern .NET solutions (Bitwarden's server repo included) centralize
+        `<TargetFramework>` in a `Directory.Build.props` at the solution root instead
+        of repeating it in every .csproj — MSBuild merges it in automatically. The
+        previous version of this check only looked inside the individual .csproj and
+        silently defaulted to "net8.0" otherwise, which is wrong for any such solution
+        and (for Bitwarden specifically) picked a net8.0 SDK image for the tool's own
+        injected build stages against a net10.0 target. Walk up from the project
+        directory toward the source root, checking each Directory.Build.props found,
+        nearest first, before giving up and using the "net8.0" fallback.
+        """
+        fw = self._target_framework_from_xml(csproj_content)
+        if fw:
+            return fw
+        directory = csproj_path.parent
+        src_root = self.src_path.resolve()
+        while True:
+            props = directory / "Directory.Build.props"
+            if props.exists():
+                try:
+                    fw = self._target_framework_from_xml(props.read_text(encoding='utf-8'))
+                except Exception:
+                    fw = None
+                if fw:
+                    self.log(f"  (TargetFramework {fw} resolved from {props.relative_to(src_root) if directory.resolve() != src_root else props.name})")
+                    return fw
+            resolved = directory.resolve()
+            if resolved == src_root or directory.parent == directory:
+                break
+            directory = directory.parent
+        return "net8.0"
+
     def _is_business_logic(self, cs_path: Path, project_dir: Path) -> bool:
         """Determine if a .cs file contains business logic worth instrumenting"""
         filename = cs_path.name
@@ -160,28 +226,29 @@ class MultiProjectAnalyzer:
             self.log(f"\n--- Analyzing Project: {csproj.name} ---")
 
             content = csproj.read_text()
-            is_web = 'Sdk="Microsoft.NET.Sdk.Web"' in content
+            is_web = (
+                'Sdk="Microsoft.NET.Sdk.Web"' in content
+                or (project_dir / 'Startup.cs').exists()
+                or (project_dir / 'Program.cs').exists()
+            )
             root_ns = self._extract_root_namespace(content, csproj.stem)
 
-            if manual_main and csproj.stem.lower() == manual_main.lower():
+            # Accept --main as either a bare stem ('Api') or a path suffix ('src/Api')
+            # so both invocations match the correct project.
+            manual_main_stem = Path(manual_main).stem if manual_main else None
+            if manual_main and (
+                csproj.stem.lower() == manual_main.lower()
+                or (manual_main_stem and csproj.stem.lower() == manual_main_stem.lower())
+            ):
                 main_project_name = csproj.stem
                 is_web = True
                 self.log(f"  * Forced Main Project: {main_project_name}")
             elif not manual_main and is_web and not main_project_name:
                 main_project_name = csproj.stem
 
-            # Handle both <TargetFramework> and <TargetFrameworks>
-            framework = "net8.0"
-            fw_match = re.search(r'<TargetFrameworks?>(.*?)</TargetFrameworks?>', content)
-            if fw_match:
-                fw_value = fw_match.group(1)
-                if ';' in fw_value:
-                    frameworks = [f.strip() for f in fw_value.split(';')]
-                    net_versions = [f for f in frameworks if f.startswith('net') and not f.startswith('netstandard')]
-                    framework = sorted(net_versions, reverse=True)[0] if net_versions else frameworks[0]
-                    self.log(f"  Multi-targeting detected, using: {framework}")
-                else:
-                    framework = fw_value
+            # Handle both <TargetFramework> and <TargetFrameworks>, falling back to
+            # Directory.Build.props if the csproj itself doesn't declare one.
+            framework = self._resolve_target_framework(content, csproj)
 
             cs_files = list(project_dir.rglob('*.cs'))
             total_files_count += len(cs_files)
@@ -196,7 +263,14 @@ class MultiProjectAnalyzer:
                 ns = ""
                 try:
                     txt = cs.read_text(encoding='utf-8')
-                    m = re.search(r'namespace\s+([\w\.]+)', txt)
+                    # Anchored to line start (mod. leading whitespace) and requiring the
+                    # `;` (file-scoped) or `{` (block-scoped) terminator that a real C#
+                    # namespace declaration has — a bare `r'namespace\s+([\w.]+)'` search
+                    # also matches free text inside comments (e.g. "// TODO: move this
+                    # namespace to Bit.Foo"), which silently mis-detects the namespace for
+                    # that file (seen in Bitwarden's IPushRegistrationService.cs, which
+                    # captured "to" from a comment instead of its real namespace).
+                    m = re.search(r'^[ \t]*namespace\s+([\w][\w.]*)\s*[{;]', txt, re.MULTILINE)
                     if m:
                         ns = m.group(1)
                 except Exception:
@@ -238,15 +312,43 @@ class MultiProjectAnalyzer:
         if not main_project_name and projects:
             main_project_name = projects[0].name
 
+        exclude_namespaces = getattr(self, 'exclude_namespaces', [])
+
+        # --instrument-all-user-code is strictly more complete than the namespace
+        # allowlist (no BUSINESS_PATTERNS/BUSINESS_DIRECTORIES naming-convention gaps —
+        # see skipped_no_match in instrumentor output) — but it's only SAFE when the
+        # solution's own root namespace(s) don't collide with the hardcoded framework
+        # prefix denylist (e.g. Microsoft.eShopWeb.* collides with "Microsoft."), which
+        # would silently exclude the target's own business logic. Decide per-solution
+        # instead of hardcoding one mode for every target. An explicit
+        # --exclude-namespaces always forces allowlist mode, since instrumentAll has no
+        # exclude mechanism of its own.
+        instrument_all_safe = bool(projects) and not exclude_namespaces and not any(
+            _collides_with_framework_denylist(p.root_namespace) for p in projects
+        )
+        if projects:
+            colliding = [p.root_namespace for p in projects if _collides_with_framework_denylist(p.root_namespace)]
+            if colliding:
+                self.log(f"\n  Root namespace(s) collide with the framework denylist ({', '.join(sorted(set(colliding)))}) "
+                         f"— using namespace allowlist mode, not --instrument-all-user-code.")
+            elif exclude_namespaces:
+                self.log(f"\n  --exclude-namespaces given — using namespace allowlist mode, not --instrument-all-user-code.")
+            else:
+                self.log(f"\n  No root namespace collides with the framework denylist — using "
+                         f"--instrument-all-user-code (covers 100% of non-framework/generated code, "
+                         f"no naming-convention gaps).")
+
         return MultiAnalysisResult(
             solution_name=self.src_path.name,
-            projects=projects,
-            main_project=main_project_name,
-            all_namespaces=sorted(list(all_namespaces)),
-            total_files=total_files_count,
-            instrumented_projects=len(projects),
-            sdk_version=sdk_version,
-        )
+        projects=projects,
+        main_project=main_project_name,
+        all_namespaces=sorted(list(all_namespaces)),
+        total_files=total_files_count,
+        instrumented_projects=len(projects),
+        exclude_namespaces=exclude_namespaces,
+        sdk_version=sdk_version,
+        instrument_all_safe=instrument_all_safe,
+    )
 
 
 # ============================================================================
@@ -260,9 +362,55 @@ def _detect_last_stage(content: str) -> Optional[str]:
 
 
 def _detect_publish_dir(content: str) -> str:
-    """Extract publish output directory from Dockerfile"""
-    m = re.search(r'dotnet\s+publish\s+.*?(?:-o|--output)\s+(\S+)', content)
+    """Extract publish output directory from Dockerfile.
+
+    re.DOTALL is required: real-world `dotnet publish` invocations are commonly
+    spread across multiple backslash-continued lines (e.g. Bitwarden's Api
+    Dockerfile puts each flag, including `-o out`, on its own line), and without
+    it `.` never crosses the embedded newlines, so the search silently fails and
+    falls back to the "/app/publish" default — which is wrong for any Dockerfile
+    using a different output directory, and produces instrumentation RUN commands
+    that check a path with nothing in it (silently instrumenting zero DLLs).
+    """
+    m = re.search(r'dotnet\s+publish\b.*?(?:-o|--output)\s+(\S+)', content, re.DOTALL)
     return m.group(1) if m else "/app/publish"
+
+
+# MSBuild property flag spellings that enable single-file bundling: -p:, /p:,
+# --property:, -property: (all case-insensitive; MSBuild treats -p and /p the same).
+_PUBLISH_SINGLEFILE_LINE_RE = re.compile(
+    r'^[ \t]*[-/]p(?:roperty)?:PublishSingleFile=true[ \t]*\\?[ \t]*\r?\n',
+    re.IGNORECASE | re.MULTILINE,
+)
+_PUBLISH_SINGLEFILE_INLINE_RE = re.compile(
+    r'[ \t]*[-/]p(?:roperty)?:PublishSingleFile=true', re.IGNORECASE
+)
+
+
+def _strip_publish_single_file(content: str) -> str:
+    """Disable PublishSingleFile in the target's own `dotnet publish` command.
+
+    WHY: PublishSingleFile bundles every managed dependency assembly (the app's
+    own DLLs included) into one native executable — SharpFuzz/Cecil rewrites IL
+    in loose .dll files, and there are none to rewrite once the app is bundled
+    this way (only .pdb symbol files and non-.NET native interop DLLs remain on
+    disk; e.g. Bitwarden's `Api.dll` and `Core.dll` become embedded resources
+    inside the `Api` ELF bundle with nothing left to instrument). Without this,
+    the instrumentation RUN commands silently no-op (the `if [ -f ... ]` guard
+    finds no file and just prints a WARN) and the fuzzer runs against completely
+    uninstrumented code with a flat, always-zero coverage signal.
+
+    This only changes our own instrumented build variant — the target's real
+    release Dockerfile on disk is untouched by this tool.
+    """
+    if not re.search(r'PublishSingleFile\s*=\s*true', content, re.IGNORECASE):
+        return content
+    new_content = _PUBLISH_SINGLEFILE_LINE_RE.sub('', content)
+    new_content = _PUBLISH_SINGLEFILE_INLINE_RE.sub('', new_content)
+    if new_content != content:
+        print("  Detected PublishSingleFile=true — disabled for the instrumented build "
+              "(single-file bundling leaves no loose .dll files for SharpFuzz/Cecil to rewrite).")
+    return new_content
 
 
 def _detect_source_stage(content: str) -> str:
@@ -271,12 +419,42 @@ def _detect_source_stage(content: str) -> str:
     return copy_matches[-1].group(1) if copy_matches else "builder"
 
 
-def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path):
-    """Adapt original Dockerfile if present, or generate from scratch"""
+def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path, inject_mode: str = "hook"):
+    """Adapt original Dockerfile if present, or generate from scratch.
+
+    inject_mode:
+      'hook'   — zero-edit: build the UpsideFuzz.Coverage assembly in a dedicated
+                 stage, drop it (and SharpFuzz.Common.dll) into /coverage in the
+                 runtime image, and wire DOTNET_STARTUP_HOOKS +
+                 ASPNETCORE_HOSTINGSTARTUPASSEMBLIES via ENV. No app source edits.
+      'source' — legacy: coverage lives in CoverageExtensions.cs injected into the app.
+    """
 
     main_proj = next((p for p in result.projects if p.name == result.main_project), result.projects[0])
     framework = main_proj.target_framework
     fw_tag = framework.replace('net', '')
+
+    # Build stage that compiles the zero-edit coverage hook assembly (hook mode only).
+    coverage_hook_stage = ""
+    if inject_mode == "hook":
+        coverage_hook_stage = f"""
+# Stage: Build the zero-edit UpsideFuzz.Coverage hook assembly
+FROM mcr.microsoft.com/dotnet/sdk:{fw_tag} AS coverage-hook-build
+WORKDIR /covhook
+COPY coverage_hook_src/ ./
+RUN dotnet publish -c Release -o /covhook/out
+"""
+
+    # Runtime-stage lines that install the hook DLLs and wire the env vars.
+    def _hook_runtime_block() -> str:
+        return (
+            "\n# ---- UpsideFuzz zero-edit coverage hook (DOTNET_STARTUP_HOOKS) ----\n"
+            "COPY --from=coverage-hook-build /covhook/out/UpsideFuzz.Coverage.dll /coverage/UpsideFuzz.Coverage.dll\n"
+            "COPY --from=coverage-hook-build /covhook/out/SharpFuzz.Common.dll /coverage/SharpFuzz.Common.dll\n"
+            "ENV DOTNET_STARTUP_HOOKS=/coverage/UpsideFuzz.Coverage.dll\n"
+            "ENV ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=UpsideFuzz.Coverage\n"
+            "# ---- END coverage hook ----\n"
+        )
 
     # Use SDK version from global.json if available, otherwise derive from framework
     sdk_tag = fw_tag
@@ -304,6 +482,7 @@ def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path
     if original_dockerfile:
         print(f"  Found original Dockerfile: {original_dockerfile}")
         content = original_dockerfile.read_text()
+        content = _strip_publish_single_file(content)
 
         publish_dir = _detect_publish_dir(content)
         source_stage = _detect_source_stage(content)
@@ -311,21 +490,48 @@ def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path
 
         print(f"  Detected build stage: {source_stage}, runtime stage: {runtime_stage or '(unnamed)'}")
 
-        # Deduplicate to prevent "already instrumented" errors.
-        # --instrument-all-user-code rewrites every non-framework/non-generated type in
-        # each of the project's own assemblies, instead of a heuristic namespace allowlist.
-        # This avoids the "namespace not listed -> code silently uninstrumented" blind spot.
-        # Fail-loud (exit 1) so an under-instrumented image never ships unnoticed.
+        # Choose --instrument-all-user-code when safe (result.instrument_all_safe,
+        # decided in analyze_solution), namespace allowlist (namespaces.json)
+        # otherwise.
+        #
+        # WHY namespace allowlist exists at all: --instrument-all-user-code has a
+        # hardcoded framework prefix filter that includes "Microsoft." — silently
+        # skipping ALL Microsoft.eShopWeb.* (and similar) business logic. This caused
+        # edges=0 on eShopOnWeb because zero real business logic was instrumented.
+        # The namespace allowlist check runs BEFORE the framework prefix filter, so
+        # explicitly listed namespaces like Microsoft.eShopWeb.* are instrumented
+        # even though they carry the "Microsoft." prefix.
+        #
+        # WHY --instrument-all-user-code is preferred when safe: the allowlist is
+        # only as complete as BUSINESS_PATTERNS/BUSINESS_DIRECTORIES — any namespace
+        # whose files don't match one of those naming conventions is silently
+        # excluded (seen on Bitwarden: skipped_no_match in the hundreds per DLL even
+        # with 332 auto-collected namespaces). Bitwarden's own root namespaces
+        # ("Bit.*") don't collide with the framework denylist, so instrument-all
+        # is both safe and strictly more complete there.
+        #
+        # namespaces.json is still generated from source analysis either way (used
+        # by --config in allowlist mode; harmless/unused in instrument-all mode) and
+        # copied into the image at /instrumentor/bin/namespaces.json (see
+        # injected_stages below). Fail-loud (exit 1) so an under-instrumented image
+        # never ships unnoticed.
         unique_dlls = sorted(list(set(dll_names)))
+        if result.instrument_all_safe:
+            instrument_flag = "--instrument-all-user-code"
+            mode_label = "instrument-all-user-code"
+        else:
+            instrument_flag = "--config /instrumentor/bin/namespaces.json"
+            mode_label = "namespace allowlist"
         instrument_cmds = "\n".join([
             f'RUN if [ -f {publish_dir}/{dll} ]; then '
-            f'echo "Instrumenting {dll} (all user code)"; '
+            f'echo "Instrumenting {dll} ({mode_label})"; '
             f'DOTNET_ROLL_FORWARD=Major dotnet /instrumentor/bin/instrumentor.dll {publish_dir}/{dll} '
-            f'--instrument-all-user-code '
+            f'{instrument_flag} '
             f'|| {{ echo "FATAL: instrumentation failed for {dll}"; exit 1; }}; '
             f'else echo "WARN: {dll} not found (skipping)"; fi'
             for dll in unique_dlls
         ])
+
 
         injected_stages = f"""
 # ---- INJECTED BY fuzz-prep-multi.py ----
@@ -344,6 +550,7 @@ RUN cp namespaces.json /instrumentor/bin/namespaces.json
 FROM {source_stage} AS instrumentation
 COPY --from=instrumentor-build /instrumentor/bin /instrumentor/bin
 {instrument_cmds}
+{coverage_hook_stage}
 # ---- END INSTRUMENTATION ----
 """
         # Insert injected stages before the runtime/final stage
@@ -381,6 +588,21 @@ COPY --from=instrumentor-build /instrumentor/bin /instrumentor/bin
         else:
             content = content.replace(f'--from={source_stage}', '--from=instrumentation')
 
+        # Hook mode: drop the coverage assembly + env vars into the runtime stage.
+        if inject_mode == "hook":
+            hook_block = _hook_runtime_block()
+            if runtime_stage:
+                content = re.sub(
+                    rf'(?m)^(FROM\s+\S+\s+AS\s+{re.escape(runtime_stage)}[^\n]*\n)',
+                    lambda m: m.group(0) + hook_block,
+                    content, count=1
+                )
+            else:
+                froms = list(re.finditer(r'(?m)^FROM[^\n]*\n', content))
+                if froms:
+                    last = froms[-1]
+                    content = content[:last.end()] + hook_block + content[last.end():]
+
         original_dockerfile.write_text(content)
         print("  Adapted original Dockerfile with instrumentation stages.")
 
@@ -395,8 +617,9 @@ COPY --from=instrumentor-build /instrumentor/bin /instrumentor/bin
     else:
         print("  No original Dockerfile found, generating from scratch.")
         dll_list = [f"/src/{p.path}/bin/Release/{p.target_framework}/{p.name}.dll" for p in result.projects]
+        instrument_flag = "--instrument-all-user-code" if result.instrument_all_safe else "--config /instrumentor/bin/namespaces.json"
         instrument_commands = "\n".join(
-            [f"RUN DOTNET_ROLL_FORWARD=Major dotnet /instrumentor/bin/instrumentor.dll {dll} --config /instrumentor/bin/namespaces.json" for dll in dll_list]
+            [f"RUN DOTNET_ROLL_FORWARD=Major dotnet /instrumentor/bin/instrumentor.dll {dll} {instrument_flag}" for dll in dll_list]
         )
 
         dockerfile_content = f"""# AUTO-GENERATED by fuzz-prep-multi.py
@@ -419,11 +642,11 @@ RUN cp namespaces.json /instrumentor/bin/namespaces.json
 FROM build AS instrumentation
 COPY --from=instrumentor-build /instrumentor/bin /instrumentor/bin
 {instrument_commands}
-
+{coverage_hook_stage}
 FROM mcr.microsoft.com/dotnet/aspnet:{fw_tag}
 WORKDIR /app
 COPY --from=instrumentation /src/{main_proj.path}/bin/Release/{main_proj.target_framework}/ .
-EXPOSE 8080
+{_hook_runtime_block() if inject_mode == "hook" else ""}EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
 ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
 """
@@ -667,17 +890,13 @@ def generate_unified_instrumentor(result: MultiAnalysisResult, output_path: Path
         (instr_dir / "Program.cs").write_text(_FALLBACK_INSTRUMENTOR_CS)
 
     # Generate namespaces.json config with discovered business-logic namespaces
-    ns_config = {
-        "generated_by": "fuzz-prep-multi.py",
-        "solution": result.solution_name,
-        "main_project": result.main_project,
+    config_data = {
         "namespaces": sorted(set(result.all_namespaces)),
+        "excludes": sorted(set(result.exclude_namespaces))
     }
     config_path = instr_dir / "namespaces.json"
-    config_path.write_text(json.dumps(ns_config, indent=2) + "\n")
-    print(f"  Generated namespaces.json with {len(result.all_namespaces)} namespace(s):")
-    for ns in sorted(set(result.all_namespaces)):
-        print(f"    - {ns}")
+    config_path.write_text(json.dumps(config_data, indent=2))
+    print(f"  Generated namespaces.json with {len(result.all_namespaces)} allowed, {len(result.exclude_namespaces)} excluded namespace(s).")
 
 
 # Inline fallback instrumentor for when the repo file isn't accessible.
@@ -691,6 +910,7 @@ if (args.Length == 0) { Console.Error.WriteLine("Usage: instrumentor <dll> [--na
 string dllPath = args[0];
 bool instrumentAll = args.Any(a => a == "--instrument-all-user-code");
 var allowedNamespaces = new List<string>();
+var excludedNamespaces = new List<string>();
 for (int i = 1; i < args.Length; i++)
     if (args[i] == "--namespaces") for (int j = i+1; j < args.Length && !args[j].StartsWith("--"); j++) { allowedNamespaces.Add(args[j]); i = j; }
 if (allowedNamespaces.Count == 0 && !instrumentAll) {
@@ -699,6 +919,8 @@ if (allowedNamespaces.Count == 0 && !instrumentAll) {
         var doc = JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(File.ReadAllText(cfgPath));
         if (doc != null && doc.TryGetValue("namespaces", out var arr) && arr.ValueKind == JsonValueKind.Array)
             foreach (var e in arr.EnumerateArray()) { var v = e.GetString(); if (!string.IsNullOrWhiteSpace(v)) allowedNamespaces.Add(v); }
+        if (doc != null && doc.TryGetValue("excludes", out var extArr) && extArr.ValueKind == JsonValueKind.Array)
+            foreach (var e in extArr.EnumerateArray()) { var v = e.GetString(); if (!string.IsNullOrWhiteSpace(v)) excludedNamespaces.Add(v); }
     }
 }
 if (allowedNamespaces.Count == 0 && !instrumentAll) { Console.Error.WriteLine("ERROR: no namespaces"); Environment.Exit(1); }
@@ -706,6 +928,7 @@ var skip = new[]{"System.","Microsoft.","SharpFuzz.","Mono.","Internal."};
 bool Filter(string fn) {
     if (fn.Contains("<PrivateImplementationDetails>") || fn.Contains("c__DisplayClass") || fn.Contains("d__") || fn.Contains(".g.")) return false;
     foreach (var p in skip) if (fn.StartsWith(p)) return false;
+    foreach (var ex in excludedNamespaces) if (fn.Contains(ex)) return false;
     if (fn.Contains("Migration") || fn.Contains("CoverageExtensions") || fn.EndsWith(".Program") || fn.EndsWith(".Startup")) return false;
     if (instrumentAll) { Console.WriteLine($"  + {fn}"); return true; }
     foreach (var ns in allowedNamespaces) if (fn.Contains(ns)) { Console.WriteLine($"  + {fn}"); return true; }
@@ -715,6 +938,498 @@ try { SharpFuzz.Fuzzer.Instrument(dllPath, Filter, SharpFuzz.Options.Value); Con
 catch (SharpFuzz.InstrumentationException ex) when (ex.Message.Contains("already instrumented")) { Console.WriteLine("Already instrumented"); }
 catch (Exception ex) { Console.Error.WriteLine($"FAILED: {ex.Message}"); Environment.Exit(1); }
 '''
+
+
+# ============================================================================
+# Zero-edit coverage hook assembly (DOTNET_STARTUP_HOOKS + ASP.NET hosting startup)
+# ============================================================================
+
+# Pure C# source (no Python substitutions) — kept as a raw string so its many
+# braces don't need f-string escaping.
+_COVERAGE_HOOK_CS = r'''// AUTO-GENERATED by fuzz-prep-multi.py — UpsideFuzz zero-edit coverage runtime.
+//
+// Loaded two ways, both requiring ZERO edits to the target application:
+//   1. DOTNET_STARTUP_HOOKS -> StartupHook.Initialize() runs before Main. It maps
+//      the shared coverage bitmap, links every SharpFuzz-instrumented assembly to it
+//      (including assemblies loaded lazily/dynamically at request time, via an
+//      AppDomain.AssemblyLoad handler), and registers an assembly resolver so this
+//      DLL + SharpFuzz.Common.dll load from /coverage without being in the app dir.
+//   2. ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=UpsideFuzz.Coverage -> CoverageHostingStartup
+//      registers an IStartupFilter that inserts the coverage middleware, which serves
+//      the /shm/* control endpoints and emits per-request X-Coverage-Delta headers.
+#nullable disable
+#pragma warning disable
+
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+
+[assembly: HostingStartup(typeof(UpsideFuzz.Coverage.CoverageHostingStartup))]
+
+// StartupHook MUST be in the global namespace and named exactly "StartupHook".
+internal class StartupHook
+{
+    public static void Initialize()
+    {
+        try { UpsideFuzz.Coverage.CoverageRuntime.Bootstrap(); } catch { }
+    }
+}
+
+namespace UpsideFuzz.Coverage
+{
+    public static class CoverageRuntime
+    {
+        private const string SHM_PATH = "/coverage_shm/bitmap";
+        private const int DEFAULT_SHM_SIZE = 262144;
+        private const int MIN_SHM_SIZE = 65536;
+        internal static readonly int SHM_SIZE = ResolveShmSize();
+
+        private static IntPtr globalShmAddr = IntPtr.Zero;
+        private static bool isFileBacked = false;
+        private static MemoryMappedFile mmf;
+        private static MemoryMappedViewAccessor accessor;
+
+        // AFL-style hit-count buckets + bucketed virgin map (see coverage.go / ARCHITECTURE.md).
+        private static readonly byte[] CountClass = BuildCountClass();
+        private static byte[] seenBuckets;
+        private static int totalClasses = 0;
+        private static readonly object covLock = new object();
+
+        private static readonly ConcurrentDictionary<string, byte> linkedAssemblies = new ConcurrentDictionary<string, byte>();
+        private static int linkCount = 0;
+        private static volatile bool booted = false;
+        private static string hookDir = "/coverage";
+
+        // Self-verifying, fail-closed instrumentation (Top-20 #4): track which
+        // assemblies are "app" code (not framework/SharpFuzz itself) so /shm/health
+        // can report whether instrumentation actually reached the target's own
+        // code, not just that the SharpFuzz runtime loaded. Mirrors
+        // instrumentor/Program.cs's `frameworkPrefixes` — kept in sync manually.
+        private static readonly string[] frameworkPrefixes = {
+            "System.", "Microsoft.", "SharpFuzz.", "Mono.", "Internal.",
+            "Newtonsoft.", "Swashbuckle.", "NSwag.", "FluentValidation.",
+            "Serilog.", "MediatR.", "AutoMapper.", "Dapper.",
+            "Npgsql.", "MySqlConnector.", "StackExchange.",
+            "Polly.", "Grpc.", "Google.Protobuf.",
+        };
+        // linked_app_assemblies is deliberately NOT tracked per-assembly: SharpFuzz's
+        // Trace.SharedMem type lives only in SharpFuzz.Common.dll, never in the app's
+        // own IL-rewritten assemblies, so "does this app assembly define the Trace
+        // type" is always false and would be a false-negative fail-closed signal.
+        // The only architecturally honest way to verify instrumentation reached app
+        // code is to check whether the shared bitmap actually moves after real
+        // traffic — done engine-side (void/go/coverage.go::checkCoverageHealth) via a
+        // warm-up probe. This list is purely informational: which app assemblies the
+        // runtime has observed loaded, for diagnostics when that probe fails.
+        private static readonly ConcurrentDictionary<string, byte> seenAppAssemblies = new ConcurrentDictionary<string, byte>();
+
+        private static bool IsAppAssembly(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name == "UpsideFuzz.Coverage") return false;
+            foreach (var prefix in frameworkPrefixes)
+                if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        }
+
+        private static string JsonStringArray(System.Collections.Generic.IEnumerable<string> values)
+        {
+            var sb = new StringBuilder("[");
+            bool first = true;
+            foreach (var v in values)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append('"').Append(SanitizeHeader(v)).Append('"');
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        // Called before Main via DOTNET_STARTUP_HOOKS.
+        public static void Bootstrap()
+        {
+            if (booted) return;
+            booted = true;
+            try { hookDir = Path.GetDirectoryName(typeof(CoverageRuntime).Assembly.Location); } catch { }
+            if (string.IsNullOrEmpty(hookDir)) hookDir = "/coverage";
+
+            // Resolve UpsideFuzz.Coverage + SharpFuzz.Common from /coverage even though
+            // they are NOT in the app's probing path — so the target dir stays untouched.
+            AssemblyLoadContext.Default.Resolving += (ctx, name) =>
+            {
+                try
+                {
+                    var candidate = Path.Combine(hookDir, name.Name + ".dll");
+                    if (File.Exists(candidate)) return ctx.LoadFromAssemblyPath(candidate);
+                }
+                catch { }
+                return null;
+            };
+
+            InitializeShm();
+
+            // Force-load + link the shared SharpFuzz coverage assembly immediately.
+            foreach (var n in new[] { "SharpFuzz.Common", "SharpFuzz" })
+            {
+                try { LinkAssembly(Assembly.Load(n)); } catch { }
+            }
+
+            // Link everything already loaded, and everything loaded later. The
+            // AssemblyLoad handler is the fix for lazily/dynamically loaded modules
+            // (e.g. plugin-style module assemblies) whose coverage was previously lost.
+            AppDomain.CurrentDomain.AssemblyLoad += (s, e) =>
+            {
+                try { LinkAssembly(e.LoadedAssembly); } catch { }
+            };
+            foreach (var a in AppDomain.CurrentDomain.GetAssemblies()) LinkAssembly(a);
+        }
+
+        private static int ResolveShmSize()
+        {
+            try
+            {
+                var raw = Environment.GetEnvironmentVariable("SHM_SIZE");
+                if (int.TryParse(raw, out var parsed))
+                    return parsed < MIN_SHM_SIZE ? MIN_SHM_SIZE : parsed;
+            }
+            catch { }
+            return DEFAULT_SHM_SIZE;
+        }
+
+        private static byte[] BuildCountClass()
+        {
+            var t = new byte[256];
+            for (int i = 0; i < 256; i++)
+            {
+                byte c = (byte)i;
+                byte v;
+                if (c == 0) v = 0;
+                else if (c == 1) v = 1;
+                else if (c == 2) v = 2;
+                else if (c == 3) v = 4;
+                else if (c <= 7) v = 8;
+                else if (c <= 15) v = 16;
+                else if (c <= 31) v = 32;
+                else if (c <= 127) v = 64;
+                else v = 128;
+                t[i] = v;
+            }
+            return t;
+        }
+
+        private static void InitializeShm()
+        {
+            if (globalShmAddr != IntPtr.Zero) return;
+            if (Directory.Exists(Path.GetDirectoryName(SHM_PATH)))
+            {
+                try
+                {
+                    var fs = new FileStream(SHM_PATH, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+                    fs.SetLength(SHM_SIZE);
+                    mmf = MemoryMappedFile.CreateFromFile(fs, null, SHM_SIZE, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, false);
+                    accessor = mmf.CreateViewAccessor(0, SHM_SIZE);
+                    unsafe
+                    {
+                        byte* ptr = null;
+                        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+                        globalShmAddr = (IntPtr)ptr;
+                    }
+                    isFileBacked = true;
+                }
+                catch { globalShmAddr = Marshal.AllocHGlobal(SHM_SIZE); }
+            }
+            else
+            {
+                globalShmAddr = Marshal.AllocHGlobal(SHM_SIZE);
+            }
+            unsafe { byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) b[i] = 0; }
+            seenBuckets = new byte[SHM_SIZE];
+            totalClasses = 0;
+        }
+
+        // Point a single assembly's SharpFuzz.Common.Trace.SharedMem at our bitmap.
+        internal static void LinkAssembly(Assembly a)
+        {
+            if (a == null || globalShmAddr == IntPtr.Zero) return;
+            try
+            {
+                string asmName = a.GetName().Name ?? a.FullName;
+                bool isApp = IsAppAssembly(asmName);
+                if (isApp) seenAppAssemblies.TryAdd(asmName, 1);
+
+                string[] typeNames = { "SharpFuzz.Common.Trace", "SharpFuzz.Common.Instrumenter", "SharpFuzz.Trace", "SharpFuzz.Instrumenter" };
+                bool matched = false;
+                foreach (var tn in typeNames)
+                {
+                    Type t = a.GetType(tn, false);
+                    if (t == null) continue;
+                    string[] members = { "SharedMem", "SharedMemory", "sharedMemory", "_sharedMemory" };
+                    foreach (var m in members)
+                    {
+                        var p = t.GetProperty(m, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                        if (p != null)
+                        {
+                            try { unsafe { p.SetValue(null, System.Reflection.Pointer.Box(globalShmAddr.ToPointer(), typeof(byte*))); } matched = true; } catch { }
+                        }
+                        var f = t.GetField(m, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                        if (f != null)
+                        {
+                            try { f.SetValue(null, globalShmAddr); matched = true; } catch { }
+                        }
+                    }
+                }
+                if (matched && linkedAssemblies.TryAdd(asmName, 1))
+                    Interlocked.Increment(ref linkCount);
+            }
+            catch { }
+        }
+
+        // Single-pass novelty merge against the shared bucketed virgin map
+        // (first-observer-wins) — see ARCHITECTURE.md section 5.
+        internal static int MergeAndCountNovel()
+        {
+            if (globalShmAddr == IntPtr.Zero || seenBuckets == null) return 0;
+            int novel = 0;
+            lock (covLock)
+            {
+                unsafe
+                {
+                    byte* b = (byte*)globalShmAddr;
+                    int n = SHM_SIZE;
+                    int i = 0;
+                    for (; i + 8 <= n; i += 8)
+                    {
+                        if (*(ulong*)(b + i) == 0UL) continue;
+                        for (int j = 0; j < 8; j++)
+                        {
+                            byte c = b[i + j];
+                            if (c == 0) continue;
+                            byte bucket = CountClass[c];
+                            if ((seenBuckets[i + j] & bucket) == 0) { seenBuckets[i + j] |= bucket; novel++; }
+                        }
+                    }
+                    for (; i < n; i++)
+                    {
+                        byte c = b[i];
+                        if (c == 0) continue;
+                        byte bucket = CountClass[c];
+                        if ((seenBuckets[i] & bucket) == 0) { seenBuckets[i] |= bucket; novel++; }
+                    }
+                }
+                totalClasses += novel;
+            }
+            return novel;
+        }
+
+        private static long RawHits()
+        {
+            if (globalShmAddr == IntPtr.Zero) return 0;
+            long hits = 0;
+            unsafe { byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) hits += b[i]; }
+            return hits;
+        }
+
+        private static string SanitizeHeader(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder(Math.Min(s.Length, 1024));
+            foreach (var c in s)
+            {
+                if (sb.Length >= 1024) break;
+                if (c == '\r' || c == '\n' || c == '\t') { sb.Append(' '); continue; }
+                if (c >= 32 && c < 127) sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private static Task WriteJson(HttpContext ctx, string json)
+        {
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentType = "application/json";
+            return ctx.Response.WriteAsync(json);
+        }
+
+        // Serves /shm/create, /shm/coverage, /shm/reset, /shm/health.
+        public static Task HandleControlEndpoint(HttpContext context, string rawPath)
+        {
+            string path = rawPath.TrimEnd('/').ToLowerInvariant();
+            if (path == "/shm/create")
+            {
+                InitializeShm();
+                foreach (var a in AppDomain.CurrentDomain.GetAssemblies()) LinkAssembly(a);
+                return WriteJson(context, "{\"mode\":\"" + (isFileBacked ? "file-backed-mmap" : "heap") +
+                    "\",\"size\":" + SHM_SIZE + ",\"status\":\"synced\",\"linked_assemblies\":" + linkCount + "}");
+            }
+            if (path == "/shm/coverage")
+                return WriteJson(context, "{\"edges\":" + totalClasses + ",\"hits\":" + RawHits() + ",\"size\":" + SHM_SIZE + "}");
+            if (path == "/shm/reset")
+            {
+                lock (covLock)
+                {
+                    if (globalShmAddr != IntPtr.Zero) unsafe { byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) b[i] = 0; }
+                    if (seenBuckets != null) Array.Clear(seenBuckets, 0, seenBuckets.Length);
+                    totalClasses = 0;
+                }
+                return WriteJson(context, "{\"status\":\"reset\"}");
+            }
+            if (path == "/shm/health")
+            {
+                // Reports facts only, not a verdict: SharpFuzz's Trace type lives in
+                // SharpFuzz.Common.dll, never in the app's own rewritten assemblies, so
+                // per-assembly "linked" status can't be measured by type reflection here.
+                // The fail-closed ok/degraded decision is made engine-side (Go), which can
+                // send real warm-up traffic and check whether the bitmap actually moves —
+                // see void/go/coverage.go::checkCoverageHealth. app_assemblies below is
+                // purely diagnostic context for that decision.
+                bool shmBound = globalShmAddr != IntPtr.Zero;
+                return WriteJson(context, "{\"linked_assemblies\":" + linkCount + ",\"total_classes\":" + totalClasses +
+                    ",\"shm_bound\":" + (shmBound ? "true" : "false") +
+                    ",\"mode\":\"" + (isFileBacked ? "file-backed-mmap" : "heap") + "\"" +
+                    ",\"app_assemblies\":" + JsonStringArray(seenAppAssemblies.Keys) + "}");
+            }
+            context.Response.StatusCode = 404;
+            return Task.CompletedTask;
+        }
+
+        // Per-request coverage attribution + production-mode exception capture.
+        public static async Task RunWithCoverage(HttpContext context, RequestDelegate next)
+        {
+            bool isFuzzRequest = !string.IsNullOrEmpty(context.Request.Headers["X-Fuzz-Request-Id"]);
+            string exType = null, exMsg = null;
+            int coverageDelta = -1;
+            try
+            {
+                await next(context);
+            }
+            catch (Exception ex)
+            {
+                exType = ex.GetType().FullName;
+                exMsg = ex.Message;
+                if (isFuzzRequest && !context.Response.HasStarted)
+                {
+                    try
+                    {
+                        context.Response.Clear();
+                        context.Response.StatusCode = 500;
+                        coverageDelta = MergeAndCountNovel();
+                        context.Response.Headers["X-Coverage-Delta"] = coverageDelta.ToString();
+                        context.Response.Headers["X-Coverage-Edges"] = totalClasses.ToString();
+                        context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exType);
+                        context.Response.Headers["X-Exception-Message"] = SanitizeHeader(exMsg);
+                        context.Response.ContentType = "application/json";
+                        await context.Response.WriteAsync("{\"error\":\"unhandled_exception\"}");
+                    }
+                    catch { }
+                    return;
+                }
+                throw;
+            }
+            finally
+            {
+                if (coverageDelta < 0) coverageDelta = MergeAndCountNovel();
+                try
+                {
+                    if (!context.Response.HasStarted)
+                    {
+                        context.Response.Headers["X-Coverage-Delta"] = coverageDelta.ToString();
+                        context.Response.Headers["X-Coverage-Edges"] = totalClasses.ToString();
+                        if (exType != null) context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exType);
+                        if (exMsg != null) context.Response.Headers["X-Exception-Message"] = SanitizeHeader(exMsg);
+                    }
+                }
+                catch { }
+            }
+        }
+    }
+
+    // ASP.NET hosting startup (loaded via ASPNETCORE_HOSTINGSTARTUPASSEMBLIES).
+    public class CoverageHostingStartup : IHostingStartup
+    {
+        public void Configure(IWebHostBuilder builder)
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.AddSingleton<IStartupFilter, CoverageStartupFilter>();
+            });
+        }
+    }
+
+    internal class CoverageStartupFilter : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
+        {
+            return app =>
+            {
+                // Inserted at the very front so it always runs and can serve /shm/*.
+                app.Use(async (context, mwNext) =>
+                {
+                    var path = context.Request.Path.Value ?? "";
+                    if (path.StartsWith("/shm/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await CoverageRuntime.HandleControlEndpoint(context, path);
+                        return;
+                    }
+                    await CoverageRuntime.RunWithCoverage(context, _ => mwNext());
+                });
+                next(app);
+            };
+        }
+    }
+}
+'''
+
+
+def generate_startup_hook_assembly(result: MultiAnalysisResult, output_path: Path):
+    """Write the self-contained UpsideFuzz.Coverage hook assembly (zero-edit mode).
+
+    Produces coverage_hook_src/{UpsideFuzz.Coverage.cs, UpsideFuzz.Coverage.csproj}.
+    The Docker build (hook mode) compiles this and drops the DLL + SharpFuzz.Common.dll
+    into /coverage in the runtime image, wired via DOTNET_STARTUP_HOOKS +
+    ASPNETCORE_HOSTINGSTARTUPASSEMBLIES. The target application is never modified.
+    """
+    main_proj = next((p for p in result.projects if p.name == result.main_project), result.projects[0])
+    tfm = main_proj.target_framework or "net8.0"
+    sharpfuzz_version = "2.1.1"
+
+    hook_dir = output_path / "coverage_hook_src"
+    hook_dir.mkdir(parents=True, exist_ok=True)
+
+    (hook_dir / "UpsideFuzz.Coverage.cs").write_text(_COVERAGE_HOOK_CS, encoding="utf-8")
+
+    csproj = f"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>{tfm}</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>UpsideFuzz.Coverage</AssemblyName>
+    <RootNamespace>UpsideFuzz.Coverage</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Pulls SharpFuzz.Common.dll into the build output so the instrumented
+         app's probes resolve it at runtime (we reference it by reflection only). -->
+    <PackageReference Include="SharpFuzz" Version="{sharpfuzz_version}" />
+  </ItemGroup>
+</Project>
+"""
+    (hook_dir / "UpsideFuzz.Coverage.csproj").write_text(csproj, encoding="utf-8")
+    print(f"  Generated zero-edit coverage hook assembly in {hook_dir.name}/ (TFM {tfm})")
 
 
 # ============================================================================
@@ -796,6 +1511,11 @@ def generate_multi_coverage_helper(result: MultiAnalysisResult, output_path: Pat
     # Use RootNamespace if detected, otherwise fall back to project name
     ns_prefix = main_proj.root_namespace or result.main_project
 
+    # Determine target subdirectory: prefer Utilities/ (standard ASP.NET convention), fall back to Helpers/
+    utilities_dir = output_path / main_proj.path / "Utilities"
+    helpers_dir = output_path / main_proj.path / "Helpers"
+    subdir_name = "Utilities" if utilities_dir.exists() else "Helpers"
+
     code = f"""// AUTO-GENERATED by fuzz-prep-multi.py
 #nullable disable
 #pragma warning disable
@@ -811,7 +1531,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
-namespace {ns_prefix}.Helpers
+namespace {ns_prefix}.{subdir_name}
 {{
     public class CoverageSnapshot
     {{
@@ -836,6 +1556,91 @@ namespace {ns_prefix}.Helpers
         private static MemoryMappedFile mmf;
         private static MemoryMappedViewAccessor accessor;
         private static ConcurrentDictionary<string, CoverageSnapshot> traceCoverage = new ConcurrentDictionary<string, CoverageSnapshot>();
+
+        // ── AFL-style hit-count buckets + bucketed virgin map ──────────────────
+        // Each edge's raw 8-bit hit count is classified into a log-scale bucket
+        // (1, 2, 3, 4-7, 8-15, 16-31, 32-127, 128+). seenBuckets[i] holds the OR
+        // of every bucket bit ever observed for edge i. A bucket bit that is new
+        // for an edge is new coverage — so an edge run once is distinguished from
+        // the same edge run 50 or 5000 times, letting the fuzzer keep making
+        // progress inside loops/pagination/state machines instead of plateauing
+        // the instant every edge has been touched at least once.
+        private static readonly byte[] CountClass = BuildCountClass();
+        private static byte[] seenBuckets;      // bucketed virgin map (size SHM_SIZE)
+        private static int totalClasses = 0;    // running count of distinct (edge, bucket) classes discovered
+        private static readonly object covLock = new object();
+
+        private static byte[] BuildCountClass()
+        {{
+            var t = new byte[256];
+            for (int i = 0; i < 256; i++)
+            {{
+                byte c = (byte)i;
+                byte v;
+                if (c == 0) v = 0;
+                else if (c == 1) v = 1;
+                else if (c == 2) v = 2;
+                else if (c == 3) v = 4;
+                else if (c <= 7) v = 8;
+                else if (c <= 15) v = 16;
+                else if (c <= 31) v = 32;
+                else if (c <= 127) v = 64;
+                else v = 128;
+                t[i] = v;
+            }}
+            return t;
+        }}
+
+        // MergeAndCountNovel folds the live coverage bitmap into the persistent
+        // bucketed virgin map and returns how many NEW (edge, bucket) classes the
+        // just-completed request discovered. Novelty is measured against the shared
+        // virgin map (first-observer-wins): when two concurrent requests both reach
+        // new code the credit is claimed once, not smeared across both — which is
+        // the concurrency-attribution bug the old global before/after delta had.
+        // A single pass (with an all-zero 8-byte word fast path) replaces the two
+        // full 256KB bitmap scans the middleware previously did per request.
+        private static int MergeAndCountNovel()
+        {{
+            if (globalShmAddr == IntPtr.Zero || seenBuckets == null) return 0;
+            int novel = 0;
+            lock (covLock)
+            {{
+                unsafe
+                {{
+                    byte* b = (byte*)globalShmAddr;
+                    int n = SHM_SIZE;
+                    int i = 0;
+                    for (; i + 8 <= n; i += 8)
+                    {{
+                        if (*(ulong*)(b + i) == 0UL) continue;
+                        for (int j = 0; j < 8; j++)
+                        {{
+                            byte c = b[i + j];
+                            if (c == 0) continue;
+                            byte bucket = CountClass[c];
+                            if ((seenBuckets[i + j] & bucket) == 0)
+                            {{
+                                seenBuckets[i + j] |= bucket;
+                                novel++;
+                            }}
+                        }}
+                    }}
+                    for (; i < n; i++)
+                    {{
+                        byte c = b[i];
+                        if (c == 0) continue;
+                        byte bucket = CountClass[c];
+                        if ((seenBuckets[i] & bucket) == 0)
+                        {{
+                            seenBuckets[i] |= bucket;
+                            novel++;
+                        }}
+                    }}
+                }}
+                totalClasses += novel;
+            }}
+            return novel;
+        }}
 
         private static int ResolveShmSize()
         {{
@@ -881,6 +1686,8 @@ namespace {ns_prefix}.Helpers
             }}
 
             unsafe {{ byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) b[i] = 0; }}
+            seenBuckets = new byte[SHM_SIZE];
+            totalClasses = 0;
             SyncSharpFuzz();
         }}
 
@@ -917,7 +1724,12 @@ namespace {ns_prefix}.Helpers
                 string exceptionTypeName = null;
                 string exceptionMessage = null;
                 bool isFuzzRequest = !string.IsNullOrEmpty(context.Request.Headers["X-Fuzz-Request-Id"]);
-                int before = GetCurrentEdgeCount();
+                // Per-request novelty is computed ONCE, after the pipeline runs, by
+                // merging the live bitmap into the shared bucketed virgin map. This
+                // replaces the old global before/after double full-scan (two 256KB
+                // passes per request) and its concurrency smearing: the delta is now
+                // the count of buckets THIS request was first to discover.
+                int coverageDelta = -1;
                 try {{
                     await next();
                 }} catch (Exception ex) {{
@@ -933,26 +1745,26 @@ namespace {ns_prefix}.Helpers
                         try {{
                             context.Response.Clear();
                             context.Response.StatusCode = 500;
-                            int aftr = GetCurrentEdgeCount();
-                            context.Response.Headers["X-Coverage-Delta"] = (aftr - before).ToString();
-                            context.Response.Headers["X-Coverage-Edges"] = aftr.ToString();
+                            coverageDelta = MergeAndCountNovel();
+                            context.Response.Headers["X-Coverage-Delta"] = coverageDelta.ToString();
+                            context.Response.Headers["X-Coverage-Edges"] = totalClasses.ToString();
                             context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exceptionTypeName);
                             context.Response.Headers["X-Exception-Message"] = SanitizeHeader(exceptionMessage);
                             context.Response.ContentType = "application/json";
-                            await context.Response.WriteAsync("{{\"error\":\"unhandled_exception\"}}");
+                            await context.Response.WriteAsync("{{\\"error\\":\\"unhandled_exception\\"}}");
                         }} catch {{ }}
                         return;
                     }}
                     throw;
                 }} finally {{
-                    int after = GetCurrentEdgeCount();
-                    int delta = after - before;
-                    // Inject per-request coverage into response headers — zero HTTP overhead.
-                    // The fuzzer reads X-Coverage-Delta directly from the fuzz response.
+                    // Single-pass novelty merge (skipped if the short-circuit branch already did it).
+                    if (coverageDelta < 0) coverageDelta = MergeAndCountNovel();
+                    // Inject per-request coverage into response headers — the fuzzer reads
+                    // X-Coverage-Delta directly from the response, no extra round trip.
                     try {{
                         if (!context.Response.HasStarted) {{
-                            context.Response.Headers["X-Coverage-Delta"] = delta.ToString();
-                            context.Response.Headers["X-Coverage-Edges"] = after.ToString();
+                            context.Response.Headers["X-Coverage-Delta"] = coverageDelta.ToString();
+                            context.Response.Headers["X-Coverage-Edges"] = totalClasses.ToString();
                             if (exceptionTypeName != null)
                                 context.Response.Headers["X-Exception-Type"] = SanitizeHeader(exceptionTypeName);
                             if (exceptionMessage != null)
@@ -968,9 +1780,9 @@ namespace {ns_prefix}.Helpers
                     {{
                         TraceId = requestId,
                         Endpoint = context.Request.Path,
-                        CoverageBefore = before,
-                        CoverageAfter = after,
-                        CoverageDelta = delta,
+                        CoverageBefore = 0,
+                        CoverageAfter = totalClasses,
+                        CoverageDelta = coverageDelta,
                         Timestamp = DateTime.UtcNow
                     }};
                 }}
@@ -980,6 +1792,37 @@ namespace {ns_prefix}.Helpers
         private static string syncError = "None";
         private static string lastAttempt = "None";
 
+        // Self-verifying, fail-closed instrumentation (Top-20 #4): track which
+        // assemblies are "app" code (not framework/SharpFuzz itself) so /shm/health
+        // can report whether instrumentation actually reached the target's own
+        // code, not just that the SharpFuzz runtime loaded. Mirrors
+        // instrumentor/Program.cs's `frameworkPrefixes` — kept in sync manually.
+        private static readonly string[] frameworkPrefixes = {{
+            "System.", "Microsoft.", "SharpFuzz.", "Mono.", "Internal.",
+            "Newtonsoft.", "Swashbuckle.", "NSwag.", "FluentValidation.",
+            "Serilog.", "MediatR.", "AutoMapper.", "Dapper.",
+            "Npgsql.", "MySqlConnector.", "StackExchange.",
+            "Polly.", "Grpc.", "Google.Protobuf.",
+        }};
+        // linked_app_assemblies is deliberately NOT tracked per-assembly: SharpFuzz's
+        // Trace.SharedMem type lives only in SharpFuzz.Common.dll, never in the app's
+        // own IL-rewritten assemblies, so "does this app assembly define the Trace
+        // type" is always false and would be a false-negative fail-closed signal.
+        // The only architecturally honest way to verify instrumentation reached app
+        // code is to check whether the shared bitmap actually moves after real
+        // traffic — done engine-side (void/go/coverage.go::checkCoverageHealth) via a
+        // warm-up probe. This list is purely informational: which app assemblies the
+        // runtime has observed loaded, for diagnostics when that probe fails.
+        private static readonly ConcurrentDictionary<string, byte> seenAppAssemblies = new ConcurrentDictionary<string, byte>();
+
+        private static bool IsAppAssembly(string name)
+        {{
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (var prefix in frameworkPrefixes)
+                if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        }}
+
         private static void SyncSharpFuzz()
         {{
             try {{
@@ -987,6 +1830,10 @@ namespace {ns_prefix}.Helpers
                 foreach (var name in candidates) {{ try {{ Assembly.Load(name); }} catch {{ }} }}
 
                 foreach (var a in AppDomain.CurrentDomain.GetAssemblies()) {{
+                    string asmName = a.GetName().Name ?? a.FullName;
+                    bool isApp = IsAppAssembly(asmName);
+                    if (isApp) seenAppAssemblies.TryAdd(asmName, 1);
+
                     string[] types = {{ "SharpFuzz.Common.Trace", "SharpFuzz.Common.Instrumenter", "SharpFuzz.Trace", "SharpFuzz.Instrumenter" }};
                     foreach (var typeName in types) {{
                         Type t = a.GetType(typeName);
@@ -998,7 +1845,10 @@ namespace {ns_prefix}.Helpers
                         foreach (var m in members) {{
                             var p = t.GetProperty(m, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                             if (p != null) {{
-                                p.SetValue(null, globalShmAddr);
+                                unsafe {{
+                                    var boxedPtr = System.Reflection.Pointer.Box(globalShmAddr.ToPointer(), typeof(byte*));
+                                    p.SetValue(null, boxedPtr);
+                                }}
                                 isSynced = true;
                                 lastAttempt = $"Synced {{t.FullName}}.{{m}} (Property)";
                             }}
@@ -1036,15 +1886,42 @@ namespace {ns_prefix}.Helpers
             {{
                 if (globalShmAddr != IntPtr.Zero)
                 {{
-                    unsafe {{ byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) b[i] = 0; }}
+                    lock (covLock)
+                    {{
+                        unsafe {{ byte* b = (byte*)globalShmAddr; for (int i = 0; i < SHM_SIZE; i++) b[i] = 0; }}
+                        if (seenBuckets != null) Array.Clear(seenBuckets, 0, seenBuckets.Length);
+                        totalClasses = 0;
+                    }}
                     return Results.Ok("SHM Reset");
                 }}
                 return Results.Problem("SHM not initialized");
             }});
 
             endpoints.MapGet("/shm/coverage", () => {{
+                // "edges" is the number of distinct (edge, hit-count-bucket) classes
+                // discovered so far — the same bucketed novelty the per-request
+                // X-Coverage-Delta header reports. "hits" remains the raw sum of the
+                // live bitmap (recomputed here since this endpoint is polled rarely).
                 var s = GetCoverageStats();
-                return Results.Json(new {{ edges = s.edges, hits = s.hits }});
+                return Results.Json(new {{ edges = totalClasses, hits = s.hits, size = SHM_SIZE }});
+            }});
+
+            endpoints.MapGet("/shm/health", () => {{
+                // Reports facts only, not a verdict: SharpFuzz's Trace type lives in
+                // SharpFuzz.Common.dll, never in the app's own rewritten assemblies, so
+                // per-assembly "linked" status can't be measured by type reflection here.
+                // The fail-closed ok/degraded decision is made engine-side (Go), which can
+                // send real warm-up traffic and check whether the bitmap actually moves —
+                // see void/go/coverage.go::checkCoverageHealth. app_assemblies below is
+                // purely diagnostic context for that decision.
+                bool shmBound = globalShmAddr != IntPtr.Zero;
+                return Results.Json(new {{
+                    shm_bound = shmBound,
+                    mode = isFileBacked ? "file-backed-mmap" : "heap",
+                    total_classes = totalClasses,
+                    linked_assemblies = isSynced ? 1 : 0,
+                    app_assemblies = seenAppAssemblies.Keys.ToArray()
+                }});
             }});
 
             endpoints.MapGet("/shm/coverage/traces", () => {{
@@ -1071,15 +1948,19 @@ namespace {ns_prefix}.Helpers
                 return (edges, hits);
             }}
         }}
-
-        private static int GetCurrentEdgeCount() => GetCoverageStats().edges;
     }}
 }}
 """
+    # Prefer Utilities/ (most ASP.NET projects use this convention); fall back to Helpers/.
+    utilities_dir = output_path / main_proj.path / "Utilities"
     helpers_dir = output_path / main_proj.path / "Helpers"
-    helpers_dir.mkdir(parents=True, exist_ok=True)
-    (helpers_dir / "CoverageExtensions.cs").write_text(code)
-    print(f"  Generated Coverage Extensions in {main_proj.name}")
+    if utilities_dir.exists():
+        target_dir = utilities_dir
+    else:
+        target_dir = helpers_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "CoverageExtensions.cs").write_text(code)
+    print(f"  Generated Coverage Extensions in {main_proj.name}/{target_dir.name}/")
 
 
 # ============================================================================
@@ -1108,17 +1989,81 @@ def _detect_app_name(content: str, builder_name: str) -> str:
     return "app"
 
 
+def _inject_into_startup_cs(startup_cs: Path, ns_prefix: str) -> bool:
+    """Inject coverage middleware into Startup.cs (Bitwarden-pattern apps that use UseStartup<T>()).
+    Returns True if injection was performed."""
+    if not startup_cs.exists():
+        return False
+
+    content = startup_cs.read_text(encoding='utf-8-sig')
+
+    # Only proceed if this is a real Startup class with Configure/ConfigureServices
+    if 'public void Configure(' not in content and 'public void ConfigureServices(' not in content:
+        return False
+
+    modified = False
+
+    # Inject UseCoverageMiddleware() after app.UseRouting()
+    if 'UseCoverageMiddleware()' not in content:
+        if 'app.UseRouting()' in content:
+            content = content.replace(
+                'app.UseRouting();',
+                'app.UseRouting();\n\n        // UpsideFuzz: Coverage middleware\n        app.UseCoverageMiddleware();'
+            )
+            modified = True
+        elif 'app.UseAuthentication()' in content:
+            # Fallback: before UseAuthentication
+            content = content.replace(
+                'app.UseAuthentication();',
+                '// UpsideFuzz: Coverage middleware\n        app.UseCoverageMiddleware();\n\n        app.UseAuthentication();'
+            )
+            modified = True
+
+    # Inject AddCoverageEndpoints() inside UseEndpoints if present
+    if 'AddCoverageEndpoints()' not in content:
+        if 'endpoints.MapDefaultControllerRoute()' in content:
+            content = content.replace(
+                'endpoints.MapDefaultControllerRoute();',
+                'endpoints.MapDefaultControllerRoute();\n\n            // UpsideFuzz: SHM coverage endpoints\n            endpoints.AddCoverageEndpoints();'
+            )
+            modified = True
+        elif 'endpoints.MapControllers()' in content:
+            content = content.replace(
+                'endpoints.MapControllers();',
+                'endpoints.MapControllers();\n\n            // UpsideFuzz: SHM coverage endpoints\n            endpoints.AddCoverageEndpoints();'
+            )
+            modified = True
+
+    if modified:
+        startup_cs.write_text(content, encoding='utf-8')
+        print(f"  Injected SHM into Startup.cs")
+    return modified
+
+
 def inject_multi_shm_endpoints(result: MultiAnalysisResult, output_path: Path):
-    """Inject SHM endpoints into the main project's Program.cs"""
+    """Inject SHM endpoints into the main project's Program.cs (or Startup.cs as fallback)."""
     main_proj = next((p for p in result.projects if p.name == result.main_project), result.projects[0])
     program_cs = output_path / main_proj.path / "Program.cs"
+    startup_cs = output_path / main_proj.path / "Startup.cs"
+
+    # Determine namespace prefix for the using directive
+    ns_prefix = main_proj.root_namespace or result.main_project
+
+    # First try Startup.cs (Bitwarden / legacy ASP.NET pattern)
+    if startup_cs.exists():
+        startup_content = startup_cs.read_text(encoding='utf-8-sig')
+        if 'public void Configure(' in startup_content:
+            _inject_into_startup_cs(startup_cs, ns_prefix)
+            # Also patch Program.cs below for the using/Initialize call if needed
 
     if not program_cs.exists():
         return
 
     content = program_cs.read_text(encoding='utf-8-sig')
-    ns_prefix = main_proj.root_namespace or result.main_project
-    using_line = f"using {ns_prefix}.Helpers;"
+    # Match the subdir used by generate_multi_coverage_helper: Utilities/ if it exists, else Helpers/
+    utilities_dir = output_path / main_proj.path / "Utilities"
+    subdir_name = "Utilities" if utilities_dir.exists() else "Helpers"
+    using_line = f"using {ns_prefix}.{subdir_name};"
 
     # Detect variable names dynamically
     builder_name = _detect_builder_name(content)
@@ -1300,10 +2245,25 @@ def main() -> int:
     parser.add_argument('--src', required=True, help='Path to the source .NET project/solution')
     parser.add_argument('--out', required=True, help='Path for the instrumented output copy')
     parser.add_argument('--main', help='Force the main web API project name (e.g. PublicApi)', default=None)
+    parser.add_argument('--exclude-namespaces', help='Comma-separated list of namespaces to EXCLUDE from instrumentation (e.g. Bit.Core.Utilities)', default="")
+    parser.add_argument(
+        '--inject-mode',
+        choices=['hook', 'source'],
+        default='hook',
+        help=(
+            "Coverage injection strategy. "
+            "'hook' (default, recommended): ZERO-EDIT — uses DOTNET_STARTUP_HOOKS + an ASP.NET "
+            "hosting startup assembly; the target's Program.cs/Startup.cs/*.csproj are never modified, "
+            "and coverage is linked at load time (including lazily/dynamically loaded modules). "
+            "'source' (legacy): edits Program.cs/Startup.cs to add middleware/endpoints (previous behavior)."
+        ),
+    )
     args = parser.parse_args()
 
     try:
         analyzer = MultiProjectAnalyzer(args.src)
+        if args.exclude_namespaces:
+            analyzer.exclude_namespaces = [ns.strip() for ns in args.exclude_namespaces.split(",") if ns.strip()]
         result = analyzer.analyze_solution(manual_main=args.main)
 
         out_path = Path(args.out)
@@ -1311,16 +2271,36 @@ def main() -> int:
             shutil.rmtree(out_path)
         shutil.copytree(args.src, args.out, ignore=shutil.ignore_patterns('bin', 'obj', '.git', '.idea', '.vs'))
 
-        patch_all_csprojs(out_path)
-        generate_unified_instrumentor(result, out_path)
-        generate_multi_docker_configs(result, out_path)
-        generate_multi_coverage_helper(result, out_path)
-        inject_multi_shm_endpoints(result, out_path)
+        if args.inject_mode == 'source':
+            # Legacy path: edit the target's Program.cs/Startup.cs and app csprojs.
+            patch_all_csprojs(out_path)
+            generate_unified_instrumentor(result, out_path)
+            generate_multi_docker_configs(result, out_path, inject_mode='source')
+            generate_multi_coverage_helper(result, out_path)
+            inject_multi_shm_endpoints(result, out_path)
+        else:
+            # Zero-edit path (default): DOTNET_STARTUP_HOOKS + ASP.NET hosting startup.
+            # The target's own source and csprojs are left completely untouched; the
+            # coverage runtime lives in a separate UpsideFuzz.Coverage assembly that is
+            # loaded at process start and links SharpFuzz coverage (including lazily
+            # loaded assemblies) via an AppDomain.AssemblyLoad handler.
+            generate_unified_instrumentor(result, out_path)
+            generate_multi_docker_configs(result, out_path, inject_mode='hook')
+            generate_startup_hook_assembly(result, out_path)
         generate_coverage_smoke_test(result, out_path)
 
         print(f"\n  Multi-Project Preparation Complete for Solution: {result.solution_name}")
+        print(f"  Injection mode: {args.inject_mode}" + (
+            "  (zero-edit: DOTNET_STARTUP_HOOKS + hosting startup)" if args.inject_mode == 'hook'
+            else "  (legacy source editing)"))
         print(f"  Instrumented Projects: {result.instrumented_projects}")
         print(f"  Main Project: {result.main_project}")
+        if result.instrument_all_safe:
+            print(f"  Instrumentation scope: --instrument-all-user-code (root namespaces don't "
+                  f"collide with the framework denylist — every non-framework/generated type is "
+                  f"instrumented, not just the {len(result.all_namespaces)} auto-collected namespaces below)")
+        else:
+            print(f"  Instrumentation scope: namespace allowlist ({len(result.all_namespaces)} entries)")
         print(f"  Namespaces: {', '.join(result.all_namespaces)}")
         return 0
     except Exception as e:

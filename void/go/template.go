@@ -398,10 +398,10 @@ func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocD
 				}
 			}
 			if mutateMode == "mutate" && rand.Float64() < 0.15 {
-				val, _ = mutateAny(val, "string")
+				val, _ = mutateAny(val, "string", &s)
 				mutParts = append(mutParts, "mutate_string")
 			} else if mutateMode == "havoc" && rand.Float64() < 0.30 {
-				val, _ = mutateHavoc(val, "string", havocDepth)
+				val, _ = mutateHavoc(val, "string", havocDepth, &s)
 				mutParts = append(mutParts, "havoc_string")
 			}
 			if s.Quoted {
@@ -416,12 +416,12 @@ func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocD
 			if mutateMode == "mutate" {
 				if rand.Float64() > 0.40 {
 					var name string
-					val, name = mutateAny(val, s.ValueType)
+					val, name = mutateAny(val, s.ValueType, &s)
 					mutParts = append(mutParts, name)
 				}
 			} else if mutateMode == "havoc" {
 				var name string
-				val, name = mutateHavoc(val, s.ValueType, havocDepth)
+				val, name = mutateHavoc(val, s.ValueType, havocDepth, &s)
 				mutParts = append(mutParts, name)
 			}
 			if s.Quoted {

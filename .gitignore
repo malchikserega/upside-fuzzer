@@ -84,7 +84,10 @@ prepared-*/
 *-prepared/
 loyalty-prep/
 eshprep/
+bitwarden_prep/
+bitwarden_prep*/
 crashes/
+summaries/
 
 # ── Target project source clones (large, not part of this tool) ──────────────
 
@@ -93,7 +96,10 @@ btcpayserver_prep/
 examples/
 fix_swagger_paths.py
 simplcommerce_prep/
+simplcommerce/
 nopCommerce/
+bitwarden_src/
+esh/
 
 
 # ── Docker build cache ────────────────────────────────────────────────────────

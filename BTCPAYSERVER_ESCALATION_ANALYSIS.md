@@ -4,6 +4,10 @@
 
 **→ [Back to README](README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md)**
 
+> 📌 **Historical run report — 2026-07-13.** Point-in-time crash analysis, not living
+> documentation; not guaranteed reproducible against the current pipeline (see
+> `ARCHITECTURE_REVIEW.md` Top-20 #9/#10 for what's changed since).
+
 ---
 
 ## Table of Contents

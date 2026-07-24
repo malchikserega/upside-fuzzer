@@ -2,6 +2,13 @@
 
 **→ [Back to README](README.md) · [BTCPay Quickstart](QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md) · [Docs Index](docs/INDEX.md)**
 
+> 📌 **Historical run report — 2026-07-07, RESTler-era pipeline.** This predates the RESTler
+> retirement (`ARCHITECTURE_REVIEW.md` Top-20 #9/#10): the "Sequence Engine Evaluation"
+> section below describes internals (RESTler's `DynamicVariable` dependencies, the old
+> `void/export-templates.py` grammar-export phase) that no longer exist in the current
+> pipeline — `grammarc/dependencies.py` replaces that mechanism entirely. Point-in-time
+> findings, not living documentation; numbers not reproducible against current code.
+
 ## Executive Summary
 A 10-minute automated fuzzing session was executed against the BTCPay Server Greenfield API using UpsideFuzz with direct SHM coverage guidance. Following critical bug fixes to the authentication and sequence engine mechanisms, the fuzzer achieved **35,721 coverage edges** (13.6% bitmap saturation) and identified **3 unique server crashes** (500 Internal Server Errors).
 

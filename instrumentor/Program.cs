@@ -152,15 +152,23 @@ bool ShouldInstrument(string fullName)
     // coverage middleware binds the SHM bitmap, causing System.AccessViolationException
     // at startup. This is why blanket --instrument-all-user-code previously crashed
     // Bitwarden in Bit.Api.Program+<>c..cctor.
+    //
+    // FIX (2026-07-22): top-level-statements projects (e.g. eShopOnWeb PublicApi) place
+    // the generated Program class in the GLOBAL namespace, so fullName is just "Program"
+    // (no dot-prefix). The previous check .EndsWith(".Program") missed this case and
+    // caused the PublicApi container to crash with AccessViolationException on startup.
     if (fullName.Contains("Migration") ||
         fullName.Contains("DesignTimeDbContext") ||
         fullName.Contains("CoverageExtensions") ||
+        fullName == "Program" ||               // global-namespace entry point (top-level statements)
         fullName.EndsWith(".Program") ||
         fullName.EndsWith(".Startup") ||
+        fullName.StartsWith("Program+") || fullName.StartsWith("Program/") ||  // global-ns nested types
         fullName.Contains(".Program+") || fullName.Contains(".Program/") ||
         fullName.Contains(".Startup+") || fullName.Contains(".Startup/") ||
-        fullName.Contains("+<>c") ||          // compiler lambda-cache classes (static-init)
-        fullName.Contains("<Main>") ||        // top-level-statements entry point
+        fullName.Contains("+<>c") ||           // compiler lambda-cache classes (static-init)
+        fullName.Contains("/<>c") ||           // slash-variant (global-ns closures: Program/<>c)
+        fullName.Contains("<Main>") ||         // top-level-statements entry point
         fullName.Contains("__GeneratedModule"))
     {
         skippedInfra++;

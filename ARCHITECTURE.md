@@ -14,7 +14,7 @@ The platform automates transforming a standard .NET solution into a feedback-dri
 2. **Preparation** — Adapting Docker configs, injecting coverage infrastructure
 3. **Instrumentation** — Injecting SharpFuzz coverage probes into target DLLs during Docker build
 4. **Synchronization** — Linking all instrumented DLLs to a single shared memory bitmap at runtime
-5. **Grammar Generation** — Compiling an OpenAPI spec into typed request templates via RESTler + source enrichment
+5. **Grammar Generation** — Compiling an OpenAPI spec directly into typed request templates (`grammarc/`, first-party, no RESTler), optionally enriched with real Roslyn syntax-tree analysis of the C# source (`analyzer/`)
 6. **Fuzzing** — Sending mutated inputs with epoch-based scheduling, adaptive concurrency, and crash triage
 
 ---
@@ -78,12 +78,12 @@ The platform automates transforming a standard .NET solution into a feedback-dri
               │                                 │
               ▼                                 ▼
    compile-grammar.sh                  GET /swagger/v1/swagger.json
-   + enhance-grammar.py
+   (grammarc/ + optional analyzer/)
               │
      ┌────────┴────────┐
      │                 │
      ▼                 ▼
- grammar.py         dict.json
+templates.export.json  dict.json
  (templates)        (tokens)
      │
      └──────────────────────────────────────────┐
@@ -192,6 +192,23 @@ The adapted Dockerfile has 4 stages:
 
 ---
 
+## 2a. Coverage Injection Modes (`--inject-mode`)
+
+The coverage *runtime* (SHM allocation, SharpFuzz linking, `/shm/*` endpoints, per-request `X-Coverage-Delta` middleware) is delivered in one of two ways. IL rewriting of the business DLLs (§3) is identical in both.
+
+### `hook` — zero-edit (default)
+The prep tool generates a **self-contained `UpsideFuzz.Coverage` assembly** (`coverage_hook_src/`) and wires it via environment variables baked into the runtime image — **the target's `Program.cs`, `Startup.cs`, and `.csproj` files are never modified**:
+
+- `DOTNET_STARTUP_HOOKS=/coverage/UpsideFuzz.Coverage.dll` — the runtime runs `StartupHook.Initialize()` **before `Main`**. It maps the shared bitmap, registers an `AssemblyLoadContext.Default.Resolving` handler (so the hook DLL + `SharpFuzz.Common.dll` load from `/coverage` without being in the app's probing path), links every currently-loaded SharpFuzz assembly, and installs an `AppDomain.CurrentDomain.AssemblyLoad` handler that links every assembly loaded **later** — this is the fix for lazily/dynamically loaded modules whose coverage was previously lost.
+- `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES=UpsideFuzz.Coverage` — ASP.NET loads `CoverageHostingStartup` (an `IHostingStartup`), which registers an `IStartupFilter` that inserts the coverage middleware at the front of the pipeline. The middleware serves `/shm/create`, `/shm/coverage`, `/shm/reset`, `/shm/health` inline and emits per-request `X-Coverage-Delta`/`X-Exception-*` headers.
+
+Because `StartupHook.Initialize()` runs before any application code, the SHM pointer is bound **earlier** than in source mode, and the per-assembly `AssemblyLoad` linking closes the lazy-assembly gap. The Docker build gains one stage (`coverage-hook-build`) that publishes the assembly; the runtime stage copies `UpsideFuzz.Coverage.dll` + `SharpFuzz.Common.dll` into `/coverage` and sets the two env vars.
+
+### `source` — legacy (`--inject-mode source`)
+The previous behavior: `generate_multi_coverage_helper` writes `CoverageExtensions.cs` into the main project and `inject_multi_shm_endpoints` edits `Program.cs`/`Startup.cs` (`_inject_into_startup_cs`) to add `Initialize()`, `UseCoverageMiddleware()`, and `AddCoverageEndpoints()`. Retained for targets where source editing is preferred or where the middleware must sit *inside* the app's exception handler for maximal production-mode exception-type fidelity (the hook-mode middleware is outermost; see §5 caveat).
+
+Both modes expose the identical `/shm/*` HTTP contract and `X-Coverage-Delta` header, so the Go engine is unchanged and mode-agnostic.
+
 ## 3. Instrumentation (IL Rewriting with SharpFuzz)
 
 ### How SharpFuzz Works
@@ -250,6 +267,8 @@ AppDomain.CurrentDomain.GetAssemblies()
 
 This works regardless of how many project DLLs were instrumented — they all get linked to the same pointer at startup.
 
+**Load-time linking (hook mode).** In the default `hook` mode this linking happens in two places: (1) at process start in `StartupHook.Initialize()` (`CoverageRuntime.Bootstrap` → `LinkAssembly` over all loaded assemblies), and (2) continuously, via an `AppDomain.CurrentDomain.AssemblyLoad` handler that calls `LinkAssembly` on **each assembly as it loads**. This closes a real gap in the old one-shot `SyncSharpFuzz`: assemblies loaded *after* startup (plugin/module-style dynamic loading, e.g. SimplCommerce modules) were never linked and silently contributed no coverage. `GET /shm/health` reports `linked_assemblies` and the app assemblies the runtime has observed loaded so this can be inspected at runtime — see §5's `/shm/health` and §7's fail-closed startup check (Top-20 #4) for how the engine actually verifies this rather than trusting it blindly.
+
 ---
 
 ## 5. Coverage Reporting Protocol
@@ -261,8 +280,8 @@ This works regardless of how many project DLLs were instrumented — they all ge
 
 ### `GET /shm/coverage` — Global Stats
 - Reads the shared bitmap via pointer arithmetic
-- Counts bytes > 0 (`edges`) and sums all values (`hits`)
-- Returns `{"edges": 150, "hits": 5000}`
+- `edges` = number of distinct **(edge, hit-count bucket)** classes discovered so far (AFL-style bucketed novelty, see below), maintained by the coverage middleware in a persistent virgin map; `hits` = raw sum of all bitmap bytes
+- Returns `{"edges": 150, "hits": 5000, "size": 262144}`
 
 ### `POST /shm/reset` — Reset Bitmap
 - Zeroes the shared bitmap
@@ -271,46 +290,121 @@ This works regardless of how many project DLLs were instrumented — they all ge
 ### `GET /shm/coverage/traces` — Legacy
 - Maintained for legacy compatibility but largely superseded by header-based injection.
 
-### Per-Request Exact Attribution (`X-Coverage-Delta`)
-To achieve zero-overhead tracking in a highly concurrent environment (1,000+ req/s), UpsideFuzz relies on the .NET middleware to calculate coverage inline:
-1. Middleware records global edge count *before* the pipeline executes.
-2. The pipeline executes the API business logic.
-3. Middleware records global edge count *after* execution.
-4. The delta is injected directly into the HTTP response header: `X-Coverage-Delta: <number>`.
+### `GET /shm/health` — Instrumentation facts (Top-20 #4)
+- Returns `{"shm_bound": bool, "mode": "...", "total_classes": N, "linked_assemblies": N, "app_assemblies": [...]}`.
+- **Deliberately reports facts, not a verdict.** SharpFuzz's `Trace.SharedMem` type lives only in `SharpFuzz.Common.dll` — never in the app's own IL-rewritten assemblies — so "is assembly X linked" cannot be measured by type reflection on the .NET side; an app assembly that is instrumented correctly will *never* show up as having its own `Trace` type. `app_assemblies` is a diagnostic list of assembly names the runtime has observed loaded that aren't framework/SharpFuzz code (same `frameworkPrefixes` denylist as `instrumentor/Program.cs`, kept in sync manually), useful when diagnosing a failure — not a pass/fail signal by itself.
+- The actual fail-closed decision is made **engine-side** — see §7's "Self-verifying, fail-closed instrumentation" below.
 
-**The "Coverage Smearing" Trade-off:**
-In parallel execution, multiple requests might run simultaneously. If Request A and Request B execute concurrently and 5 new edges are found, *both* responses will report a delta and the fuzzer will assign "Energy" to both payloads. While this breaks perfect thread-isolation, it is a deliberate and highly beneficial trade-off. It avoids the catastrophic performance penalty of copying a 256KB SHM array per-request (which would crash ASP.NET throughput) and instead occasionally over-rewards a seed, which the Fenwick tree and evolutionary decay gracefully filter out over time.
+### AFL-Style Hit-Count Buckets (bucketed virgin map)
+Coverage novelty is measured with **AFL-style hit-count buckets**, not binary edge-presence. Each edge's raw 8-bit hit count is classified into a log-scale bucket — `1, 2, 3, 4–7, 8–15, 16–31, 32–127, 128+` — via a 256-entry lookup table (`CountClass` in `CoverageExtensions.cs`, `countClass` in `coverage.go`). A **bucket bit never before seen for an edge** counts as new coverage, tracked in a persistent per-edge bucket bitmask (the "virgin map": `seenBuckets` C#-side, `seen []byte` Go-side).
+
+This is the key resolution upgrade: an edge executed **once** is now distinguished from the same edge executed **50 or 5000 times**, so the fuzzer keeps making measurable progress inside loops, pagination, retry logic, and state machines instead of plateauing the instant every edge has been touched at least once. `edges` therefore reports *distinct (edge, bucket) classes discovered*, a strictly richer and still-monotonic signal than the previous byte->0 count.
+
+### Per-Request Attribution (`X-Coverage-Delta`) — single-scan, first-observer-wins
+The .NET middleware computes each request's novelty **once**, after the pipeline runs:
+1. The pipeline executes the API business logic (SharpFuzz probes write hit counts into the shared bitmap).
+2. In the middleware `finally`, `MergeAndCountNovel()` makes **one** pass over the live bitmap (with an all-zero 8-byte-word fast path), folds it into the shared bucketed virgin map, and returns the number of buckets *this request was the first to discover*.
+3. That count is injected into the response header `X-Coverage-Delta: <number>` (and `X-Coverage-Edges: <totalClasses>`).
+
+**Why this replaces the old global before/after delta:**
+The previous design read a *global* edge count before and after every request — two full 256KB bitmap scans per request in the hot path — and under concurrency both a Request A and a concurrent Request B that reached new code would each be credited the *same* delta ("coverage smearing"), corrupting the energy/MOpt signal. Novelty is now measured against the **shared** virgin map on a **first-observer-wins** basis: whichever request reaches the merge first claims each new bucket; a concurrent request sees it already recorded and is credited 0. This eliminates the double-counting smearing and **halves the per-request scan cost** (one pass instead of two). The merge is guarded by a short lock (`covLock`), so concurrent requests serialize only for the microsecond-scale bucket merge, not for the whole pipeline.
 
 **Exception attribution in production mode (`X-Exception-Type` / `X-Exception-Message`):**
 The coverage middleware also reports the .NET exception type and message on 5xx responses. The subtlety: in non-Development mode the app's exception handler starts the response and clears headers *before* the middleware's `finally` block runs, so a header set there is lost — this previously left ~84% of production-mode crashes unattributable. The middleware now detects requests carrying `X-Fuzz-Request-Id` (fuzzer traffic only) and, on an unhandled exception, short-circuits with its own 500 carrying `X-Exception-Type` + `X-Exception-Message` (sanitized: CR/LF and control chars stripped, truncated). Real traffic (no fuzz header) is re-thrown untouched. The Go engine reads both headers; the message feeds `cluster.go`'s root-cause key so clustering stays precise even without a dev-mode stack trace.
 ---
 
-## 6. Grammar Generation (RESTler + Enhancement)
+## 6. Grammar Generation (`grammarc/` + `analyzer/` — RESTler retired)
+
+RESTler (an external Docker-packaged compiler) has been retired (Top-20 #9). `compile-grammar.sh`
+now drives two first-party components directly, with **no Docker involved in this step at all**
+(Docker remains needed only for the target's own instrumented container):
 
 ```
-swagger.json
-     │
-     ▼
-RESTler compiler
-     │
-     ├── grammar.py       Raw typed request templates
-     │   (Request objects, Fuzzable fields, produces/consumes deps)
-     │
-     └── dict.json        Domain-specific string tokens
-          │
-          ▼
-     enhance-grammar.py
-          │
-          ├── OpenAPI constraints: enum values, format, min/max, pattern
-          ├── C# source constraints: [Required], [Range], [StringLength],
-          │   [RegularExpression], FluentValidation chains, enum declarations
-          └── Multipart form-data: autogenerated seed request templates
+swagger.json                    .NET source (optional, --src)
+     │                                 │
+     ▼                                 ▼
+grammarc/oas.py              analyzer/ (Microsoft.CodeAnalysis.CSharp,
+(OpenAPI 2/3 parser:           syntax-tree only — no MSBuildWorkspace/
+ $ref/allOf/oneOf/anyOf)        NuGet-restore semantic model)
+     │                                 │
+     │                        roslyn-constraints.json
+     │                        (per-type/property constraints,
+     │                         [Authorize]/route metadata,
+     │                         keyed by fully-qualified type —
+     │                         not a global property name)
+     │                                 │
+     └───────────► grammarc/roslyn_merge.py ◄──────┘
+                    (Roslyn wins per-field on a scoped
+                     match; OAS-derived value otherwise)
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+  body_serializer.py    dependencies.py      boundary.py / multipart.py
+  (schema → static/       (producer/consumer     (boundary-value pools,
+   fuzzable/custom_        id inference by         multipart seed
+   payload segments)        path/name convention)   templates)
+          │                   │                   │
+          └───────────────────┴───────────────────┘
+                              │
+                              ▼
+              templates.export.json  +  dict.json
+              (written directly — no intermediate grammar.py,
+               no manual cp, no separate export-templates.py step)
 ```
 
 The grammar provides:
 - Request templates with method, path, headers, and body structure
-- Typed fuzzable fields (`string`, `int`, `number`, `bool`, `datetime`, `uuid`, `object`)
-- **Producer-consumer dependencies** — POST creates an ID that GET/PUT/DELETE uses
+- Typed fuzzable fields (`string`, `int`, `number`, `bool`, `datetime`, `uuid`, `object`), plus
+  `custom_payload` fields for anything with a real constraint (enum/pattern/length/range/id-shaped/
+  semantically-specific format) — routed through `dict.json`'s boundary pools and sequence/
+  correlation state, not just a static default
+- **Producer-consumer dependencies** — POST creates an ID that GET/PUT/DELETE uses, via a shared
+  `payload_key` string threaded through path params, body fields, `dict.json`, and
+  `void/go/store.go`'s `SequenceState`/`RuntimeStore`
+
+**A previously-undocumented bug, found and fixed during this migration:** the old
+`export-templates.py::seg_payload()` emitted JSON key `"name"` for every `custom_payload`
+segment, but `void/go/types.go`'s `Segment` struct and `template.go`'s rendering switch read
+only `PayloadKey` (JSON key `"payload_key"`) — a field-name mismatch that meant this value was
+**always the empty string**, so producer→consumer chaining for `custom_payload`-kind segments
+(including RESTler's own dependency chaining, not just static dictionary lookups) never actually
+substituted a harvested value at render time, for the entire lifetime of the RESTler-based
+pipeline. `grammarc/emit_templates.py` emits `"payload_key"` directly, fixing this by
+construction — no Go-side changes were needed, since Go was always reading the correct field, it
+just never received it. See `ARCHITECTURE_REVIEW.md`'s Inconsistencies section, item 7, for the
+full writeup.
+
+`void/export-templates.py` (the old grammar.py → JSON exporter) is retained only as a legacy
+fallback for grammar directories generated before this migration and not yet regenerated
+(`void/go/template.go::exportTemplates`, invoked automatically when `templates.export.json` is
+missing but a `grammar.py` is present) — it is not part of the primary path.
+
+### 6a. Segment constraint metadata (Top-20 #14)
+
+`void/go/types.go`'s `Segment` struct carries optional per-field constraint metadata,
+sourced from `grammarc/oas.py::FieldHint` (OpenAPI + Roslyn-merged) and emitted by
+`grammarc/body_serializer.py::seg_fuzzable`/`seg_payload` whenever the underlying field
+declares one:
+```go
+MinLength  *int      `json:"min_length,omitempty"`
+MaxLength  *int      `json:"max_length,omitempty"`
+Minimum    *float64  `json:"minimum,omitempty"`
+Maximum    *float64  `json:"maximum,omitempty"`
+Pattern    string    `json:"pattern,omitempty"`
+EnumValues []string  `json:"enum_values,omitempty"`
+```
+All fields are `omitempty` and loaded via plain `json.Unmarshal` (no custom decoding) —
+a `templates.export.json` generated before this addition simply decodes these to Go zero
+values, so old grammars behave exactly as before. `void/go/mutation_engine.go`'s
+`mutateAny`/`mutateHavoc`/`mutateInt`/`mutateNumber`/`mutateStringCategorized` all take
+an optional `*Segment` hint; when non-nil and the relevant constraint is set, exact
+boundary candidates (`{min-1, min, min+1, max-1, max, max+1}` for numerics, exact
+min/max-length strings, valid/near-miss-invalid enum values) are blended into the
+existing generic candidate pools — additive, not a replacement, so the nil-hint path
+(anything without a schema-derived constraint) is unchanged. Verified on eShopOnWeb: the
+same live-fuzz session hit the same known `pageSize` overflow bug class ~7x more often
+in the same time budget after this change (124 vs. 18 crash hits, from 18k vs 54k total
+requests — depth over breadth).
 
 ---
 
@@ -328,7 +422,7 @@ void/go/
 ├── coverage.go            SHM bitmap parsing and HTTP coverage reader
 ├── sequence.go            Stateful producer/consumer chain execution
 ├── store.go               Knowledge extraction, ID harvesting, and dedup
-├── template.go            RESTler grammar parsing and payload rendering
+├── template.go            templates.export.json parsing and payload rendering
 ├── mutation_engine.go     MOpt-style mutation scheduler and weights
 ├── mutations.go           Concrete mutation categories (sqli, xss, etc)
 ├── crash.go               Crash deduplication, signature generation, JSONL logging
@@ -346,6 +440,64 @@ void/go/
 ├── go.mod                 Module: void, go 1.22
 └── void                   Pre-built binary (Linux/amd64)
 ```
+
+### CMPLOG-lite: 400-body mining (Top-20 #11)
+
+`worker.go::recordClientErrorSample` — previously write-only (it only stored a truncated
+sample per endpoint for the human-readable `client_error_samples` report field) — now
+also calls `mineClientErrorFields(body)` on every 4xx response body. That function
+parses, best-effort:
+1. ASP.NET's `ValidationProblemDetails`/ModelState shape (`{"errors":{"Field":["msg"]}}`,
+   or the flatter `{"Field":["msg"]}` some minimal-API validators emit directly), and
+2. free-text enum/valid-value hints inside each message (`"must be one of [...]"`,
+   `"valid values: ..."`), comma/pipe-split into individual candidates.
+
+Extracted `(field, value)` pairs feed `RuntimeStore.addValue` — the exact mechanism
+`sequence.go::learnFromResponse` already uses for successful 2xx bodies — so mined
+values become available to `pickCustomPayloadValue`/`customPayloadCandidates`
+(`store.go`) the same way any other harvested runtime value is, no new store API. A body
+that doesn't match either shape yields an empty map, never an error; an unrelated JSON
+4xx body (e.g. `{"count":5}`) is defensively excluded from being mistaken for a
+field→messages map.
+
+### Self-verifying, fail-closed instrumentation (Top-20 #4)
+
+`coverage.go::checkCoverageHealth` runs once, right after templates are loaded
+(`fuzzer.go::Run`, before the main epoch loop starts), and by default refuses
+to start a run whose instrumentation looks broken rather than silently
+fuzzing blind for the whole time budget:
+
+1. **Fetch `/shm/health`.** If the endpoint is unreachable, or `shm_bound` is
+   `false` (the coverage pointer was never bound at all), that's an immediate
+   fail — there's no plumbing to verify further.
+2. **Send a real warm-up probe.** Up to 3 templates are rendered unmutated
+   (`renderTemplate(tid, "none", 0, -1)`) and sent for real
+   (`sendOne`) — this deliberately reuses the exact same request-building path
+   the Baseline epoch uses moments later, not a synthetic health-check
+   request.
+3. **Check whether the shared bitmap actually moved.** `coverage.GetEdges()`
+   before vs. after the probe is the only architecturally honest signal
+   available: SharpFuzz uses one flat shared bitmap with hashed offsets and no
+   per-assembly attribution, so there is no way to ask ".NET side, did
+   assembly X specifically get instrumented" — the `Trace.SharedMem` type
+   these probes bind to lives only in `SharpFuzz.Common.dll`, never in the
+   app's own IL-rewritten assemblies. If edges are still flat despite
+   `shm_bound=true` (a target that is reachable, responds normally to every
+   request, and even reports app assemblies loaded — but was never actually
+   IL-rewritten, e.g. wrong image, wrong `--src`, or a namespace excluded by
+   `--exclude-namespaces`), the run is refused.
+
+By default this is a hard failure (`run failed: coverage instrumentation
+degraded: ...`, non-zero exit). Pass `-allow-degraded-coverage` to downgrade
+it to a warning and continue anyway (not recommended — only useful for
+debugging the instrumentation pipeline itself). This was validated against a
+real design mistake: an earlier draft tried to compute an "ok"/"degraded"
+verdict on the .NET side by checking whether each app assembly *itself*
+defined the `SharpFuzz.Common.Trace` type — which is never true by
+construction, so it flagged every healthy target as degraded. The
+`fixtures/planted-bug-api/` E2E run (`scripts/e2e-test.sh`, Top-20 #7) caught
+this before it shipped, which is exactly the kind of regression that fixture
+exists to catch.
 
 ### Epoch Architecture
 
@@ -431,9 +583,9 @@ for each batch (N = concurrency):
 
 | Mode | How | Overhead |
 |------|-----|----------|
-| **HTTP** (default) | `GET /shm/coverage` — one HTTP round-trip per `-coverage-interval` requests | Low (~1ms) |
-| **Direct SHM** (`-direct-shm`) | `mmap.read(bitmap)` on `/coverage_shm/bitmap` | Near-zero |
-| **Per-request header** | `X-Coverage-Delta` response header injected by middleware | Zero overhead per batch |
+| **HTTP** (default) | `GET /shm/coverage` — one HTTP round-trip per `-coverage-interval` requests; returns bucketed distinct-class count | Low (~1ms) |
+| **Direct SHM** (`-direct-shm`) | `mmap.read(bitmap)` on `/coverage_shm/bitmap`; Go side runs its own bucketed virgin-map scan (`countClass`) | Near-zero |
+| **Per-request header** | `X-Coverage-Delta` = buckets this request first discovered (single-scan, first-observer-wins) injected by middleware | One bitmap pass per request (no extra round-trip) |
 
 ### Advanced Features
 
@@ -483,7 +635,7 @@ To tame the 90-flag surface, `-profile fast|deep|security` applies a curated bun
 ### Sequence Engine & Fallback Mechanics
 The Sequence Engine actively stitches complex API workflows (e.g., `POST /stores` → extracts ID → `PUT /stores/{id}`). 
 - **Trigger Rate:** Dictated by the `-sequence-prob` flag (e.g., `0.35` means 35% of all executions are actively stitched sequences).
-- **Fallback Validation:** If a producer request fails (e.g., validation error preventing store creation), the downstream consumer lacks a valid ID. Instead of failing or passing literal RESTler placeholders (e.g., `_api_v1_stores_post_id`), the engine dynamically falls back to generating fuzzed variables (e.g., randomly generated UUIDs, `NaN`, `-Infinity`). This ensures that even "failed" sequences result in robust Resource-Based Authorization and input validation testing against downstream endpoints.
+- **Fallback Validation:** If a producer request fails (e.g., validation error preventing store creation), the downstream consumer lacks a valid ID. Instead of failing or passing a literal unresolved placeholder (e.g., `_api_v1_stores_post_id` — the naming convention `grammarc/dependencies.py` also follows for its own payload keys), the engine dynamically falls back to generating fuzzed variables (e.g., randomly generated UUIDs, `NaN`, `-Infinity`). This ensures that even "failed" sequences result in robust Resource-Based Authorization and input validation testing against downstream endpoints.
 
 ---
 
@@ -531,9 +683,26 @@ These targets have current quickstarts, prepared trees, or active benchmark mate
 upside-fuzzer/
 │
 ├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
-├── compile-grammar.sh          ★ Compile swagger.json → RESTler grammar
-├── enhance-grammar.py          ★ Post-process grammar/dict (OpenAPI + C# source constraints)
-├── sanitize-swagger-for-restler.sh   Fix deepObject/nested arrays
+├── compile-grammar.sh          ★ Compile swagger.json → templates.export.json + dict.json
+│                                 (grammarc/ + optional analyzer/ — no RESTler, no Docker)
+│
+├── grammarc/                   ★ First-party OpenAPI → typed grammar compiler (Python, stdlib)
+│   ├── oas.py                  OpenAPI 2/3 parser ($ref/allOf/oneOf/anyOf resolution)
+│   ├── body_serializer.py      Schema → static/fuzzable/custom_payload segment serializer
+│   ├── dependencies.py         Producer/consumer id inference (path/name convention)
+│   ├── roslyn_merge.py         Merges analyzer/'s type-scoped constraints over OpenAPI's
+│   ├── boundary.py             Boundary-value synthesis
+│   ├── multipart.py            Multipart/form-data template synthesis
+│   ├── emit_templates.py       Writes templates.export.json (fixes the payload_key bug)
+│   ├── emit_dict.py            Writes dict.json
+│   └── cli.py                  python3 -m grammarc.cli entry point
+│
+├── analyzer/                   ★ Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
+│   ├── SourceIndex.cs          Parses all .cs files; partial-class/enum/validator indexing
+│   ├── ConstraintWalker.cs     DataAnnotations constraints, type/property-scoped
+│   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
+│   ├── RouteAuthWalker.cs      [Authorize]/route metadata (controller + minimal-API styles)
+│   └── analyzer.csproj
 │
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
 ├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
@@ -552,7 +721,8 @@ upside-fuzzer/
 │   └── instrumentor.csproj     Project file
 │
 ├── void/
-│   ├── export-templates.py     RESTler grammar.py → JSON templates
+│   ├── export-templates.py     Legacy fallback: old grammar.py → JSON templates
+│   │                           (pre-migration grammars only; primary path never touches this)
 │   ├── Dockerfile.go           Container image for the Go fuzzer sidecar
 │   ├── README.md               Go fuzzer reference (flags, startup fields, build)
 │   ├── go/
@@ -561,7 +731,7 @@ upside-fuzzer/
 │   │   ├── worker.go           Core HTTP fuzzing loop and coverage tracking
 │   │   ├── coverage.go         SHM bitmap parsing and HTTP coverage reader
 │   │   ├── sequence.go         Stateful producer/consumer chains
-│   │   ├── template.go         RESTler grammar parsing and rendering
+│   │   ├── template.go         templates.export.json parsing and rendering
 │   │   ├── store.go            Runtime value harvesting and deduplication
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler
 │   │   ├── mutations.go        Payload mutation categories
@@ -586,9 +756,8 @@ upside-fuzzer/
 │   ├── eshop/                  Generated grammar, dict, and templates
 │   └── simplcommerce/          Generated grammar, dict, and templates
 │
-├── restler_bin/                RESTler compiler binaries (generated / refreshable)
-├── restler_input/              RESTler input (swagger)
-├── restler_output/             RESTler compiler output (temporary)
+├── restler_bin/                Inert leftover from before RESTler was retired (Top-20 #9);
+│                                 safe to delete, nothing reads or writes it anymore
 │
 ├── bitwarden_prep/             Target tree + helper scripts for Bitwarden
 ├── btcpayserver/               Raw BTCPayServer checkout
@@ -598,5 +767,60 @@ upside-fuzzer/
 ├── examples/
 │   └── simplcommerce/          SimplCommerce-specific helper scripts and namespace config
 ├── benchmarks/                 Paper helpers and benchmark post-processing
-└── crashes/                    Fuzzer outputs, PoCs, timelines, and reports
+├── crashes/                    Fuzzer outputs, PoCs, timelines, and reports
+├── fixtures/
+│   └── planted-bug-api/        Minimal DB-free ASP.NET Core app used by the E2E CI gate
+├── scripts/
+│   └── e2e-test.sh             E2E regression gate (see §11)
+└── .github/workflows/e2e.yml   CI entry point for scripts/e2e-test.sh
 ```
+
+---
+
+## 11. Continuous Integration (E2E regression gate)
+
+Top-20 #7 — this project's first CI of any kind, added 2026-07-23 as a direct regression
+safety net for `grammarc/`+`analyzer/` (#9/#10) and the mutation-engine changes (#14/#11),
+none of which had any automated coverage before this existed.
+
+`.github/workflows/e2e.yml` runs `scripts/e2e-test.sh` on every push/PR. The script proves
+the **whole pipeline**, not just that each stage exits zero:
+
+```
+fuzz-prep-multi.py (instrument fixtures/planted-bug-api)
+        │
+docker compose build && up -d
+        │
+verify-hook.sh (zero-edit coverage hook sanity: /shm/create, /shm/health,
+                 synthetic-404 attribution, real-endpoint edge growth)
+        │
+compile-grammar.sh (OAS-only — no --src needed for this small fixture)
+        │
+void -time-budget 1  (short live fuzz run against the real container)
+        │
+assert: summary.json.coverage_end_edges > 0
+assert: unique-crashes.jsonl contains a GET /items?...  status_code=500 record
+        (the planted ArgumentOutOfRangeException — see fixtures/planted-bug-api/README.md)
+```
+
+`fixtures/planted-bug-api/` is deliberately minimal (in-memory data, no DB, no external
+services) and nested under `src/PlantedBugApi/` — a flat single-project layout collides
+with the generated Dockerfile's `COPY . ./` + implicit `**/*.cs` glob, which would also
+pull in the tool's own sibling `instrumentor_src/Program.cs` (itself top-level
+statements) into the same compile, producing `CS8802: Only one compilation unit can have
+top-level statements`. Nesting one level down avoids this the same way every real target
+in this repo already does. The fixture's `ListItems` handler also lives on a named,
+non-lambda class (`ItemHandlers`) rather than inline in `app.MapGet(...)` — SharpFuzz
+instrumentation blanket-excludes any type whose name contains `+<>c` (compiler-generated
+lambda/closure classes) to prevent a real, previously-hit static-initializer crash class
+(see `instrumentor/Program.cs::ShouldInstrument`'s own comment) — but that exclusion also
+silently zeroes out coverage for logic written directly inline in minimal-API lambdas,
+confirmed empirically while building this fixture (0 SHM edges from real traffic before
+the restructuring, real edge growth after).
+
+Building this fixture and script also surfaced and fixed three real, previously-unknown
+bugs elsewhere in the pipeline — see `ARCHITECTURE_REVIEW.md`'s Inconsistencies section,
+items 8–10, for the full writeups: a substring-vs-path-segment matching bug in
+`analyzer/RoslynUtil.IsTestPath`, `analyzer/RouteAuthWalker` never scanning top-level-
+statement `Program.cs` files for minimal-API routes, and a bash-3.2-specific unbound-array
+crash in `compile-grammar.sh` when `--src` is omitted.
