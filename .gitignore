@@ -84,7 +84,6 @@ prepared-*/
 *-prepared/
 loyalty-prep/
 eshprep/
-bitwarden_prep/
 bitwarden_prep*/
 crashes/
 summaries/
@@ -93,13 +92,17 @@ summaries/
 
 btcpayserver/
 btcpayserver_prep/
-examples/
-fix_swagger_paths.py
 simplcommerce_prep/
 simplcommerce/
 nopCommerce/
 bitwarden_src/
 esh/
+
+# NOTE: examples/ is intentionally NOT ignored -- it holds small, hand-written,
+# per-target helper scripts (examples/<target>/*.py) that QUICKSTART_*.md docs
+# reference directly and that fuzz-prep-multi.py does not generate. Do not
+# re-add a blanket ignore here; it previously made these scripts untracked
+# despite being required steps in the documented pipeline.
 
 
 # ── Docker build cache ────────────────────────────────────────────────────────

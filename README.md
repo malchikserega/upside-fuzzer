@@ -353,5 +353,5 @@ Access-control findings additionally carry an `access_control: true` field with 
 | **[ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |
 | **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** | Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance |
 | **[void/README.md](void/README.md)** | Go fuzzer: full CLI reference, startup output guide, build for any platform |
-| **[TARGET_CANDIDATES.md](TARGET_CANDIDATES.md)** | Implemented targets and future fuzzing candidates |
-| **[MCP_INTEGRATION_GUIDE.md](MCP_INTEGRATION_GUIDE.md)** | Using MCP to enrich the fuzzer dictionary from live database data |
+| **[docs/TARGET_CANDIDATES.md](docs/TARGET_CANDIDATES.md)** | Implemented targets and future fuzzing candidates |
+| **[docs/MCP_INTEGRATION_GUIDE.md](docs/MCP_INTEGRATION_GUIDE.md)** | Using MCP to enrich the fuzzer dictionary from live database data |

@@ -68,7 +68,7 @@ You can automatically register an admin user and generate an API key by running 
 
 ```bash
 # Inside btcpayserver_prep
-python3 get_apikey.py
+python3 ../examples/btcpayserver/get_apikey.py
 ```
 
 This will save the generated API key as an authorization header in `fuzzer.env`.
@@ -94,7 +94,7 @@ writes `templates.export.json` + `dict.json` directly to `--out`:
 cd ..  # back to upside-fuzzer root
 
 # Note: BTCPayServer's Swagger JSON has a malformed reference that needs to be patched
-python3 fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
+python3 examples/btcpayserver/fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
 
 # Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis)
 ./compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
@@ -197,4 +197,4 @@ See [docs/CLI.md](docs/CLI.md) for the full subcommand reference.
 
 ---
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md)**
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [BTCPay Report](docs/reports/BTCPAYSERVER_REPORT.md)**

@@ -1,6 +1,6 @@
 # UpsideFuzz Analysis: SimplCommerce
 
-**→ [Back to README](README.md) · [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) · [Docs Index](docs/INDEX.md)**
+**→ [Back to README](../../README.md) · [SimplCommerce Quickstart](../../QUICKSTART_SIMPLCOMMERCE.md) · [Docs Index](../INDEX.md)**
 
 > 📌 **Historical run report — 2026-07-07, RESTler-era pipeline.** Point-in-time campaign
 > comparison, not living documentation; predates the RESTler retirement
@@ -82,4 +82,4 @@ The massive jump from 15 to 44 unique crashes confirms that SimplCommerce's Enti
 
 ---
 
-**→ [Back to README](README.md) · [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md)**
+**→ [Back to README](../../README.md) · [SimplCommerce Quickstart](../../QUICKSTART_SIMPLCOMMERCE.md)**

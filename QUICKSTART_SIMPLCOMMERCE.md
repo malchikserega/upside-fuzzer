@@ -191,4 +191,4 @@ See [docs/CLI.md](docs/CLI.md) for the full subcommand reference.
 
 ---
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](SIMPLCOMMERCE_REPORT.md)**
+**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](docs/reports/SIMPLCOMMERCE_REPORT.md)**

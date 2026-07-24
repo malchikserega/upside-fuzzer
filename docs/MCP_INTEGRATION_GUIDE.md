@@ -37,7 +37,7 @@ Once the MCP server is connected, you can give the AI agent a task to gather dat
 
 `dict.json` is a **flat map**: each key is a request field/payload name, each value an array of candidate strings. `void/go/store.go::candidatesForKey` matches keys case-insensitively with canonical normalization, so `productId`, `ProductID`, and `product_id` all resolve to the same pool — you don't need multiple casings.
 
-**Example BEFORE enrichment** (this is roughly what `compile-grammar.sh` auto-generates from OpenAPI/Roslyn constraints — see [INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format)):
+**Example BEFORE enrichment** (this is roughly what `compile-grammar.sh` auto-generates from OpenAPI/Roslyn constraints — see [INSTRUCTIONS.md §10](../INSTRUCTIONS.md#10-custom-dictionary-format)):
 ```json
 {
   "name": ["fuzzstring", "sample"],

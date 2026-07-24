@@ -2,7 +2,7 @@
 
 This report summarizes a 15-minute validation campaign against the local instrumented Bitwarden stand. The goal was to verify that Void's documented multi-auth identity file support works in a real run and that the security-focused flags behave as expected.
 
-**→ [Back to README](README.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Docs Index](docs/INDEX.md)**
+**→ [Back to README](../../README.md) · [Bitwarden Quickstart](../../QUICKSTART_BITWARDEN.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Docs Index](../INDEX.md)**
 
 > 📌 **Historical run report — 2026-07-13.** Point-in-time validation snapshot, not living
 > documentation; not guaranteed reproducible against the current pipeline (see
@@ -111,4 +111,4 @@ The findings are security-relevant, mostly stability/error-handling and post-aut
 
 ---
 
-**→ [Back to README](README.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md)**
+**→ [Back to README](../../README.md) · [Bitwarden Report](BITWARDEN_REPORT.md) · [Bitwarden Quickstart](../../QUICKSTART_BITWARDEN.md)**

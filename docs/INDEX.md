@@ -27,7 +27,7 @@ Step-by-step guides for instrumenting and fuzzing specific real-world applicatio
 | **Bitwarden** | JWT (identity service) | [QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md) — fresh, from-scratch setup |
 | **Bitwarden** (already set up) | — | [BITWARDEN_FUZZ_RUNBOOK.md](../BITWARDEN_FUZZ_RUNBOOK.md) — iterating against an *existing* `bitwarden_prep/` checkout, plus every gotcha found during setup. Use the quickstart for a fresh start; use this once you already have a working instrumented copy and just want to re-run or troubleshoot. |
 
-Which target to pick first → [README.md §Quickstarts](../README.md#quickstarts). Adding a new target entirely → [TARGET_CANDIDATES.md](../TARGET_CANDIDATES.md).
+Which target to pick first → [README.md §Quickstarts](../README.md#quickstarts). Adding a new target entirely → [TARGET_CANDIDATES.md](TARGET_CANDIDATES.md).
 
 ### Authentication & dictionaries
 
@@ -35,7 +35,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 |----------|-------------|
 | [FUZZER_AUTHENTICATION.md](FUZZER_AUTHENTICATION.md) | Canonical auth file schema, multi-identity scheduling, access-control campaign setup — required reading if you want BOLA/broken-auth findings, which need ≥2 identities to compare |
 | [auth.identities.example.json](auth.identities.example.json) | Copyable example auth identity file |
-| [MCP_INTEGRATION_GUIDE.md](../MCP_INTEGRATION_GUIDE.md) | Using an MCP-connected AI agent to enrich `dict.json` from live database data |
+| [MCP_INTEGRATION_GUIDE.md](MCP_INTEGRATION_GUIDE.md) | Using an MCP-connected AI agent to enrich `dict.json` from live database data |
 | [INSTRUCTIONS.md §10](../INSTRUCTIONS.md#10-custom-dictionary-format) | The `dict.json` format itself (flat key→values map) and how it interacts with grammar-derived and mutation-derived boundary values |
 
 ---
@@ -64,11 +64,11 @@ These are dated findings from specific fuzzing campaigns, kept for record — **
 
 | Document | Target | Date | Type |
 |----------|--------|------|------|
-| [BITWARDEN_REPORT.md](../BITWARDEN_REPORT.md) | Bitwarden | 2026-07-13 | 30-min authenticated campaign findings |
-| [BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md](../BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md) | Bitwarden | 2026-07-13 | 15-min multi-auth validation run |
-| [BTCPAYSERVER_REPORT.md](../BTCPAYSERVER_REPORT.md) | BTCPayServer | 2026-07-07 | Initial fuzzing campaign findings (RESTler-era pipeline) |
-| [BTCPAYSERVER_ESCALATION_ANALYSIS.md](../BTCPAYSERVER_ESCALATION_ANALYSIS.md) | BTCPayServer | 2026-07-13 | Crash escalation analysis (DDoS / RCE paths) |
-| [SIMPLCOMMERCE_REPORT.md](../SIMPLCOMMERCE_REPORT.md) | SimplCommerce | 2026-07-07 | Baseline vs. professional-dictionary campaign comparison (RESTler-era pipeline) |
+| [BITWARDEN_REPORT.md](reports/BITWARDEN_REPORT.md) | Bitwarden | 2026-07-13 | 30-min authenticated campaign findings |
+| [BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md](reports/BITWARDEN_MULTIAUTH_SECURITY_RUN_20260713.md) | Bitwarden | 2026-07-13 | 15-min multi-auth validation run |
+| [BTCPAYSERVER_REPORT.md](reports/BTCPAYSERVER_REPORT.md) | BTCPayServer | 2026-07-07 | Initial fuzzing campaign findings (RESTler-era pipeline) |
+| [BTCPAYSERVER_ESCALATION_ANALYSIS.md](reports/BTCPAYSERVER_ESCALATION_ANALYSIS.md) | BTCPayServer | 2026-07-13 | Crash escalation analysis (DDoS / RCE paths) |
+| [SIMPLCOMMERCE_REPORT.md](reports/SIMPLCOMMERCE_REPORT.md) | SimplCommerce | 2026-07-07 | Baseline vs. professional-dictionary campaign comparison (RESTler-era pipeline) |
 
 For a *current*, reproducible example of findings, see the "Example findings" sections in [QUICKSTART_ESHOP.md](../QUICKSTART_ESHOP.md) and [QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md), which were re-verified against today's pipeline.
 
@@ -78,7 +78,7 @@ For a *current*, reproducible example of findings, see the "Example findings" se
 
 | Document | Description |
 |----------|-------------|
-| [BENCHMARK_AGENT_INSTRUCTIONS.md](../BENCHMARK_AGENT_INSTRUCTIONS.md) | Historical reproducibility playbook for 20-minute RESTler-vs-Void benchmarks across 4 targets. Self-labeled as a historical rerun playbook — RESTler appears here deliberately, as the baseline being compared against, not as a live dependency of this project. |
+| [BENCHMARK_AGENT_INSTRUCTIONS.md](BENCHMARK_AGENT_INSTRUCTIONS.md) | Historical reproducibility playbook for 20-minute RESTler-vs-Void benchmarks across 4 targets. Self-labeled as a historical rerun playbook — RESTler appears here deliberately, as the baseline being compared against, not as a live dependency of this project. |
 | `arxiv_paper/` | Draft academic paper package (`paper.md`, `PLAN.md`, `SKETCH.md`). Separate audience/purpose from the rest of this index — not maintained in lockstep with the codebase. **Known gap**: `paper.md`'s methodology section still describes the retired RESTler-based grammar pipeline and needs a rewrite before submission. |
 
 ---

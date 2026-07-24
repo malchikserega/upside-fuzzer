@@ -104,8 +104,8 @@ rebuild with `docker compose ... build --no-cache api`.
 
 ```bash
 : > fuzzer.env                                   # drop stale creds (avoids a 401-spamming "default" identity)
-python3 make_bola_identities.py                  # user-a, user-b, guest -> auth.identities.json
-python3 populate_data.py --auth-file auth.identities.json
+python3 ../examples/bitwarden/make_bola_identities.py  # user-a, user-b, guest -> auth.identities.json
+python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json
 ```
 
 BOLA needs **two distinct authenticated users** plus the guest. Populating data means
@@ -122,7 +122,7 @@ writes `templates.export.json` + `dict.json` directly:
 ```bash
 # Need: ../grammars/bitwarden/{templates.export.json,dict.json}
 curl -s http://localhost:4000/specs/internal/swagger.json -o swagger.json
-python3 sanitize_swagger.py swagger.json   # still needed: grammarc/oas.py doesn't yet
+python3 ../examples/bitwarden/sanitize_swagger.py swagger.json   # still needed: grammarc/oas.py doesn't yet
                                             # decompose deepObject/object-shaped query params
 ../compile-grammar.sh swagger.json --dict ../grammars/bitwarden/dict.json --src ./src --out ../grammars/bitwarden
 

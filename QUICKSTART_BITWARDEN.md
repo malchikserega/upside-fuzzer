@@ -291,7 +291,7 @@ Bitwarden requires a valid access token. The `get_apikey.py` helper automates th
 
 ```bash
 cd bitwarden_prep
-python3 get_apikey.py
+python3 ../examples/bitwarden/get_apikey.py
 ```
 
 **What the script does:**
@@ -362,23 +362,23 @@ Bitwarden's business logic requires real objects in the database (folders, ciphe
 cd bitwarden_prep
 
 # Populate for all identities in auth.identities.json
-python3 populate_data.py --auth-file auth.identities.json
+python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json
 
 # Single-user fallback (reads fuzzer.env)
-python3 populate_data.py
+python3 ../examples/bitwarden/populate_data.py
 ```
 
 **Useful options:**
 
 ```bash
 # Populate only for one specific identity
-python3 populate_data.py --auth-file auth.identities.json --identity bitwarden-user
+python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json --identity bitwarden-user
 
 # Control object counts
-python3 populate_data.py --auth-file auth.identities.json --folders 5 --ciphers 30 --sends 10
+python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json --folders 5 --ciphers 30 --sends 10
 
 # Dry-run to preview what would be created
-python3 populate_data.py --auth-file auth.identities.json --dry-run
+python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json --dry-run
 ```
 
 The script creates:
@@ -408,7 +408,7 @@ curl -s http://localhost:4000/specs/internal/swagger.json -o swagger-bitwarden.j
 
 # Sanitize: Bitwarden uses deepObject/nested $ref query params grammarc doesn't yet decompose
 cd bitwarden_prep
-python3 sanitize_swagger.py internal_swagger.json
+python3 ../examples/bitwarden/sanitize_swagger.py internal_swagger.json
 cd ..
 
 # Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis) — one
