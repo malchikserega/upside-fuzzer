@@ -75,7 +75,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ## How it Works
 
-*New to this project? [**docs/HOW_IT_WORKS.md**](docs/HOW_IT_WORKS.md) explains the problem UpsideFuzz solves, why grey-box coverage + security oracles beat black-box REST fuzzers, and — in plain language — what BOLA/mass-assignment/injection oracles actually catch. The four bullets below are the short mechanism summary; that page is the "why."*
+*New to this project? [**docs/HOW_IT_WORKS.md**](docs/HOW_IT_WORKS.md) explains the problem UpsideFuzz solves, why grey-box coverage + security oracles beat black-box REST fuzzers, how instrumentation/grammar/sequences/scheduling work in plain language, and what the BOLA/mass-assignment/injection/differential-auth-bypass oracles actually catch. The four bullets below are the short mechanism summary; that page is the "why."*
 
 ![Fuzzing Pipeline Animation](pipeline-animation/pipeline.gif)
 
@@ -347,7 +347,7 @@ Access-control findings additionally carry an `access_control: true` field with 
 
 | Document | Description |
 |----------|-------------|
-| **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** | Start here if you're new: the problem this solves, why grey-box + oracles beat black-box fuzzing, and a plain-language explainer of the BOLA/mass-assignment/injection oracles |
+| **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** | Start here if you're new: the problem this solves, why grey-box + oracles beat black-box fuzzing, plain-language explainers of instrumentation/grammar/sequences/scheduling, and the BOLA/mass-assignment/injection/differential-auth-bypass oracles |
 | **[INSTRUCTIONS.md](INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
 | **[ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |

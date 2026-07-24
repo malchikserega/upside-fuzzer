@@ -9,7 +9,7 @@ This is the central documentation index for the **UpsideFuzz** platform — a co
 | Document | What it gives you |
 |----------|-------------|
 | [README.md](../README.md) | 60-second overview: what this is, feature table, quick-start commands |
-| [**HOW_IT_WORKS.md**](HOW_IT_WORKS.md) | **Read this first if you're new.** Plain-language explanation of the problem this solves, why coverage-guided fuzzing + security oracles beat black-box tools, and — in depth — what BOLA/mass-assignment/injection oracles actually catch and why crash-only fuzzers miss them entirely |
+| [**HOW_IT_WORKS.md**](HOW_IT_WORKS.md) | **Read this first if you're new.** Plain-language explanation of the problem this solves, how instrumentation/coverage/grammar/sequences/scheduling actually work under the hood, and — in depth — what the BOLA/mass-assignment/injection/differential-auth-bypass oracles actually catch and why crash-only fuzzers miss them entirely |
 | [INSTRUCTIONS.md](../INSTRUCTIONS.md) | The complete step-by-step runbook: prerequisites → instrument → grammar → fuzz → analyze → troubleshoot |
 | [**CLI.md**](CLI.md) | The `upsidefuzz` single-command orchestrator (Top-20 #19) — one command instead of four scripts, plus a zero-install Docker mode (`./upsidefuzz`) that needs nothing but Docker locally |
 

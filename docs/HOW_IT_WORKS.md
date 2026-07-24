@@ -17,7 +17,7 @@ UpsideFuzz exists to close both gaps at once: real coverage feedback from *insid
 
 ## The idea, in one paragraph
 
-UpsideFuzz rewrites the target .NET application's compiled IL (via [SharpFuzz](https://github.com/Metalnem/sharpfuzz)) so that every basic block it executes marks a bit in a shared-memory bitmap the fuzzer can read in real time. This means the fuzzer *knows* whether a given request reached new code — the same core idea as AFL/libFuzzer for binaries, applied to a live REST API instead of a single binary input. On top of that coverage signal, it builds a typed request grammar directly from the target's OpenAPI spec (optionally sharpened with real C# validation constraints extracted via Roslyn, so generated values are more likely to pass validation and reach interesting code), and it runs a Go-based mutation engine that doesn't just try to make the server crash — it actively tests specific hypotheses about the three bug classes real REST APIs are most often vulnerable to.
+UpsideFuzz rewrites the target .NET application's compiled IL (via [SharpFuzz](https://github.com/Metalnem/sharpfuzz)) so that every basic block it executes marks a bit in a shared-memory bitmap the fuzzer can read in real time. This means the fuzzer *knows* whether a given request reached new code — the same core idea as AFL/libFuzzer for binaries, applied to a live REST API instead of a single binary input. On top of that coverage signal, it builds a typed request grammar directly from the target's OpenAPI spec (optionally sharpened with real C# validation constraints extracted via Roslyn, so generated values are more likely to pass validation and reach interesting code), and it runs a Go-based mutation engine that doesn't just try to make the server crash — it actively tests specific hypotheses about the bug classes real REST APIs are most often vulnerable to.
 
 ## How the pieces fit together
 
@@ -41,10 +41,10 @@ UpsideFuzz rewrites the target .NET application's compiled IL (via [SharpFuzz](h
  │  validation    │              └───────┬────────┘              └─────────────────┘
  │  rules)        │                      │
  └──────────────┘                      ▼
-                                 findings: crashes,
-                                 BOLA, mass-assignment,
-                                 injection — triaged and
-                                 deduplicated
+                                 findings: crashes, BOLA,
+                                 mass-assignment, injection,
+                                 differential auth-bypass —
+                                 triaged and deduplicated
 ```
 
 Three things are happening simultaneously, and all three feed each other:
@@ -57,9 +57,44 @@ For the literal step-by-step commands that produce this pipeline, see [INSTRUCTI
 
 ---
 
+## Instrumentation & coverage: how the fuzzer knows what code actually ran
+
+This is the foundation everything else sits on, so it's worth explaining in plain terms before anything else.
+
+**The core trick:** before your app runs, UpsideFuzz edits the *compiled* .NET assemblies (never your `.cs` source files) to insert a tiny "check-in" at every branch of every method — think of it like a fingerprint scanner at every doorway in a building. Every time a request walks through a doorway (executes a branch of code), it leaves a mark in a block of memory shared between the running app and the fuzzer (a "bitmap"). The fuzzer reads that shared memory after every request and asks one question: *did this request open any doors nobody has opened before?* If yes, that request is "interesting" and gets mutated further; if it just walked through doors already marked, it's less interesting. This is the same core idea binary fuzzers like AFL use, applied to a live REST API's execution instead of a single program's input.
+
+Two details make this more than a crude "did anything new happen" check:
+
+- **Hit counts, not just presence.** A door being opened *once* vs. *5,000 times* are recorded differently (in log-scale buckets: 1, 2, 3, 4–7, 8–15, …). Why this matters: a loop, a pagination handler, or a retry mechanism only *looks* interesting once you push it deeper than the first iteration — a fuzzer that only asks "was this door opened at all" plateaus instantly and never learns that "opened it 500 times" is a meaningfully different (and more bug-prone) situation than "opened it once."
+- **Zero source edits, by default.** Instead of editing your `Program.cs`/`Startup.cs` to wire the coverage hook in, UpsideFuzz uses a .NET feature (`DOTNET_STARTUP_HOOKS`) that injects the hook at process startup from *outside* your code entirely — so the target you're testing is built exactly the way it would ship, not a special "instrumented fork" of it.
+
+**Why the bitmap size matters (and used to be a problem):** the shared-memory scoreboard has a fixed number of slots. A tiny app and a massive one (think: a small internal tool vs. Bitwarden's whole API surface) used to get the *same* fixed 256KB scoreboard — which meant a big app's many code paths kept landing on the same slots by coincidence ("hash collisions"), corrupting the signal, while a small app wasted most of a scoreboard it never touched. UpsideFuzz now measures, at build time, how much of the app it actually instrumented, and sizes the scoreboard accordingly (roughly 64KB for a small app up to 8MB for a very large one) — like using a net sized to the pond you're actually fishing in, instead of always the same net. Relatedly, the engine used to wipe the whole scoreboard clean the instant it got "too full," even mid-way through productively learning new things — now it only wipes when the board is *both* nearly full *and* has genuinely stopped teaching it anything new for a while, so a fixed percentage threshold never throws away real progress.
+
+**Trust, but verify:** instrumentation can silently fail (wrong Docker image, wrong source path, a namespace accidentally excluded) — and a fuzzer that doesn't notice will happily burn its whole time budget "testing" an app it never actually instrumented, reporting a clean run that means nothing. Before a real run starts, UpsideFuzz sends a few real warm-up requests and checks the scoreboard actually moved; if it didn't, it refuses to start rather than silently fuzzing blind (you can override this, but it's opt-in, not the default).
+
+## The grammar: what a valid request even looks like
+
+Random bytes almost never look like a valid API request, so a fuzzer that mutates blindly spends nearly all its time being rejected by basic input validation before it ever reaches interesting code. UpsideFuzz avoids this by building a **typed grammar** directly from your OpenAPI/Swagger spec first: for every endpoint it knows the required fields, their types, and — where your C# source is available — the *actual* server-side validation rules (`[Range(0,100)]`, `[StringLength(50)]`, `[RegularExpression(...)]`, enum values, FluentValidation rules), extracted by parsing the real syntax tree of your code (not guessing from names). Mutation then starts from something the server is likely to accept, and deliberately breaks it in targeted ways — for a field with a max length of 50, it specifically tries 49, 50, and 51 characters (the exact boundary a bug is most likely to hide at) instead of a random string that's either obviously fine or obviously garbage.
+
+The grammar also keeps learning while the fuzzer runs: when the server rejects a request with a helpful validation error (`"errors": {"Email": ["must be a valid email"]}` — the standard shape ASP.NET produces), UpsideFuzz reads that error text and feeds the required field names / valid-looking values it mentions back into its own dictionary, the same pool it draws from for future requests — so a validation-heavy API doesn't just block the fuzzer, it accidentally teaches it what it wants.
+
+## Sequences: testing workflows, not just single requests
+
+Some of the most damaging bugs don't live in any single endpoint — they live in the *order* of operations. `PUT /orders/{id}` is meaningless without a real order id, which only exists after a successful `POST /orders` created one; a coupon-then-refund or transfer-then-reverse business-logic bug only shows up if the fuzzer actually chains those steps together, not if it hammers each endpoint in isolation with made-up IDs.
+
+UpsideFuzz's sequence engine watches successful writes: when a `POST` creates something and the response includes an id (in the JSON body or a `Location` header), the engine remembers it and feeds that *real* id into follow-up requests that need one — `GET`/`PUT`/`DELETE` on the same resource, prioritized in a realistic order. If a step in the chain fails (no real id available), it doesn't just give up — it falls back to a plausible fake id, so even a broken chain still gets to test whether downstream endpoints properly reject an id that shouldn't exist or isn't the caller's.
+
+On top of that, the engine specifically rewards discovering a *new kind of workflow*, not just a workflow that happens to touch new code. It keeps a rough "shape" of every chain it's tried so far (which endpoints, in what order, roughly what kind of result each step got — success/redirect/rejected/error) and gives extra priority to continuing a chain the moment it recognizes the shape as one it's never explored before. This matters because ordinary code-coverage feedback can't tell "the 3rd identical `GET` after a `POST`" apart from "the 1st one" — they touch the same code — even though only the first one taught the fuzzer anything about workflow behavior. Rewarding *new workflow shapes* on top of *new code* is a coarse but real step toward finding logic bugs that only exist across multiple steps, not inside any one of them.
+
+## Scheduling & mutation: deciding what to try next
+
+With a huge space of possible requests and a limited time budget, *what to try next* matters as much as *what's possible to try*. UpsideFuzz splits its run into phases: first it sends every known request once, completely unmutated, to establish a baseline of what "normal" traffic reaches; then it systematically tweaks one field at a time (methodical, exhaustive-ish); then it starts stacking multiple aggressive mutations on top of each other at once (faster, messier, better at finding deep/weird bugs); and finally it starts splicing two different successful requests together, mixing their fields. Time is continuously reallocated *while running* — a phase that's stopped teaching the fuzzer anything new automatically loses budget to a phase that's still productive.
+
+Within any phase, not every past request gets equal attention: ones that led to new code being reached earn more "energy" (a priority weight) and get revisited/mutated more, the same way a gambler puts more chips behind a strategy that's been paying off — while requests that consistently get rejected or lead nowhere new get gradually deprioritized so they don't eat the whole time budget.
+
 ## The oracles: what they actually catch, and why fuzzers usually miss this
 
-A crash tells you code is fragile. It doesn't tell you code is *insecure* — plenty of unhandled exceptions are just sloppy error handling, not exploitable. The three oracle families below are UpsideFuzz's answer to "how do you find bugs a crash-only fuzzer structurally cannot see," because in each case **the response is a normal, successful-looking 200 OK** — nothing crashes, nothing looks wrong unless you know to check.
+A crash tells you code is fragile. It doesn't tell you code is *insecure* — plenty of unhandled exceptions are just sloppy error handling, not exploitable. The four oracle families below are UpsideFuzz's answer to "how do you find bugs a crash-only fuzzer structurally cannot see," because in each case **the response is a normal, successful-looking 200 OK** — nothing crashes, nothing looks wrong unless you know to check.
 
 ### 1. Broken access control (BOLA / IDOR)
 
@@ -82,6 +117,14 @@ A crash tells you code is fragile. It doesn't tell you code is *insecure* — pl
 **The bug:** classic injection (SQL, template/SSTI) that a WAF-style "does this response contain an error message" check would miss entirely, because a well-behaved app under injection doesn't always error — it might just take longer, or evaluate an expression it shouldn't.
 
 **What UpsideFuzz does:** rather than only looking for error strings, it runs *positive* checks — sending a time-delay SQL payload (`sleep(5)`-style) and measuring whether the response actually took ~5 seconds longer than baseline (time-based SQLi), or sending a template expression like `{{7*7}}` and checking whether the literal string `49` comes back evaluated in the response (server-side template injection). Reflected XSS is checked the same way — did the exact payload come back unescaped in the response body. These are *positive* signals: the server did something it should structurally never do, not just "returned an error."
+
+### 4. Differential / parser-confusion auth bypass
+
+**The bug:** an endpoint can enforce authorization for the *obvious* form of a request and still forget to enforce it for a slightly different-looking form of the exact same request. A login check written only with `GET` in mind might never fire for a `HEAD` request to the same route (technically the same operation, minus a response body). Middleware that only inspects requests declared as `Content-Type: application/json` can be skipped entirely by sending the identical bytes labeled `text/plain` while the app still happily parses them as JSON. Routing that's case-insensitive by default can sit behind a custom authorization check that isn't. None of these are "missing auth" in the simple sense — the check exists and works for the normal case; it just doesn't cover every equivalent way of asking the same question.
+
+**Why it's invisible to crash-only tools (and to a plain auth-bypass check):** a plain "does this work with no login at all" test already gets correctly rejected here — the bug only appears when the *disguised* version of the same request is tried. A tool that only tests the literal, undisguised case will report the endpoint as properly protected and move on, missing exactly the bug that exists.
+
+**What UpsideFuzz does:** it only tries this once it already knows an endpoint requires authentication — because a plain, literal request with no credentials was already confirmed to get rejected. On exactly those endpoints, it replays the request with no credentials again, but disguised four different ways: **verb confusion** (a `GET` reissued as `HEAD`), **content-type confusion** (identical body bytes, but declared as `text/plain` instead of `application/json`), **route-case confusion** (the same path with letter casing flipped), and **param-location confusion** (the same resource id duplicated as a query parameter instead of only living in the path). If a request that was correctly blocked in its plain form succeeds in one of these disguised forms, that's strong evidence the disguise itself — not general carelessness — broke the check, which is a more precise (and more fixable) finding than "auth is missing here."
 
 ### Why this combination is rare
 
@@ -107,7 +150,7 @@ This distinction matters: a tool that reports every 500 as a "vulnerability" tra
 Worth being upfront about, since overclaiming erodes trust fast in a security tool:
 
 - Coverage feedback only helps as much as the target is actually instrumented — if a project's business logic lives somewhere the instrumentor's exclusion rules miss (see `ARCHITECTURE_REVIEW.md`'s subsystem reviews for known gaps), the fuzzer degrades to something closer to black-box.
-- The oracles catch *specific, well-defined* signatures of BOLA/mass-assignment/injection — they are not a general "did anything security-relevant happen" detector, and won't catch every possible logic flaw (multi-step business-logic bugs, for instance, are an acknowledged open area — see the roadmap in `ARCHITECTURE_REVIEW.md`).
+- The oracles catch *specific, well-defined* signatures of BOLA/mass-assignment/injection/differential-auth-bypass — they are not a general "did anything security-relevant happen" detector, and won't catch every possible logic flaw. The sequence engine's state-reward search (above) is a coarse step toward multi-step business-logic bugs, not a full solution — see the roadmap in `ARCHITECTURE_REVIEW.md` for what's still open.
 - A clean run (no findings) is not proof the API is secure. It means this specific run, with this specific grammar and time budget, didn't trigger a detectable signature. Treat it as one input to a security assessment, not the whole assessment.
 
 ## Where to go next
