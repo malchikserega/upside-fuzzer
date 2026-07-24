@@ -18,21 +18,21 @@ graph TD
     classDef output fill:#e8e8e8,stroke:#333,stroke-width:2px,color:#333;
     classDef bash fill:#4EAA25,stroke:#fff,stroke-width:2px,color:#fff;
 
-    A[".NET Source + Dockerfile"]:::dotNet -->|fuzz-prep-multi.py| B
-    B["Instrumented Copy (/shm added)"]:::dotNet -->|docker compose up| C
-    
-    swagger["swagger.json"]:::output -->|compile-grammar.sh| E
-    srcRoslyn[".NET Source (optional)"]:::dotNet -->|analyzer/ (Roslyn)| E
+    A[".NET Source + Dockerfile"]:::dotNet -->|"fuzz-prep-multi.py"| B
+    B["Instrumented Copy (SHM added)"]:::dotNet -->|"docker compose up"| C
+
+    swagger["swagger.json"]:::output -->|"compile-grammar.sh"| E
+    srcRoslyn[".NET Source (optional)"]:::dotNet -->|"analyzer (Roslyn)"| E
 
     C[("Running API + Live SHM Coverage")]:::output
     E["templates.export.json + dict.json"]:::python
 
-    C -->|Feedback Loop| F
-    
+    C -->|"Feedback Loop"| F
+
     F{"void Fuzzer Engine (Go)"}:::go
-    F -->|Requests + Mutations| C
-    
-    F -->|Outputs| G["unique-crashes.jsonl + Reproducers"]:::output
+    F -->|"Requests + Mutations"| C
+
+    F -->|"Outputs"| G["unique-crashes.jsonl + Reproducers"]:::output
 ```
 
 ### High-level pipeline:
