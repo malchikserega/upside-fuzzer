@@ -74,9 +74,25 @@ hget() { grep -i "^$1:" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r'; 
 command -v curl   >/dev/null || { red "curl not found"; exit 3; }
 command -v python3 >/dev/null || { red "python3 not found"; exit 3; }
 
+# fuzz-prep-multi.py always writes docker-compose.instrumented.yml, a name
+# `docker compose` does not auto-discover (only compose.y[a]ml/docker-compose.y[a]ml
+# are) -- pass -f explicitly when it's present, matching what upsidefuzz.py's _compose
+# helper does. Wrapped in a function (not a bare array expansion) because
+# "${empty_array[@]}" throws "unbound variable" under `set -u` on bash < 4.4
+# (macOS's system /bin/bash is 3.2) -- the same class of bug fixed in
+# compile-grammar.sh's ROSLYN_ARGS handling.
+dc() {
+  # Assumes cwd is already $DIR (only called from inside `cd "$DIR" && ...` below).
+  if [ -f "docker-compose.instrumented.yml" ]; then
+    docker compose -f docker-compose.instrumented.yml "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
 if [ "$DO_UP" = 1 ]; then
   hr; echo "Bringing up compose stack in: $DIR"
-  ( cd "$DIR" && docker compose build && docker compose up -d ) || { red "docker compose up failed"; exit 4; }
+  ( cd "$DIR" && dc build && dc up -d ) || { red "docker compose up failed"; exit 4; }
   echo "Waiting ${WAIT_SECS}s for startup (DB migration etc.)…"
   sleep "$WAIT_SECS"
 fi
@@ -84,7 +100,7 @@ fi
 cleanup() {
   if [ "$DO_DOWN" = 1 ]; then
     hr; echo "Tearing down compose stack…"
-    ( cd "$DIR" && docker compose down -v ) || true
+    ( cd "$DIR" && dc down -v ) || true
   fi
 }
 trap cleanup EXIT

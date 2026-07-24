@@ -171,6 +171,11 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ## Quick Start
 
+> **Prefer one command over six manual steps?** `./upsidefuzz run --src ... --out ... --target ... --swagger ...`
+> drives the whole pipeline below (instrument → build+up → verify → grammar → fuzz) at once, and needs only
+> **Docker** installed locally — no Python/.NET/Go required on your machine. See [docs/CLI.md](docs/CLI.md).
+> Everything below still works exactly as written; the CLI is an additive convenience, not a replacement.
+
 ### 1. Prerequisites
 
 ```bash

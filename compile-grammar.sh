@@ -108,13 +108,37 @@ if [ -z "$OUT_DIR" ]; then
 fi
 mkdir -p "$OUT_DIR"
 
+# Absolutize every user-supplied path against the CALLER's cwd now, before the
+# `cd "$ROOT_DIR"` below (needed so `python3 -m grammarc.cli` can find its own
+# package). Without this, a relative --out/--swagger/--dict/--src resolves
+# against $ROOT_DIR (this script's own location) instead -- harmless when the
+# script happens to be invoked from its own directory (the only case this was
+# tested against for years), but silently writes output to the wrong place
+# when it isn't (e.g. baked into a Docker image at a fixed path and invoked
+# against a bind-mounted working directory elsewhere -- found via the
+# upsidefuzz CLI's Docker-launcher smoke test).
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+SWAGGER_PATH="$(cd "$(dirname "$SWAGGER_PATH")" && pwd)/$(basename "$SWAGGER_PATH")"
+[ -n "$INPUT_DICTIONARY_PATH" ] && INPUT_DICTIONARY_PATH="$(cd "$(dirname "$INPUT_DICTIONARY_PATH")" && pwd)/$(basename "$INPUT_DICTIONARY_PATH")"
+[ -n "$SOURCE_CODE_PATH" ] && SOURCE_CODE_PATH="$(cd "$SOURCE_CODE_PATH" && pwd)"
+
 echo "⚙️  Generating grammar from $SWAGGER_PATH -> $OUT_DIR"
 
 ROSLYN_ARGS=()
 if [ -n "$SOURCE_CODE_PATH" ]; then
     ROSLYN_JSON="$OUT_DIR/roslyn-constraints.json"
     echo "🔎 Running Roslyn syntax-tree analyzer over $SOURCE_CODE_PATH..."
-    ( cd "$ROOT_DIR/analyzer" && dotnet build -v quiet --nologo > /dev/null )
+    # MSBuild writes errors to STDOUT, not stderr -- capture instead of silently
+    # discarding it, and print it on failure (previously "-v quiet ... > /dev/null"
+    # meant a broken build died with `set -e` and zero visible diagnostics).
+    BUILD_LOG="$(mktemp)"
+    if ! ( cd "$ROOT_DIR/analyzer" && dotnet build -v quiet --nologo ) > "$BUILD_LOG" 2>&1; then
+        echo "❌ analyzer build failed:" >&2
+        cat "$BUILD_LOG" >&2
+        rm -f "$BUILD_LOG"
+        exit 1
+    fi
+    rm -f "$BUILD_LOG"
     dotnet run --no-build --project "$ROOT_DIR/analyzer" -- --src "$SOURCE_CODE_PATH" --out "$ROSLYN_JSON"
     ROSLYN_ARGS=(--roslyn "$ROSLYN_JSON")
 fi

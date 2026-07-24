@@ -685,6 +685,10 @@ upside-fuzzer/
 ├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
 ├── compile-grammar.sh          ★ Compile swagger.json → templates.export.json + dict.json
 │                                 (grammarc/ + optional analyzer/ — no RESTler, no Docker)
+├── upsidefuzz.py               ★ Single CLI orchestrator (Top-20 #19) — wraps the pipeline
+│                                 below behind instrument/build/up/down/verify/grammar/fuzz/run
+├── upsidefuzz                  Zero-install Docker launcher for upsidefuzz.py (see Dockerfile.cli)
+├── Dockerfile.cli               Image bundling Python + .NET SDK + void for the launcher above
 │
 ├── grammarc/                   ★ First-party OpenAPI → typed grammar compiler (Python, stdlib)
 │   ├── oas.py                  OpenAPI 2/3 parser ($ref/allOf/oneOf/anyOf resolution)

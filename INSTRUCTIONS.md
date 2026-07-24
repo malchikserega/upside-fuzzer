@@ -30,6 +30,11 @@ Step-by-step runbook for **any .NET 8+ web API** — from source code to coverag
 
 **Project quickstarts:** [Bitwarden](QUICKSTART_BITWARDEN.md) · [BTCPayServer](QUICKSTART_BTCPAYSERVER.md) · [eShopOnWeb](QUICKSTART_ESHOP.md) · [SimplCommerce](QUICKSTART_SIMPLCOMMERCE.md)
 
+> **Steps 1–5 below, as one command:** `./upsidefuzz run --src ... --out ... --target ... --swagger ...`
+> runs instrument → build+up → verify → grammar → fuzz end to end, needing only Docker locally
+> (no Python/.NET/Go install required). See [docs/CLI.md](docs/CLI.md). This runbook documents the
+> manual, step-by-step path — both work identically underneath; use whichever fits.
+
 ---
 
 ## 1. Prerequisites
