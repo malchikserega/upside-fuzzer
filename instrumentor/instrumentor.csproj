@@ -13,4 +13,10 @@
          self-contained black box (SharpFuzz.Fuzzer.Instrument) we don't get to hook. -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Exposes internal static classes (NamespaceMatcher, InstrumentationFilter,
+         ConstantExtractor/CmpLogInstrumentor's helper methods) to instrumentor.Tests
+         without making them part of this tool's public surface. -->
+    <InternalsVisibleTo Include="instrumentor.Tests" />
+  </ItemGroup>
 </Project>

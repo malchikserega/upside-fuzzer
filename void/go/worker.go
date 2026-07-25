@@ -528,6 +528,10 @@ func (f *Fuzzer) handleResult(res SendResult) {
 		// Differential/parser-confusion: verb/content-type/route-case/param-location
 		// variants replayed with no auth on endpoints known to enforce it (Top-20 #18).
 		f.maybeEnqueueDifferentialProbes(res)
+		// Response-schema conformance: flag fields present in this successful response
+		// but undeclared in the OpenAPI schema, and declared-vs-observed type drift
+		// (Top-20+ #23). Only meaningful against an actually-successful response.
+		f.checkSchemaConformance(res)
 	}
 
 	// Positive injection oracles on non-crash responses (reflected XSS, evaluated

@@ -87,13 +87,30 @@ def build_template(
     reads = list(dict.fromkeys((dep_plan.reads.get(op_index, []) if dep_plan else [])))
     writes = list(dict.fromkeys((dep_plan.writes.get(op_index, []) if dep_plan else [])))
 
-    return {
+    template: Dict[str, Any] = {
         "id": op_index,
         "request_id": f"{op.method}{op.path}",
         "segments": segs,
         "reads": reads,
         "writes": writes,
     }
+
+    # Response-schema conformance oracle (Top-20+ #23): declared field name -> type
+    # per 2xx status, reusing the same _collect_schema_fields flattening already used
+    # for the request body above so dotted-path keys compare 1:1 against what
+    # void/go/schema_oracle.go flattens out of the live response body. Omitted
+    # entirely when no operation in this grammar declares a response schema, keeping
+    # old-shaped grammars (and endpoints with no declared response schema) unchanged.
+    response_fields: Dict[str, Dict[str, str]] = {}
+    for status, schema in (op.response_schemas or {}).items():
+        if not schema:
+            continue
+        flat = parser._collect_schema_fields(schema)
+        response_fields[status] = {f.name: f.type_name for f in flat if f.name}
+    if response_fields:
+        template["response_schemas"] = response_fields
+
+    return template
 
 
 def write_templates_export(templates: List[Dict[str, Any]], out_path: Path, skipped: int = 0) -> None:

@@ -115,7 +115,12 @@ type Config struct {
 	AccessProbeMaxPerEndpoint int
 	AccessProbeQueueMax       int
 	InjectionOracle           bool
-	SQLiTimeThresholdSec      float64
+	// SchemaConformance (Top-20+ #23): validate 2xx response bodies against the
+	// declared OpenAPI response schema; flags fields present in the live response but
+	// undeclared in the schema, and declared-vs-observed type drift. No-op (silent)
+	// on any endpoint whose grammar carries no response_schemas data.
+	SchemaConformance    bool
+	SQLiTimeThresholdSec float64
 	Profile                   string
 	// CmpLog (Top-20+ #21): poll /shm/cmplog for comparison operands harvested from
 	// the target's own IL and blend them into string/int mutation. No-ops cleanly
@@ -151,6 +156,13 @@ type Template struct {
 	Segments  []Segment `json:"segments"`
 	Reads     []string  `json:"reads"`
 	Writes    []string  `json:"writes"`
+
+	// ResponseSchemas (Top-20+ #23), sourced from grammarc/oas.py's parsed OpenAPI
+	// response schemas: declared 2xx status -> {dotted field name: declared type}.
+	// Absent/nil on any template.export.json generated before this was added -- plain
+	// json.Unmarshal leaves it nil, so old grammars decode and behave exactly as
+	// before (schema_oracle.go treats a nil/empty map as "nothing declared, skip").
+	ResponseSchemas map[string]map[string]string `json:"response_schemas,omitempty"`
 }
 
 type TemplateExport struct {

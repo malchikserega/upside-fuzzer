@@ -88,6 +88,9 @@ var sarifStrongReasonTags = map[string]bool{
 	"auth_bypass_unauthenticated_access":        true,
 	"mass_assignment_privileged_field_accepted": true,
 	"differential_auth_bypass":                  true,
+	"schema_undeclared_sensitive_field":         true,
+	"schema_undeclared_field":                   true,
+	"schema_type_mismatch":                      true,
 }
 
 // sarifRuleID picks the most specific *stable* identifier available for a finding:
@@ -131,6 +134,9 @@ var sarifRuleDescriptions = map[string]string{
 	"auth_bypass_unauthenticated_access":        "A credential-free request succeeded on an endpoint already observed rejecting unauthenticated access.",
 	"differential_auth_bypass":                  "A verb/content-type/route-case/param-location confusion variant bypassed authorization enforcement the literal unauthenticated replay did not.",
 	"mass_assignment_privileged_field_accepted": "A privileged field over-posted on a write was accepted (echoed back or otherwise not rejected).",
+	"schema_undeclared_sensitive_field":         "A field with a sensitive-sounding name (password/secret/token/hash/...) was present in a live response but never declared in the OpenAPI response schema.",
+	"schema_undeclared_field":                   "A field was present in a live response but never declared in the OpenAPI response schema.",
+	"schema_type_mismatch":                      "A field's live JSON type did not match what the OpenAPI response schema declared for it.",
 }
 
 // sarifRuleDescription resolves a rule's description: the static catalog above for

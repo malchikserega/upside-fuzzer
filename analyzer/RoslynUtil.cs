@@ -146,13 +146,23 @@ public static class RoslynUtil
     // non-test directories that merely start with "test" (caught via this project's own
     // testdata/planted-bug-api fixture parsing to 0 files before this fix -- "testdata"
     // doesn't *end* with "test", so it correctly stays excluded from exclusion).
+    //
+    // FIX (found writing this session's analyzer.Tests suite): the plural suffix check
+    // only covered the dotted form (".tests", e.g. "MyApp.Tests") and the bare exact
+    // match ("tests"), never a plain "ends with tests" (e.g. "UnitTests") -- exactly the
+    // shape this function's own doc comment above claims to handle. Added
+    // EndsWith("tests") alongside the existing EndsWith("test"), accepting the same
+    // small false-positive tradeoff already accepted for the singular form (an unusual
+    // business directory literally named "Contests" would also match) -- "UnitTests" not
+    // being excluded is a far more likely, higher-impact miss than that edge case.
     public static bool IsTestPath(string path)
     {
         var lower = path.Replace('\\', '/').ToLowerInvariant();
         if (lower.Contains("/bin/") || lower.Contains("/obj/")) return true;
         foreach (var segment in lower.Split('/'))
         {
-            if (segment == "test" || segment == "tests" || segment.EndsWith(".tests") || segment.EndsWith("test"))
+            if (segment == "test" || segment == "tests" ||
+                segment.EndsWith(".tests") || segment.EndsWith("test") || segment.EndsWith("tests"))
                 return true;
         }
         return false;

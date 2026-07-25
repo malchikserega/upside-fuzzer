@@ -36,6 +36,13 @@ type Fuzzer struct {
 	activeIDs []int
 	tmplEPKey map[int]string
 
+	// responseSchemas (Top-20+ #23): endpoint key -> declared 2xx status -> {dotted
+	// field name: declared type}, populated from each Template's ResponseSchemas in
+	// buildTemplateMetaAndDependencies. Empty for any endpoint whose grammar declares
+	// no response schema -- schema_oracle.go treats that as "nothing to check", not
+	// an error.
+	responseSchemas map[string]map[string]map[string]string
+
 	depIndex         map[int]DepInfo
 	depConsumers     map[string][]int
 	idConsumers      map[string][]int
@@ -279,6 +286,7 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		tmplByID:              map[int]*Template{},
 		meta:                  map[int]TemplateMeta{},
 		tmplEPKey:             map[int]string{},
+		responseSchemas:       map[string]map[string]map[string]string{},
 		depIndex:              map[int]DepInfo{},
 		depConsumers:          map[string][]int{},
 		idConsumers:           map[string][]int{},
@@ -455,6 +463,11 @@ func (f *Fuzzer) Run() error {
 		return err
 	}
 
+	// Top-20+ #22: one-shot fetch of string/int literals harvested from the target's
+	// own IL at instrument time. Static (extracted at build time, never changes during
+	// a run), unlike CmpLog's live polling, so a single fetch here suffices.
+	f.fetchConstantsAtStartup()
+
 	boot := f.bootstrapRuntimeValues()
 	if boot > 0 {
 		fmt.Printf("Bootstrap learned runtime values: %d\n", boot)
@@ -485,6 +498,9 @@ func (f *Fuzzer) buildTemplateMetaAndDependencies() {
 		f.meta[t.ID] = TemplateMeta{Method: item.Method, Path: item.Path, Norm: norm, ContentType: ct}
 		f.tmplEPKey[t.ID] = epKey
 		f.activeIDs = append(f.activeIDs, t.ID)
+		if len(t.ResponseSchemas) > 0 {
+			f.responseSchemas[epKey] = t.ResponseSchemas
+		}
 
 		prof := endpointProfiles[epKey]
 		if prof == nil {

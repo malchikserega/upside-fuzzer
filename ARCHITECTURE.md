@@ -464,9 +464,12 @@ void/go/
 ├── template.go            templates.export.json parsing and payload rendering
 ├── mutation_engine.go     MOpt-style mutation scheduler and weights
 ├── mutations.go           Concrete mutation categories (sqli, xss, etc)
+├── cmplog.go              CmpLog/RedQueen IL-comparison operand harvesting (-cmplog)
+├── constants.go           Constant/string dictionary extraction pool (Top-20+ #22)
 ├── crash.go               Crash deduplication, signature generation, JSONL logging
 ├── cluster.go             Root-cause clustering (many signatures → one bug)
 ├── oracle.go              BOLA/IDOR + auth-bypass + positive injection oracles
+├── schema_oracle.go       Response-schema conformance oracle (-schema-conformance)
 ├── triage.go              Source-aware priority and crash route scoring
 ├── poc.go                 PoC shell scripts and timeline generation
 ├── report.go              Final JSON crash report and findings summary
@@ -581,6 +584,79 @@ ints (alongside the existing hardcoded/hint-derived candidates). Toggle with
 — harvested values are spliced into *any* string/int field, not routed to the
 specific field whose comparison produced them (see `ARCHITECTURE_REVIEW.md`'s
 Top-20 §2 for that distinction).
+
+### Constant/String Dictionary Extraction (Top-20+ #22)
+
+CmpLog (above) recovers magic values *observed live* as comparisons execute. This is
+the static counterpart: `instrumentor/Program.cs::ConstantExtractor` is a **read-only**
+Cecil pass over `Ldstr`/`Ldc_I4`/`Ldc_I4_S`/`Ldc_I8` operands in every instrumented
+type's IL, harvesting literals the target's own source declares (`"SUMMER2026"`,
+`if (retries == 7)`) without needing any traffic to reach them first — the .NET analog
+of AFL's `-x` auto-dictionary extraction. Unconditional (no CLI flag): it never
+modifies IL, so there's no correctness or perf reason to ever skip it.
+
+**Ordering matters.** It runs *before* `SharpFuzz.Fuzzer.Instrument`, not after like
+CmpLog. SharpFuzz's own coverage rewrite injects its own `Ldc_I4` constants
+(per-branch-site bitmap indices) into every method it touches; running the extractor
+afterward pulls those in too, indistinguishable from real business-logic literals in
+the same IL stream — confirmed empirically against a two-constant test fixture, where
+running the pass after SharpFuzz's rewrite added ~16 extra pseudo-random ints that
+were coverage noise, not target code. Capped at 512 strings (≤256 chars each) / 256
+ints per assembly, deduped, best-effort (a failure here never fails the build).
+
+Results are appended to `.upsidefuzz_constants.jsonl` next to the DLL (one line per
+assembly, same convention as Top-20 #17's `.upsidefuzz_instrumented.jsonl`). Both
+generated coverage runtimes (`_COVERAGE_HOOK_CS`/hook mode,
+`generate_multi_coverage_helper`/source mode in `fuzz-prep-multi.py`) read it once at
+startup (`ResolveConstants`, cached) and serve it over `GET /shm/constants` — always
+200 with possibly-empty arrays, since extraction is unconditional. `void/go/constants.go`
+fetches it **once** at fuzzer startup (not polled repeatedly like CmpLog — these are
+static, extracted at build time, never change mid-run) into a process-wide
+`ConstantsPool`, sampled by `mutateStringCategorized` (`mcat_constants`, 12% chance)
+and blended into `mutateInt`'s candidate union — the same additive splice style CmpLog
+already established.
+
+### Response-Schema Conformance Oracle (Top-20+ #23)
+
+`grammarc/oas.py` already parses and resolves every operation's OpenAPI response
+schema; nothing validated live response bodies against it until now. `Operation`
+gained `response_schemas` (every declared 2xx status, not just the first —
+`response_schema`/`response_schema_ref_name` keep their original first-found meaning
+for existing producer-field-inference callers). `emit_templates.py::build_template`
+flattens each status's schema via the same `_collect_schema_fields` already used for
+request bodies, emitting `templates.export.json`'s `response_schemas: {status:
+{dotted_field_name: declared_type}}` — omitted entirely when an operation declares no
+response schema, so old-shaped grammars are byte-identical.
+
+`void/go/schema_oracle.go::checkSchemaConformance` runs on every organic (non-probe)
+2xx response, gated by `-schema-conformance` (default `true`). It flattens the live
+JSON body into the same dotted-path shape (`flattenJSONForSchemaCheck`, mirroring
+`_collect_schema_fields`'s quirks exactly — an intermediate object gets an entry for
+itself *and* is recursed into; an array shares its own prefix with its item schema,
+no index component — verified this parity directly against `grammarc`'s own test
+fixtures) and compares against the declared field map for the observed status (falling
+back to the sole declared 2xx schema when the exact status isn't documented but only
+one exists). Two distinct finding classes, deliberately separated per explicit design
+intent rather than folded into one generic bucket:
+
+- **Undeclared fields** — a key present in the live response but absent from the
+  schema. The priority case: it means a client can read/interact with something the
+  spec never documented. A field whose name matches a small sensitive-name list
+  (`password`, `secret`, `token`, `hash`, `ssn`, `apikey`, ...) is tagged
+  `schema_undeclared_sensitive_field` (`likely_vuln`, severity 7); anything else is
+  `schema_undeclared_field` (`needs_review`, severity 3).
+- **Type drift** — a declared field whose observed JSON type doesn't match
+  (`schema_type_mismatch`, `needs_review`, severity 2, deliberately low-confidence).
+  JSON `null` is always accepted regardless of declared type — nullable-by-convention
+  is too common to flag without a predictable false-positive flood.
+
+Conservative by design: silent (no finding) on any endpoint whose grammar declares no
+response schema at all — there's no ground truth to compare against, and this project
+already learned the cost of inventing findings from weak signal (see
+`ARCHITECTURE_REVIEW.md`'s Recorded Inconsistencies #11, the `ssrf_metadata_reflected`
+false positive). All three reason tags are in `sarif.go`'s `sarifStrongReasonTags`
+allowlist from day one, so they get their own distinct SARIF rule IDs rather than
+collapsing into a generic classification.
 
 ### State-Reward Sequence Search (Top-20 #12)
 
@@ -882,7 +958,8 @@ upside-fuzzer/
 │   ├── multipart.py            Multipart/form-data template synthesis
 │   ├── emit_templates.py       Writes templates.export.json (fixes the payload_key bug)
 │   ├── emit_dict.py            Writes dict.json
-│   └── cli.py                  python3 -m grammarc.cli entry point
+│   ├── cli.py                  python3 -m grammarc.cli entry point
+│   └── test_*.py               8 files, unittest/stdlib-only (see §11)
 │
 ├── analyzer/                   ★ Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
 │   ├── SourceIndex.cs          Parses all .cs files; partial-class/enum/validator indexing
@@ -890,6 +967,7 @@ upside-fuzzer/
 │   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
 │   ├── RouteAuthWalker.cs      [Authorize]/route metadata (controller + minimal-API styles)
 │   └── analyzer.csproj
+├── analyzer.Tests/              xUnit tests for analyzer/ (added 2026-07-25, see §11)
 │
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
 ├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
@@ -906,6 +984,7 @@ upside-fuzzer/
 │   ├── Program.cs              Standalone generic config-driven instrumentor
 │   ├── instrument.sh           Build + run script
 │   └── instrumentor.csproj     Project file
+├── instrumentor.Tests/          xUnit tests for instrumentor/ (added 2026-07-25, see §11)
 │
 ├── void/
 │   ├── export-templates.py     Legacy fallback: old grammar.py → JSON templates
@@ -922,10 +1001,13 @@ upside-fuzzer/
 │   │   ├── store.go            Runtime value harvesting and deduplication
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler
 │   │   ├── mutations.go        Payload mutation categories
+│   │   ├── cmplog.go           CmpLog/RedQueen IL-comparison operand harvesting
+│   │   ├── constants.go        Constant/string dictionary extraction pool (#22)
 │   │   ├── auth.go             JWT/header/cookie auth state and login fallback
 │   │   ├── identity.go         Multi-identity scheduling and race helpers
 │   │   ├── cluster.go          Root-cause clustering (many signatures → one bug)
 │   │   ├── oracle.go           BOLA/IDOR + auth-bypass + injection oracles
+│   │   ├── schema_oracle.go    Response-schema conformance oracle (#23)
 │   │   ├── triage.go           Source-aware triage and scoring logic
 │   │   ├── poc.go              PoC shell scripts and timelines
 │   │   ├── report.go           JSON bug report builder
@@ -935,8 +1017,7 @@ upside-fuzzer/
 │   │   ├── utils.go            Common helpers and constants
 │   │   ├── types.go            Core data structures
 │   │   ├── go.mod
-│   │   ├── identity_test.go
-│   │   └── poc_test.go
+│   │   └── *_test.go           17 files, 31.7% statement coverage (see §11)
 │
 ├── grammars/
 │   ├── bitwarden/              Generated grammar, dict, templates, and security overlay
@@ -1012,3 +1093,42 @@ items 8–10, for the full writeups: a substring-vs-path-segment matching bug in
 `analyzer/RoslynUtil.IsTestPath`, `analyzer/RouteAuthWalker` never scanning top-level-
 statement `Program.cs` files for minimal-API routes, and a bash-3.2-specific unbound-array
 crash in `compile-grammar.sh` when `--src` is omitted.
+
+### Unit test coverage (2026-07-25)
+
+The E2E gate above proves the pipeline works end-to-end on one fixture; it doesn't
+protect individual functions from regressing in ways that don't happen to break that
+one fixture's shape. Added as a second, faster-feedback layer underneath it:
+
+- **`void/go`** — statement coverage raised from 20.0% to 31.7% (`go test -coverprofile`).
+  New: `crash_test.go` (crash signature generation, dedup, the root-cause cluster
+  recording path), `minimize_test.go` (crash minimization + repro-stability check
+  against a real `httptest` server), `auth_test.go` (the anti-forgery token
+  lifecycle — register/prune/evict/harvest), `store_test.go` (`DictStore`'s
+  key-fallback chain, `RuntimeStore.addValue`'s eviction), plus additions to
+  `cluster_test.go`/`identity_test.go` covering `recordCluster`, identity parsing/
+  weighted selection, and — the highest-value addition — `triageCrash`, the honest-
+  triage classification taxonomy that decides whether a 500 is reported as a genuine
+  vulnerability, a robustness bug, noise, or a build artifact, previously untested.
+- **`grammarc`** — 2 test files → 8 (80 tests): `test_oas.py`, `test_body_serializer.py`,
+  `test_boundary.py`, `test_dependencies.py`, `test_multipart.py`, `test_roslyn_merge.py`,
+  alongside the existing `test_emit_dict.py`/`test_response_schemas.py`. Run any of them
+  with `python3 -m unittest grammarc.test_oas -v` (stdlib-only, no pip install).
+- **`instrumentor.Tests/`** and **`analyzer.Tests/`** (new xUnit projects — neither
+  `instrumentor/` nor `analyzer/` had any automated test coverage before this).
+  `instrumentor.Tests` required a small, behavior-preserving refactor first:
+  `NamespaceMatcher` and `InstrumentationFilter` were extracted out of top-level
+  statements into proper `internal` classes (C# can't expose a top-level-statements
+  local function to another assembly via `InternalsVisibleTo` — it compiles to a
+  `private` member of the synthesized `Program` class), verified to change zero
+  observable behavior by rerunning the `Bit.Core`/`Bit.CoreUtilities` compiled-fixture
+  check (`ARCHITECTURE_REVIEW.md`'s roadmap table, item #6) before and after the
+  refactor. Run with `dotnet test` from either directory (the main `instrumentor`/
+  `analyzer` projects still build and run exactly as before — `ProjectReference`,
+  not a fork).
+
+Writing this test suite directly found two more real, previously-unknown bugs — see
+`ARCHITECTURE_REVIEW.md`'s Inconsistencies items 12–13: `IsTestPath` still missed
+`UnitTests`-shaped directories after item 8's earlier fix, and `grammarc/oas.py` never
+handled Swagger 2.0's `in: body` parameter convention at all (only OpenAPI 3.x's
+`requestBody` was handled — every v2 spec's request body was silently dropped).

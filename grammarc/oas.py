@@ -61,6 +61,11 @@ class Operation:
     multipart_fields: List[FieldHint] = field(default_factory=list)
     response_schema: Optional[Dict[str, Any]] = None
     response_schema_ref_name: Optional[str] = None
+    # Every declared 2xx status's resolved schema (status code string -> schema),
+    # unlike response_schema above (first-found only, kept as-is for existing
+    # producer-field-inference callers). Feeds emit_templates.py's per-status
+    # response_schemas export for the response-schema conformance oracle (Top-20+ #23).
+    response_schemas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class OASParser:
@@ -276,6 +281,25 @@ class OASParser:
                         operation.multipart_fields.append(hint)
                     else:
                         operation.query_params.append(hint)
+                elif hint.location == "body":
+                    # Swagger 2.0's request-body convention: a single `in: body` param
+                    # carrying the full (often $ref'd) object schema directly -- the v2
+                    # analog of v3's `requestBody.content["application/json"].schema`,
+                    # which IS handled below but only for v3 specs. Found missing while
+                    # writing this session's grammarc test suite: any v2 spec's body
+                    # parameter silently fell through to the `else` branch and got
+                    # treated as a query parameter, leaving request_schema unset (and
+                    # therefore never getting a JSON body serialized at all) for every
+                    # v2 operation with a request body -- not a synthetic edge case,
+                    # this is the *standard* way Swagger 2.0 specs declare bodies.
+                    schema = raw.get("schema") if isinstance(raw.get("schema"), dict) else None
+                    if schema is not None:
+                        operation.request_schema_ref_name = self.ref_name(schema)
+                        operation.request_schema = self.resolve_schema(schema)
+                        consumes = op.get("consumes", global_consumes)
+                        operation.request_content_type = (
+                            str(consumes[0]) if isinstance(consumes, list) and consumes else "application/json"
+                        )
                 else:
                     operation.query_params.append(hint)
 
@@ -298,9 +322,15 @@ class OASParser:
                         operation.is_multipart = True
                         operation.multipart_fields.extend(self._collect_schema_fields(schema))
 
-            # 2xx response schema (first one found; used for producer-field inference)
+            # 2xx response schemas. response_schema/response_schema_ref_name keep their
+            # original "first one found" semantics (existing producer-field-inference
+            # callers depend on that); response_schemas additionally captures every
+            # declared 2xx status, for the response-schema conformance oracle (#23) to
+            # compare against the status actually observed at runtime rather than
+            # assuming the first-declared one always applies.
             responses = op.get("responses")
             if isinstance(responses, dict):
+                first_captured = False
                 for status, resp in sorted(responses.items()):
                     if not (isinstance(status, str) and status.startswith("2")):
                         continue
@@ -311,9 +341,13 @@ class OASParser:
                         media = content.get("application/json") or next(iter(content.values()), None)
                         schema = media.get("schema") if isinstance(media, dict) else None
                         if isinstance(schema, dict):
-                            operation.response_schema_ref_name = self.ref_name(schema)
-                            operation.response_schema = self.resolve_schema(schema)
-                    break
+                            resolved = self.resolve_schema(schema)
+                            if resolved:
+                                operation.response_schemas[status] = resolved
+                            if not first_captured:
+                                operation.response_schema_ref_name = self.ref_name(schema)
+                                operation.response_schema = resolved
+                                first_captured = True
 
             operations.append(operation)
         return operations

@@ -114,3 +114,61 @@ func TestExploitationSignalsFileRead(t *testing.T) {
 		t.Errorf("expected file_read_success, got %v", sigs)
 	}
 }
+
+// TestRecordClusterFoldsSameKeyIntoOneClusterWithIncrementingVariants verifies
+// repeated calls with the same cluster key accumulate into a single ClusterInfo
+// entry (the actual recording path -- rootCauseClusterKey above only computes the
+// key, recordCluster is what decides whether summary.json's distinct_root_causes
+// count treats two crashes as the same bug or two different ones).
+func TestRecordClusterFoldsSameKeyIntoOneClusterWithIncrementingVariants(t *testing.T) {
+	f := &Fuzzer{}
+	f.recordCluster("k1", "GUID parse failure", "System.FormatException", "confirmed_unhandled_exception", 5, 500, "sig1", "DELETE", "/ciphers/{id}", true)
+	f.recordCluster("k1", "GUID parse failure", "System.FormatException", "confirmed_unhandled_exception", 5, 500, "sig2", "GET", "/organizations/{id}", true)
+
+	if len(f.clusters) != 1 {
+		t.Fatalf("expected 1 cluster, got %d", len(f.clusters))
+	}
+	ci := f.clusters["k1"]
+	if ci.Variants != 2 {
+		t.Errorf("expected 2 variant signatures folded into the cluster, got %d", ci.Variants)
+	}
+}
+
+// TestRecordClusterDistinctKeysProduceDistinctClusters verifies summary.json's
+// distinct_root_causes (len(f.clusters)) actually reflects distinct bugs, not
+// distinct raw crash signatures.
+func TestRecordClusterDistinctKeysProduceDistinctClusters(t *testing.T) {
+	f := &Fuzzer{}
+	f.recordCluster("k1", "GUID parse failure", "System.FormatException", "confirmed_unhandled_exception", 5, 500, "sig1", "DELETE", "/ciphers/{id}", true)
+	f.recordCluster("k2", "Null reference", "System.NullReferenceException", "confirmed_unhandled_exception", 5, 500, "sig2", "GET", "/orders/{id}", true)
+
+	if len(f.clusters) != 2 {
+		t.Errorf("expected 2 distinct clusters, got %d", len(f.clusters))
+	}
+}
+
+// TestRecordClusterPromotesRepresentativeOnHigherSeverity verifies the cluster's
+// representative (used for the report's headline example of this bug) tracks the
+// highest-severity variant seen, not just the first one.
+func TestRecordClusterPromotesRepresentativeOnHigherSeverity(t *testing.T) {
+	f := &Fuzzer{}
+	f.recordCluster("k1", "Some bug", "System.Exception", "needs_review", 3, 500, "sig-low", "GET", "/a", true)
+	f.recordCluster("k1", "Some bug", "System.Exception", "likely_vuln_high", 9, 500, "sig-high", "POST", "/b", true)
+
+	ci := f.clusters["k1"]
+	if ci.MaxSeverity != 9 {
+		t.Errorf("expected MaxSeverity to track the highest severity seen (9), got %d", ci.MaxSeverity)
+	}
+	if ci.RepSignature != "sig-high" {
+		t.Errorf("expected the representative signature to be promoted to the higher-severity variant, got %q", ci.RepSignature)
+	}
+	if ci.Class != "likely_vuln_high" {
+		t.Errorf("expected the representative classification to be promoted too, got %q", ci.Class)
+	}
+
+	// A THIRD, lower-severity variant must not demote the already-promoted representative.
+	f.recordCluster("k1", "Some bug", "System.Exception", "needs_review", 2, 500, "sig-lower", "GET", "/c", true)
+	if f.clusters["k1"].RepSignature != "sig-high" {
+		t.Error("expected a lower-severity later variant to NOT demote the existing high-severity representative")
+	}
+}

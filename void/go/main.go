@@ -114,6 +114,7 @@ func parseFlags() Config {
 	flag.IntVar(&cfg.AccessProbeMaxPerEndpoint, "access-probe-max-per-endpoint", 6, "Max access-control probes queued per endpoint per run")
 	flag.IntVar(&cfg.AccessProbeQueueMax, "access-probe-queue-max", 256, "Global max queued access-control probes")
 	flag.BoolVar(&cfg.InjectionOracle, "injection-oracle", true, "Enable positive injection oracles (time-based SQLi, SSTI arithmetic, reflection)")
+	flag.BoolVar(&cfg.SchemaConformance, "schema-conformance", true, "Validate 2xx response bodies against the declared OpenAPI response schema; flags undeclared fields and type drift (requires the grammar to carry response_schemas -- regenerate with an up-to-date grammarc)")
 	flag.Float64Var(&cfg.SQLiTimeThresholdSec, "sqli-time-threshold", 1.5, "Absolute latency (seconds) above which a sleep/benchmark SQLi payload is flagged (also requires >=3x baseline)")
 	flag.BoolVar(&cfg.CmpLog, "cmplog", true, "Poll /shm/cmplog for comparison operands harvested from the target's own IL (Top-20+ #21) and blend them into string/int mutation. No-op against a target built without --cmplog or in --inject-mode source.")
 	flag.Float64Var(&cfg.CmpLogInterval, "cmplog-interval", 3.0, "Seconds between /shm/cmplog polls")
@@ -256,6 +257,7 @@ func applyProfile(cfg *Config, set map[string]bool) {
 		setB("probe-mass-assign", &cfg.ProbeMassAssign, false)
 		setB("probe-differential", &cfg.ProbeDifferential, false)
 		setB("injection-oracle", &cfg.InjectionOracle, false)
+		setB("schema-conformance", &cfg.SchemaConformance, false)
 		setB("race-mode", &cfg.RaceMode, false)
 		setF("sequence-prob", &cfg.SequenceProb, 0.10)
 	case "deep":
@@ -270,6 +272,7 @@ func applyProfile(cfg *Config, set map[string]bool) {
 		setB("probe-mass-assign", &cfg.ProbeMassAssign, true)
 		setB("probe-differential", &cfg.ProbeDifferential, true)
 		setB("injection-oracle", &cfg.InjectionOracle, true)
+		setB("schema-conformance", &cfg.SchemaConformance, true)
 		setB("race-mode", &cfg.RaceMode, true)
 	case "security":
 		// Vulnerability-hunting: prioritize the access-control / injection oracles
@@ -283,6 +286,7 @@ func applyProfile(cfg *Config, set map[string]bool) {
 		setB("probe-differential", &cfg.ProbeDifferential, true)
 		setF("access-probe-prob", &cfg.AccessProbeProb, 0.75)
 		setB("injection-oracle", &cfg.InjectionOracle, true)
+		setB("schema-conformance", &cfg.SchemaConformance, true)
 		setB("source-aware-priority", &cfg.SourceAwarePriority, true)
 		setF("sequence-prob", &cfg.SequenceProb, 0.50)
 		setB("race-mode", &cfg.RaceMode, true)

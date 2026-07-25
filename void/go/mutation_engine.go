@@ -248,6 +248,12 @@ func mutateStringCategorized(v string, hint *Segment) (string, string) {
 	if s, ok := cmplogPool.sampleString(); ok && rand.Float64() < 0.15 {
 		return s, "mcat_cmplog"
 	}
+	// Top-20+ #22: occasionally splice in a string literal harvested statically from
+	// the target's own IL at instrument time (ConstantExtractor) — same rationale as
+	// CmpLog above, just observed at build time instead of learned live at runtime.
+	if s, ok := constantsPool.sampleString(); ok && rand.Float64() < 0.12 {
+		return s, "mcat_constants"
+	}
 	// 10% chance: value-derived mutations (reverse, null byte) that don't fit a category.
 	if rand.Float64() < 0.10 {
 		misc := []string{reverse(v), v + "\x00"}
@@ -312,6 +318,12 @@ func mutateInt(v string, hint *Segment) string {
 	// Top-20+ #21: blend in integer literals harvested from the target's own
 	// comparison IL (e.g. a hardcoded `if (id == 8675309)` no schema declares).
 	if n, ok := cmplogPool.sampleInt(); ok {
+		cands = append(cands, int(n), int(n)-1, int(n)+1)
+	}
+	// Top-20+ #22: blend in integer literals harvested statically from the target's
+	// own IL at instrument time (e.g. a hardcoded `if (retries == 7)` no schema
+	// declares) — same rationale as CmpLog above, observed at build time instead.
+	if n, ok := constantsPool.sampleInt(); ok {
 		cands = append(cands, int(n), int(n)-1, int(n)+1)
 	}
 	return strconv.Itoa(cands[rand.Intn(len(cands))])
