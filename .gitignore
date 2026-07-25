@@ -102,6 +102,7 @@ simplcommerce_prep/
 simplcommerce/
 nopCommerce/
 bitwarden_src/
+bitwarden_scratch*/
 esh/
 
 # NOTE: examples/ is intentionally NOT ignored -- it holds small, hand-written,

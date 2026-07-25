@@ -1,259 +1,347 @@
 # Bitwarden Fuzzing Runbook (UpsideFuzz)
 
-End-to-end procedure to stand up an instrumented Bitwarden and run the fuzzer,
-including every gotcha discovered during setup. **Work in the existing
-`bitwarden_prep/` directory** — it is the correctly-wired instrumented copy.
+End-to-end procedure to stand up a **fresh** instrumented Bitwarden and run the fuzzer
+against it, including every gotcha found running this exact procedure start-to-finish on
+2026-07-25. This version supersedes earlier revisions of this file: it switches from the
+project's old custom `examples/bitwarden/get_apikey.py`/`populate_data.py` scripts to
+Bitwarden's own official **`util/SeederApi`** data-seeding tool, which produces properly
+encrypted test data (real Rust-SDK crypto, not hand-rolled) and is verified working
+end-to-end below.
 
-> **No `bitwarden_prep/` yet, or want a guaranteed-fresh setup?** Use
-> [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md) instead — it walks through cloning,
-> instrumenting, and standing everything up from scratch, with the same current commands.
-> Come back to *this* runbook once you have a working checkout and want to iterate,
-> re-run, or troubleshoot without redoing setup from zero.
-
-> **Note on regenerating:** `fuzz-prep-multi.py --src ./bitwarden_src --out ./bitwarden_prep --main src/Api` regenerates cleanly with **no `--exclude-namespaces` needed** — re-verified 2026-07-22 end-to-end from a fresh `bitwarden/server` clone. Two things changed since this runbook was first written: (1) hook-mode (`--inject-mode hook`, the default) binds the SHM pointer via `DOTNET_STARTUP_HOOKS` *before* `Main` runs, which eliminates the `AccessViolationException` class of failure that used to require excluding `Bit.Core.Utilities` — that flag is now legacy/optional, not required; (2) since no root namespace in Bitwarden's own code (`Bit.*`) collides with the hardcoded framework-prefix denylist, the tool now auto-selects `--instrument-all-user-code` over the namespace-allowlist path, which is strictly more complete (no `BUSINESS_PATTERNS`-naming-convention gaps — confirmed `skipped_no_match=0` on every instrumented DLL, vs. hundreds per DLL under the old allowlist path). The script only generates a basic single-service `docker-compose` file; for the full Bitwarden stack (MSSQL, Identity, Migrator) you still need a hand-written compose — see `docker-compose.instrumented.yml` in `bitwarden_prep/`, or the equivalent in [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md).
->
-> Also note: current upstream Bitwarden (`src/Api/Dockerfile`) publishes as a self-contained single-file bundle (`/p:PublishSingleFile=true`), which packs every managed DLL into one native executable with nothing left on disk for SharpFuzz/Cecil to rewrite. `fuzz-prep-multi.py` now detects and strips this automatically for the instrumented build variant (prints `Detected PublishSingleFile=true — disabled...`) — the target's own release Dockerfile is not touched.
-
-> **Grammar compilation (2026-07-23):** RESTler has been retired (Top-20 #9/#10) —
-> `compile-grammar.sh` now runs `grammarc/` (first-party OpenAPI parser) + `analyzer/`
-> (real `Microsoft.CodeAnalysis.CSharp` syntax-tree analyzer), no Docker involved in this
-> step at all. Re-verified end-to-end against a fresh `bitwarden_src` clone: 3,864 `.cs`
-> files parsed in the analyzer, 599 templates generated (matching the old RESTler-based
-> grammar's count exactly), 0 skipped, 284 of 595 operations gained real type/property-scoped
-> C# constraints — all in ~5 seconds. See Section 4 below for the exact command.
-
-> **Fuzzer engine fixes (2026-07-23):** a full from-scratch rerun this session found and
-> fixed two real bugs in the Go engine (not in Bitwarden): a path-quoting leak
-> (`grammarc/body_serializer.py` was rendering string-typed path/query/header parameters
-> with literal `"` characters, e.g. `/organizations/"CIP-0042"/delete` — guaranteed-
-> malformed URLs, pure noise) and a malformed-bearer-token leak (`worker.go` left the
-> grammar's literal `Bearer TOKEN` placeholder on unauthenticated probes and the `guest`
-> identity instead of removing it, so ~16-26% of traffic hit
-> `SecurityTokenMalformedException` server-side instead of a clean 401). Both fixed; `git
-> pull` before your next run if you're on an older checkout. See `ARCHITECTURE_REVIEW.md`'s
-> Inconsistencies section for the full writeups.
-
-All commands below are run from `bitwarden_prep/` unless noted. `grammars/`, `void/`,
-`compile-grammar.sh` live in the **repo root** (one level up).
+> **Why this file keeps needing gotcha updates**: Bitwarden's `server` repo moves fast —
+> this run's fresh clone had moved from **.NET 8 to .NET 10** and changed its Swagger
+> route (`/swagger/v1/swagger.json` → `/specs/{documentName}/swagger.json`) since this
+> project's last Bitwarden run, neither of which was announced anywhere obvious. **Do not
+> assume anything below is still true without re-checking the two things called out in
+> Step 1** — that single check would have caught both changes immediately.
 
 ---
 
 ## 0. Prerequisites
 
 - Docker Desktop (allocate **≥ 4 GB** RAM — SQL Server needs ~2 GB, more under emulation).
-- .NET SDK 8/10, Python 3, `curl`, `jq` (optional).
-- On **Apple Silicon**: the MSSQL image runs under x86 emulation — slower startup and lower throughput are expected.
+- .NET SDK (whatever `global.json` in the fresh clone specifies — see Step 1), Python 3, `curl`.
+- On **Apple Silicon**: the MSSQL image runs under x86 emulation — slower startup and lower throughput are expected. `util/SeederApi`'s Rust build runs **natively** (arm64) unless you force `platform: linux/amd64` — see the troubleshooting table if you do.
 
 ---
 
-## 1. Bring up the stand (correct order matters)
+## 1. Fresh checkout — check these two things before anything else
 
 ```bash
-cd bitwarden_prep
-
-# 1a. Database first
-docker compose -f docker-compose.instrumented.yml up -d mssql
-watch docker compose -f docker-compose.instrumented.yml ps      # wait for mssql = healthy
-
-# 1b. Run migrations — CREATES the vault_fuzz database (skipping this = "Cannot open database" errors)
-docker compose -f docker-compose.instrumented.yml up --build migrator
-docker compose -f docker-compose.instrumented.yml logs migrator | tail
-
-# 1c. API + identity
-docker compose -f docker-compose.instrumented.yml up -d --build identity api
-docker compose -f docker-compose.instrumented.yml logs -f api    # confirm no startup crash; Ctrl-C
+git clone https://github.com/bitwarden/server.git bitwarden_fresh
+cat bitwarden_fresh/global.json                        # <- SDK version
+grep -n "TargetFramework" bitwarden_fresh/Directory.Build.props   # <- TFM (e.g. net10.0)
+grep -n "RouteTemplate\|UseSwagger(" bitwarden_fresh/src/Api/Startup.cs  # <- swagger route
 ```
 
-**mssql stuck `(unhealthy)`?** Under Apple Silicon emulation SQL Server can take
-minutes to boot. The healthcheck already has `start_period: 240s`. Verify the DB is
-actually alive:
+If the TFM differs from what you expect, the Docker base image tags
+(`mcr.microsoft.com/dotnet/sdk:X.0`) in the generated Dockerfile will already be correct
+(`fuzz-prep-multi.py` reads the TFM from the project itself) — you don't need to do
+anything except **not be surprised** when it isn't net8. If the swagger `RouteTemplate`
+differs from `specs/{documentName}/swagger.json`, adjust Step 5's `curl` accordingly —
+grep the actual value rather than trusting this doc.
 
 ```bash
-docker exec bitwarden_prep-mssql-1 /opt/mssql-tools18/bin/sqlcmd \
-  -S localhost -U SA -P "FuzzP@ssw0rd123!" -Q "SELECT 1" -C -b
+python3 fuzz-prep-multi.py \
+  --src ./bitwarden_fresh \
+  --out ./bitwarden_fresh_prep \
+  --main Api \
+  --inject-mode hook
 ```
 
-If `SELECT 1` returns `1`, it is just timing — wait for healthy. If it errors with
-`Insufficient memory`, raise Docker Desktop RAM to ≥ 4 GB.
+Verified 2026-07-25 against a fresh clone (.NET 10): 22 projects instrumented,
+`--instrument-all-user-code` auto-selected (no `Bit.*` namespace collides with the
+framework denylist), `--cmplog` appended automatically (hook mode only).
 
 ---
 
-## 2. Verify coverage (mandatory — catches silently-broken instrumentation)
+## 2. Fix the generated compose file (same known bug, every time)
 
-```bash
-chmod +x verify_coverage.sh && ./verify_coverage.sh
-# → OK: coverage is active (edges=N)
+`fuzz-prep-multi.py` finds `src/Api/Dockerfile`, adapts it in place, but — when no
+original compose file exists in the repo (true for a stock Bitwarden checkout) — **generates
+a compose file that references a root-level `Dockerfile` that doesn't exist.** The real
+one lives at `src/Api/Dockerfile`. This is a real, still-unfixed bug in the tool
+(`fuzz-prep-multi.py`'s compose-generation path); the workaround is to hand-write the
+compose file. Use this as a template — it's the exact one verified working 2026-07-25,
+with MSSQL, migrator, API, Identity, and the SeederApi data tool:
+
+```yaml
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "FuzzP@ssw0rd123!"
+      MSSQL_PID: Developer
+    volumes:
+      - mssql_data:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "FuzzP@ssw0rd123!" -Q "SELECT 1" -C -b
+      interval: 10s
+      timeout: 15s
+      retries: 20
+      start_period: 240s
+
+  # util/MsSqlMigratorUtility's own Dockerfile ENTRYPOINT reads MSSQL_CONN_STRING (not
+  # globalSettings__sqlServer__connectionString, which api/identity use instead).
+  migrator:
+    build: { context: ., dockerfile: util/MsSqlMigratorUtility/Dockerfile }
+    depends_on: { mssql: { condition: service_healthy } }
+    environment:
+      MSSQL_CONN_STRING: "Server=mssql;Database=vault_fuzz;User Id=SA;Password=FuzzP@ssw0rd123!;Encrypt=True;TrustServerCertificate=True"
+
+  api:
+    build: { context: ., dockerfile: src/Api/Dockerfile }
+    ports: ["4100:5000"]
+    depends_on:
+      mssql: { condition: service_healthy }
+      migrator: { condition: service_completed_successfully }
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:5000
+      globalSettings__selfHosted: "true"
+      globalSettings__disableUserRegistration: "false"
+      globalSettings__sqlServer__connectionString: "Server=mssql;Database=vault_fuzz;User Id=SA;Password=FuzzP@ssw0rd123!;Encrypt=True;TrustServerCertificate=True"
+      globalSettings__installation__id: "b4545580-0a88-4682-9653-af8e00e84b80"
+      globalSettings__installation__key: "00000000000000000000000000000000"
+      globalSettings__baseServiceUri__vault: "http://localhost:4100"
+      globalSettings__baseServiceUri__api: "http://localhost:4100"
+      globalSettings__baseServiceUri__identity: "http://identity:5000"
+      globalSettings__baseServiceUri__internalIdentity: "http://identity:5000"
+      globalSettings__identityServer__certificateThumbprint: ""
+      globalSettings__dataProtection__certificateThumbprint: ""
+      # AddDeveloperSigningCredential writes signingkey.jwk here; defaults to a literal
+      # unwritable /dev path. Point it at the mounted volume instead.
+      globalSettings__developmentDirectory: "/etc/bitwarden/core"
+      globalSettings__mail__smtp__host: "localhost"
+      globalSettings__mail__smtp__port: "25"
+      globalSettings__enableEmailVerification: "false"
+      globalSettings__enableNewDeviceVerification: "false"
+    volumes:
+      - /dev/shm:/dev/shm
+      - coverage_shm:/coverage_shm
+      - core_data:/etc/bitwarden/core
+
+  identity:
+    build: { context: ., dockerfile: src/Identity/Dockerfile }   # ORIGINAL, uninstrumented
+    ports: ["33756:5000"]
+    depends_on:
+      mssql: { condition: service_healthy }
+      migrator: { condition: service_completed_successfully }
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:5000
+      globalSettings__selfHosted: "true"
+      globalSettings__sqlServer__connectionString: "Server=mssql;Database=vault_fuzz;User Id=SA;Password=FuzzP@ssw0rd123!;Encrypt=True;TrustServerCertificate=True"
+      globalSettings__installation__id: "b4545580-0a88-4682-9653-af8e00e84b80"
+      globalSettings__installation__key: "00000000000000000000000000000000"
+      globalSettings__baseServiceUri__vault: "http://localhost:4100"
+      globalSettings__baseServiceUri__api: "http://api:5000"
+      globalSettings__baseServiceUri__identity: "http://localhost:33756"
+      globalSettings__baseServiceUri__internalIdentity: "http://identity:5000"
+      globalSettings__identityServer__certificateThumbprint: ""
+      globalSettings__dataProtection__certificateThumbprint: ""
+      globalSettings__developmentDirectory: "/etc/bitwarden/core"
+      globalSettings__mail__smtp__host: "localhost"
+      globalSettings__mail__smtp__port: "25"
+      globalSettings__enableEmailVerification: "false"
+      globalSettings__enableNewDeviceVerification: "false"
+    volumes: [ "core_data:/etc/bitwarden/core" ]
+
+  # Bitwarden's own data-seeding tool (util/SeederApi) -- see Step 4. Needs no --platform
+  # override: let it build natively for your Docker host's arch (see troubleshooting for
+  # why forcing amd64 on an arm64 host does NOT fix the Rust native-library gotcha below).
+  seeder:
+    build: { context: ., dockerfile: util/SeederApi/Dockerfile }
+    ports: ["4300:5000"]
+    depends_on:
+      mssql: { condition: service_healthy }
+      migrator: { condition: service_completed_successfully }
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:5000
+      globalSettings__selfHosted: "true"
+      globalSettings__sqlServer__connectionString: "Server=mssql;Database=vault_fuzz;User Id=SA;Password=FuzzP@ssw0rd123!;Encrypt=True;TrustServerCertificate=True"
+      globalSettings__installation__id: "b4545580-0a88-4682-9653-af8e00e84b80"
+      globalSettings__installation__key: "00000000000000000000000000000000"
+      globalSettings__developmentDirectory: "/etc/bitwarden/core"
+      globalSettings__testPlayIdTrackingEnabled: "true"
+      seederSettings__Username: "fuzzadmin"
+      seederSettings__Password: "FuzzSeederP@ss123!"
+    volumes: [ "core_data:/etc/bitwarden/core" ]
+
+volumes:
+  mssql_data:
+  core_data:
+  coverage_shm: { driver: local, driver_opts: { type: tmpfs, device: tmpfs, o: size=4m } }
 ```
 
-The reliable signal is `/shm/coverage` (edges > 0). A missing per-response
-`X-Coverage-*` header on a fast endpoint like `/alive` is normal (ASP.NET starts the
-response before the middleware's finally) — the fuzzer falls back to SHM polling.
-
-Manual equivalent:
-```bash
-curl -s -X POST http://localhost:4000/shm/create
-curl -s http://localhost:4000/shm/coverage      # {"edges":N,...}
-```
-
-If `edges=0`: check the api build log for `[instrumentor] Done: instrumented=0`, then
-rebuild with `docker compose ... build --no-cache api`.
-
----
-
-## 3. Create two users + auth file (needed for real BOLA)
+**Before building `seeder`**, apply the one-line fix in the troubleshooting table below
+(`CARGO_TARGET_DIR` / `linux-arm64`) — building it unmodified will produce an image that
+fails at the first API call with `Unable to load shared library ... libsdk.so`.
 
 ```bash
-: > fuzzer.env                                   # drop stale creds (avoids a 401-spamming "default" identity)
-python3 ../examples/bitwarden/make_bola_identities.py  # user-a, user-b, guest -> auth.identities.json
-python3 ../examples/bitwarden/populate_data.py --auth-file auth.identities.json
-```
-
-BOLA needs **two distinct authenticated users** plus the guest. Populating data means
-responses aren't empty — without real objects the BOLA oracle produces false positives
-on identical empty bodies.
-
----
-
-## 4. Compile the grammar (only if `grammars/bitwarden/` lacks it)
-
-RESTler is retired (`grammarc/` + `analyzer/` — Top-20 #9/#10) — one command, no Docker,
-writes `templates.export.json` + `dict.json` directly:
-
-```bash
-# Need: ../grammars/bitwarden/{templates.export.json,dict.json}
-curl -s http://localhost:4000/specs/internal/swagger.json -o swagger.json
-python3 ../examples/bitwarden/sanitize_swagger.py swagger.json   # still needed: grammarc/oas.py doesn't yet
-                                            # decompose deepObject/object-shaped query params
-../compile-grammar.sh swagger.json --dict ../grammars/bitwarden/dict.json --src ./src --out ../grammars/bitwarden
-
-ls -la ../grammars/bitwarden/                    # templates.export.json, dict.json
-```
-
-Verified 2026-07-23 against a fresh `bitwarden_src` clone: `operations=595 templates=599
-skipped=0 multipart_endpoints=4 roslyn_matched_types=284` — 599 templates, matching the
-old RESTler-generated grammar's count exactly, in ~5 seconds with no Docker involved.
-
----
-
-## 5. Run the fuzzer — two modes
-
-Same two options as [QUICKSTART_BITWARDEN.md Step 8](QUICKSTART_BITWARDEN.md#step-8-run-the-fuzzer);
-repeated here with paths adjusted for working inside `bitwarden_prep/` against an
-already-running stand. Pick one — you don't need both.
-
-### Mode A — Host mode (no image build, HTTP coverage)
-
-Fastest to iterate with: no Docker image to rebuild when you change the Go engine.
-
-```bash
-( cd ../void/go && go build -o /tmp/smartfuzzergo . )
-
-TARGET_HOST=http://localhost:4000 SHM_HOST=http://localhost:4000 \
-  /tmp/smartfuzzergo \
-  -grammar ../grammars/bitwarden -profile security \
-  -auth-file auth.identities.json \
-  -skip-endpoint-on-500 \
-  -time-budget 20
-```
-
-### Mode B — Docker sidecar (direct-shm, fastest coverage)
-
-```bash
-# Build ONLY the fuzzer image (void engine) — does not rebuild Bitwarden
-docker build -t void-fuzzer -f ../void/Dockerfile.go ../void/
-```
-
-**Run with WebUI (browser dashboard at http://localhost:13377):**
-
-```bash
-docker run --rm --network bitwarden_prep_default \
-  -p 13377:13377 \
-  -v bitwarden_prep_coverage_shm:/coverage_shm \
-  -v "$PWD/../grammars/bitwarden:/grammar:ro" \
-  -v "$PWD/auth.identities.json:/auth/auth.identities.json:ro" \
-  void-fuzzer \
-  -grammar /grammar -profile security \
-  -auth-file /auth/auth.identities.json \
-  -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode file \
-  -skip-endpoint-on-500 \
-  -web-ui -web-ui-port 13377 -no-ui -time-budget 20
-```
-
-**Run with terminal dashboard** (drop `-p`/`-web-ui`, add `-it`):
-
-```bash
-docker run --rm -it --network bitwarden_prep_default \
-  -v bitwarden_prep_coverage_shm:/coverage_shm \
-  -v "$PWD/../grammars/bitwarden:/grammar:ro" \
-  -v "$PWD/auth.identities.json:/auth/auth.identities.json:ro" \
-  void-fuzzer \
-  -grammar /grammar -profile security \
-  -auth-file /auth/auth.identities.json \
-  -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode file \
-  -skip-endpoint-on-500 \
-  -time-budget 20
-```
-
-> Network/volume names follow Docker Compose's `<project-dir>_<resource>` convention —
-> adjust `bitwarden_prep_default`/`bitwarden_prep_coverage_shm` if your directory has a
-> different name (`docker network ls` / `docker volume ls` to check).
-
-Both modes: `-profile security` enables the oracles (BOLA/auth-bypass/mass-assign/injection)
-+ multi-identity + guest. To push raw throughput for a test: add `-concurrency 32
--max-concurrency 128`.
-
----
-
-## 6. Results
-
-```bash
-ls -t ../crashes/unique-crashes-*.jsonl | head -1
-```
-
-What to look for in `unique-crashes-*.jsonl` / the final report:
-- `distinct_root_causes` + `root_cause_clusters` — many raw signatures collapsed to a few real bugs.
-- records with `"access_control": true`, `origin_identity` → `shadow_identity` — BOLA / auth-bypass.
-- `mass_assignment_privileged_field_accepted` — mass assignment.
-- classifications: `likely_vuln[_high]` (real exploitation signal) vs `confirmed_unhandled_exception` (robustness 500) vs `target_misconfiguration` (excluded) vs `needs_review`.
-
----
-
-## 7. Iterating on the engine only
-
-When you change Go code, rebuild just the fuzzer — never the stand:
-
-```bash
-# locally first (no Go toolchain in the sandbox):
-( cd ../void/go && go test ./... )
-# then:
-docker compose -f docker-compose.instrumented.yml build smartfuzzer
-docker compose -f docker-compose.instrumented.yml --profile fuzz run --rm --no-deps smartfuzzer <flags>
+docker compose -f docker-compose.instrumented.yml build
+docker compose -f docker-compose.instrumented.yml up -d
 ```
 
 ---
 
-## 8. The same thing, via the `upsidefuzz` CLI
-
-Sections 2, 4, and 5's host-mode invocation map onto CLI subcommands (from the repo root,
-one level up from `bitwarden_prep/`) — the multi-stage bring-up in §1 stays manual (mssql
-healthcheck → migrator → api/identity isn't representable by a single CLI call), and §3's
-auth-file creation script stays manual too:
+## 3. Verify coverage + all services healthy
 
 ```bash
-# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
-upsidefuzz verify --base http://localhost:4000 --probe /api/accounts/profile
-
-upsidefuzz grammar bitwarden_prep/swagger.json --src ./bitwarden_src --out grammars/bitwarden
-
-export $(cat bitwarden_prep/fuzzer.env | xargs)   # loads AUTH_TOKEN, if you're using single-auth
-upsidefuzz fuzz --grammar grammars/bitwarden --target http://localhost:4000 \
-  --profile security --skip-endpoint-on-500 --time-budget 15 \
-  --auth-file bitwarden_prep/auth.identities.json   # if you built one in §3
+curl -s http://localhost:4100/shm/health   # instrumented_types > 0, shm_bound: true
+curl -s http://localhost:4100/shm/cmplog | head -c 200   # non-empty once real traffic has run
+curl -s http://localhost:4300/alive        # seeder up
+docker compose -f docker-compose.instrumented.yml ps    # everything "healthy" except migrator ("Exited (0)" is correct -- it's a one-shot job)
 ```
 
-Full walkthrough, including the fresh-clone setup steps and the Docker-sidecar (direct-shm)
-mode this CLI doesn't yet cover: [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli).
-Full subcommand reference: [docs/CLI.md](docs/CLI.md).
+If `edges=0` on `/shm/coverage`: check the `api` build log for
+`[instrumentor] Done: instrumented=0`, then `docker compose build --no-cache api`.
+
+---
+
+## 4. Populate data — users, an organization, vault items (official tool, real crypto)
+
+Bitwarden ships its own seeding API for exactly this (`util/SeederApi` — not previously
+used by this project; the old `examples/bitwarden/populate_data.py` approach still
+exists but wasn't re-verified this run, prefer this one). It needs HTTP Basic Auth
+(`seederSettings__Username`/`Password` from the compose file above) and, for
+`/connect/token` calls afterward, a `Bitwarden-Client-Version` header — Identity rejects
+requests without one (`version_header_missing`).
+
+```python
+# populate_data.py — save next to your compose file and run: python3 populate_data.py
+import base64, json, urllib.error, urllib.parse, urllib.request
+
+SEEDER, IDENTITY, PLAY_ID = "http://localhost:4300", "http://localhost:33756", "fuzz-run"
+AUTH = "Basic " + base64.b64encode(b"fuzzadmin:FuzzSeederP@ss123!").decode()
+
+def post_json(url, body, headers=None):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items(): req.add_header(k, v)
+    with urllib.request.urlopen(req, timeout=30) as r: return json.loads(r.read())
+
+def post_form(url, fields):
+    data = "&".join(f"{k}={urllib.parse.quote(str(v))}" for k, v in fields.items())
+    req = urllib.request.Request(url, data=data.encode(), method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    req.add_header("Bitwarden-Client-Version", "2026.7.1")   # required, or 400 version_header_missing
+    with urllib.request.urlopen(req, timeout=30) as r: return json.loads(r.read())
+
+def seed(template, args):
+    return post_json(f"{SEEDER}/seed", {"template": template, "arguments": args},
+                      {"X-Play-Id": PLAY_ID, "Authorization": AUTH})["result"]
+
+user = seed("SingleUserScene", {"email": "fuzzuser0@example.com", "password": "FuzzTestPassw0rd!", "emailVerified": True})
+org = seed("SingleOrganizationScene", {"ownerUserId": user["userId"], "planType": 0, "name": "FuzzCorp", "domain": "fuzzcorp.example.com", "seats": 5})
+folder = seed("UserFolderScene", {"userId": user["userId"], "userKeyB64": user["decryptedKeyB64"], "folderName": "Work Logins"})
+cipher = seed("UserLoginCipherScene", {"userId": user["userId"], "userKeyB64": user["decryptedKeyB64"], "name": "Example Bank", "username": "u@example.com", "password": "x", "uri": "https://bank.example.com", "folderId": folder["folderId"]})
+
+# API-key login (client_credentials) -- no master-password KDF to replicate client-side.
+tok = post_form(f"{IDENTITY}/connect/token", {
+    "grant_type": "client_credentials", "client_id": f"user.{user['userId']}",
+    "client_secret": user["apiKey"], "scope": "api",
+    "deviceType": "21", "deviceIdentifier": "upsidefuzz", "deviceName": "upsidefuzz",
+})
+print("JWT:", tok["access_token"][:40], "...")
+```
+
+Other useful scenes: `UserFolderScene`, `OrganizationCollectionScene`,
+`OrganizationCollectionScene`. Full request/response shapes:
+`util/SeederApi/README.md` and `util/Seeder/Scenes/*.cs` in the fresh checkout — read the
+`Request` class directly, it's the authoritative contract.
+
+**Clean up between runs** (Play-ID tracked entities): `curl -X DELETE
+http://localhost:4300/seed/fuzz-run -u fuzzadmin:'FuzzSeederP@ss123!'`
+
+---
+
+## 5. Compile the grammar
+
+**Check the swagger route first** (see Step 1) — this run's fresh clone used
+`/specs/internal/swagger.json`, not `/swagger/v1/swagger.json`:
+
+```bash
+curl -s http://localhost:4100/specs/internal/swagger.json -o swagger.json
+./compile-grammar.sh swagger.json --src ./bitwarden_fresh --out grammars/bitwarden
+```
+
+Verified 2026-07-25: `operations=599 templates=603 skipped=0 multipart_endpoints=4
+roslyn_matched_types=286 dict_keys=855`.
+
+**Add real fuzzing values** — the first compile also writes `grammars/bitwarden/dict.custom.json`,
+a starter file that's merged into `dict.json` on every future compile and never
+overwritten (see `INSTRUCTIONS.md` §10). Fill it in with the IDs/keys Step 4 gave you:
+
+```python
+import json
+custom = json.load(open("grammars/bitwarden/dict.custom.json"))
+del custom["exampleFieldName"]
+custom.update({
+    "userid": [user["userId"]], "email": [user["email"]],
+    "organizationid": [org["organizationId"]], "cipherid": [cipher["cipherId"]],
+    "apikey": [user["apiKey"]], "clientid": [f"user.{user['userId']}"],
+})
+json.dump(custom, open("grammars/bitwarden/dict.custom.json", "w"), indent=2)
+```
+
+Re-run `./compile-grammar.sh` once more to merge it — you'll see `[grammarc] Custom
+dictionary merged: .../dict.custom.json` instead of `Created starter custom dictionary`.
+
+---
+
+## 6. Build the auth identities file
+
+```python
+import json
+identities = {"version": "1", "identities": [
+    {"name": "org-owner", "jwt": tok["access_token"], "weight": 2.0},
+    {"name": "guest", "weight": 0.3},
+]}
+json.dump(identities, open("auth.identities.json", "w"), indent=2)
+```
+
+Seed 2-3 users (Step 4) for real cross-identity BOLA coverage — one identity alone can't
+exercise the access-control oracles at all.
+
+---
+
+## 7. Run the fuzzer
+
+```bash
+( cd void/go && go build -o void . )
+
+TARGET_HOST=http://localhost:4100 SHM_HOST=http://localhost:4100 \
+./void/go/void \
+  -grammar grammars/bitwarden -profile security \
+  -auth-file auth.identities.json -identity-mode weighted \
+  -seed 42 -time-budget 60
+```
+
+For direct-SHM mode (faster coverage reads, needs the engine on the same Docker network
+with the `coverage_shm` volume mounted) see `docs/CLI.md` or the Docker-sidecar examples
+in `QUICKSTART_BITWARDEN.md` — HTTP mode above is simpler to get running first and was
+what this run actually used for the full hour without issue.
+
+---
+
+## 8. Results & triage
+
+```bash
+python3 -c "
+import json
+d = json.load(open('summary.json'))['triage_summary'] if False else __import__('json').load(open('crashes/summary-*.json'.replace('*','LATEST')))
+"
+# simpler: just look at the run's own -summary-file output directly
+```
+
+- **`distinct_root_causes` in the summary is the real bug count** — not the raw unique-crash line count. A run this size can produce thousands of raw signatures that collapse to a few dozen real clusters (one campaign saw 2,054 of 2,641 raw signatures come from a single framework-internal routing assertion — see `benchmarks/reports/BITWARDEN_1HOUR_REPORT.md` for the full breakdown of what that looks like in practice).
+- `root_cause_clusters` in the summary JSON gives you the label + representative endpoint + hit count for each real cluster — read that, not the raw crash file, when triaging.
+- `"access_control": true` + `bola_identical_cross_identity_response` (strong) vs. `bola_suspected_cross_identity_access` + `needs_manual_verification` (weaker) — check the actual leaked fields before treating either as confirmed; some flagged endpoints (e.g. public-key lookups) are cross-identity-readable *by design*.
+- `sqli_time_based` on a 400/rejected response with `repro: null` is almost always concurrency-contention noise, not real SQLi — check `repro.stable_reproducible` before trusting it.
 
 ---
 
@@ -261,15 +349,33 @@ Full subcommand reference: [docs/CLI.md](docs/CLI.md).
 
 | Symptom | Cause / Fix |
 |---|---|
-| `Cannot open database "vault_fuzz" ... Login failed` (in make_bola_identities / api) | Migrations didn't run. Bring up `migrator` (step 1b) before api. |
-| `mssql ... (unhealthy)` forever | Slow emulated boot. `start_period: 240s` is set; wait, verify with `SELECT 1`, raise Docker RAM to ≥ 4 GB. |
-| `System.AccessViolationException` at `Bit.Api.Program+<>c..cctor` on api start | Was a real issue under `--inject-mode source` (or `--instrument-all-user-code` combined with source injection) — static-init types could execute before SHM was bound. **Fixed by hook mode** (the default since this was written): `DOTNET_STARTUP_HOOKS` binds the SHM pointer before `Main` runs at all, so this no longer happens even with `Bit.Core.Utilities` fully instrumented via `--instrument-all-user-code` — re-verified 2026-07-22, no `--exclude-namespaces` needed. If you still hit this, confirm the image was built with `--inject-mode hook` (the default; check for `DOTNET_STARTUP_HOOKS=/coverage/UpsideFuzz.Coverage.dll` in the Dockerfile) rather than a stale `--inject-mode source` image. |
-| `identity` crashes on start: `UnauthorizedAccessException`/`DirectoryNotFoundException` writing `/dev/signingkey.jwk` (or `/tmp/.../signingkey.jwk`) | Unrelated to instrumentation. `src/Identity/appsettings.Development.json` sets `developmentDirectory: "../../dev"`, a path meant for `dotnet run` from `src/Identity/` on a local checkout. Inside the container (`WORKDIR=/app`) it resolves to the literal `/dev`. With `ASPNETCORE_ENVIRONMENT=Development` set (as this runbook does), override it to a real writable path: add `globalSettings__developmentDirectory: "/tmp"` to the `identity` service's environment. |
-| *(historical, resolved by the #9 migration)* RESTler: `Cannot deserialize mutations dictionary ... Unexpected token: StartArray` | Was a `restler_custom_payload_uuid4_suffix` quirk in the old RESTler-based pipeline (values had to be single strings, not arrays). RESTler is retired as of 2026-07-23 (`grammarc/`) — this bug class is now structurally impossible, since `grammarc` never uses RESTler's dictionary format at all. Kept here as institutional memory of a real bug that was fixed. |
-| `verify_coverage.sh` FAIL: no X-Coverage headers | Expected on fast endpoints — check `/shm/coverage` edges instead (the script now does). |
-| Secrets Manager endpoints all 500 (`Unable to resolve service for type 'Bit.Commercial...'`) | Commercial SM DI is not wired in this build; not a Bitwarden bug. Tagged `target_misconfiguration` and excluded from the vuln count. `-skip-endpoint-on-500` stops the spam. |
-| ~100 req/s (lower than before) | Not a regression: with real auth + populated data, requests execute real DB logic (slow under emulated SQL) instead of failing fast on 500s. Deeper, not worse. |
-| Fuzzer exits immediately with `run failed: coverage instrumentation degraded: ...` | Added 2026-07-23 (Top-20 #4, `void/go/coverage.go::checkCoverageHealth`) — the engine sends a real warm-up probe at startup and refuses to run if the shared coverage bitmap doesn't gain any new edges, even if `/shm/health` reports `shm_bound=true`. This means instrumentation is genuinely broken (wrong image, stale build, or a namespace excluded via `--exclude-namespaces`) — re-run `verify-hook.sh` and fix the root cause rather than passing `-allow-degraded-coverage`, which would let the run complete while finding nothing. |
+| **New, 2026-07-25**: `docker-compose.instrumented.yml` build fails, or the compose file references a `Dockerfile` that doesn't exist at repo root | Known `fuzz-prep-multi.py` bug — see Step 2. Hand-write the compose file using the template above. |
+| **New, 2026-07-25**: `seeder` container: `Unable to load shared library '/app/runtimes/.../libsdk.so'` | Two stacked bugs in `util/SeederApi`/`util/RustSdk` (Bitwarden's own code, not this project's): (1) `util/SeederApi/Dockerfile` sets `CARGO_TARGET_DIR=/tmp/cargo_target`, which silently breaks `RustSdk.csproj`'s hardcoded `Content Include="./rust/target/release/libsdk*.so"` glob — **remove that `export CARGO_TARGET_DIR=...` line** from the Dockerfile. (2) `RustSdk.csproj` has `Content`/`Link` entries only for `linux-x64`/`osx-arm64`/`windows-x64` — no `linux-arm64`. On an arm64 Docker host (Apple Silicon), Rust always compiles for the *builder's* native arch (`--platform=$BUILDPLATFORM` in the Dockerfile, and `cargo build --release` in `RustSdk.csproj`'s `PreBuild` target never passes `--target`), so **forcing `platform: linux/amd64` in compose does NOT fix this** — it just makes the mismatch worse (x64 RID directory, arm64 binary inside it). The actual fix: change both `<Link>runtimes/linux-x64/native/libsdk.so</Link>` entries in `RustSdk.csproj` to `runtimes/linux-arm64/native/libsdk.so`, and build without a platform override. |
+| **New, 2026-07-25**: `POST /seed` → `401 Unauthorized` | `util/SeederApi` requires HTTP Basic Auth (`seederSettings__Username`/`Password` env vars) — not documented as required in its own README's curl examples. Add both env vars to the `seeder` service and pass `Authorization: Basic ...` on every request. |
+| **New, 2026-07-25**: `POST /connect/token` → `400 version_header_missing` | Identity now requires a `Bitwarden-Client-Version` header on token requests (didn't in earlier checkouts). Add `Bitwarden-Client-Version: 2026.7.1` (any plausible version string) to the request. |
+| **New, 2026-07-25**: `curl http://localhost:PORT/swagger/v1/swagger.json` → 404 | Route changed to `specs/{documentName}/swagger.json` (`src/Api/Startup.cs::app.UseSwagger`). Use `/specs/internal/swagger.json` (462 endpoints) or `/specs/public/swagger.json` (16, public API only). **Always grep `Startup.cs` for the real route on a fresh clone** — don't trust this table entry either, it's exactly the kind of thing that silently changes again. |
+| `Cannot open database "vault_fuzz" ... Login failed` | Migrations didn't run. Bring up `migrator` (part of the compose file above) before api/identity/seeder — it's a `depends_on: service_completed_successfully` dependency, so `docker compose up -d` handles ordering automatically as long as it's declared. |
+| `mssql ... (unhealthy)` forever | Slow emulated boot under Apple Silicon. `start_period: 240s` is set; wait, verify with `docker exec ... sqlcmd -Q "SELECT 1"`, raise Docker Desktop RAM to ≥ 4 GB if it errors with `Insufficient memory`. |
+| `identity` crashes on start: `UnauthorizedAccessException` writing `/dev/signingkey.jwk` | `developmentDirectory` defaults to a path that resolves to literal `/dev` inside the container. Set `globalSettings__developmentDirectory` to an already-mounted writable path (see compose template above) on **both** `api` and `identity`. |
+| `verify_coverage.sh` FAIL: no X-Coverage headers | Expected on fast endpoints — check `/shm/coverage` edges instead. |
+| Secrets Manager / Teams-integration endpoints all 500 (`Unable to resolve service for type ...`) | DI for that feature isn't wired in this build; not a Bitwarden bug. Triaged `target_misconfiguration` and excluded from the vuln count automatically. |
+| Fuzzer exits immediately with `run failed: coverage instrumentation degraded` | The engine sends a real warm-up probe at startup and refuses to run if the bitmap doesn't move (Top-20 #4). Re-run `verify_coverage.sh`/`/shm/health` and fix the root cause rather than passing `-allow-degraded-coverage`. |
 
 ---
 
+## Changelog (condensed — see git history for full detail)
+
+- **2026-07-25**: Full rewrite after a genuine fresh-clone-to-1-hour-fuzz-run
+  end-to-end pass. Switched to `util/SeederApi` for data population (was
+  `examples/bitwarden/populate_data.py`). Target moved .NET 8 → .NET 10. Swagger route
+  moved `/swagger/v1/swagger.json` → `/specs/{documentName}/swagger.json`. Found and
+  documented two real bugs in Bitwarden's own `util/SeederApi`/`util/RustSdk` build
+  config. Added the `dict.custom.json` workflow (new as of this same session — see
+  `INSTRUCTIONS.md` §10).
+- **2026-07-23**: RESTler retired (`grammarc/`+`analyzer/`, no Docker for grammar
+  compilation); two Go-engine bugs fixed (path-quoting leak, malformed-bearer-token
+  leak on unauthenticated probes); self-verifying fail-closed coverage health check
+  added (Top-20 #4).
+- **2026-07-22**: Hook-mode (`--inject-mode hook`, zero source edits) became the
+  default, eliminating the `AccessViolationException` class of failure that used to
+  require `--exclude-namespaces Bit.Core.Utilities`.

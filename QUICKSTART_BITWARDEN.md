@@ -2,6 +2,19 @@
 
 > Run the full coverage-guided fuzzing pipeline on **Bitwarden** (multi-service password manager backend) from scratch on any machine.
 
+> **⚠️ Steps 4-7 below (`get_apikey.py`/`populate_data.py`/`sanitize_swagger.py`) were not
+> re-verified on 2026-07-25's fresh-clone run** and may be stale — Bitwarden's `server`
+> repo had by then moved .NET 8 → .NET 10 and changed its Swagger route
+> (`/swagger/v1/swagger.json` → `/specs/{documentName}/swagger.json`) since the
+> 2026-07-23 pass this note used to describe. That 2026-07-25 run used a different,
+> now-preferred approach — Bitwarden's own official `util/SeederApi` tool for data
+> population instead of the custom scripts below, and an API-key (`client_credentials`)
+> login flow instead of `get_apikey.py`'s registration flow. **See
+> [BITWARDEN_FUZZ_RUNBOOK.md](BITWARDEN_FUZZ_RUNBOOK.md) Steps 1-6 for the current,
+> fully-verified procedure** (compose file, data population, dict/auth setup) before
+> following Steps 4-7 here. Steps 1-3 and 8-9 below (clone/instrument/build, run/results)
+> were not affected by the drift and remain accurate.
+
 > **Re-verified end-to-end from a completely fresh clone on 2026-07-23**: `git clone` → `fuzz-prep-multi.py` → `docker compose build --no-cache` → bring up → `verify-hook.sh` → `compile-grammar.sh` → fuzz, twice (once in each run mode below). Grammar output was byte-for-byte identical to prior runs (595 operations, 599 templates, 0 skipped). This pass also found and fixed two real fuzzer-engine bugs (a path-quoting leak and a malformed-auth-token leak on unauthenticated probes) — see `ARCHITECTURE_REVIEW.md`'s Inconsistencies section for the writeups. Every command below is exactly what was run, not aspirational.
 
 **→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md)**

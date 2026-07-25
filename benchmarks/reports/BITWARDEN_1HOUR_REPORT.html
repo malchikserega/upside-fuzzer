@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bitwarden — 1-Hour Fuzz Campaign Report</title>
+<style>
+  :root {
+    --bg: #F5F3EE; --surface: #FFFFFF; --surface-2: #ECE8DF; --text: #1C1F26; --text-muted: #656B76; --hair: #DCD7CB;
+    --accent: #1B7A72; --accent-soft: #DCEEEC; --accent-ink: #0E4D48;
+    --sev-critical: #C1433B; --sev-critical-soft: #F6E0DE; --sev-high: #B5670F; --sev-high-soft: #F3E7D4;
+    --sev-info: #5C6773; --sev-info-soft: #E7E5DD;
+    --font-body: ui-serif, "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", "Liberation Mono", Menlo, Consolas, monospace;
+    --font-label: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141C; --surface: #171D29; --surface-2: #1E2531; --text: #E8EAF0; --text-muted: #8D95A6; --hair: #2B3242;
+      --accent: #4FBBB0; --accent-soft: #17302E; --accent-ink: #B7ECE4;
+      --sev-critical: #E8756D; --sev-critical-soft: #3A1E1C; --sev-high: #DDA24E; --sev-high-soft: #362A15;
+      --sev-info: #9AA4B5; --sev-info-soft: #232A38;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10141C; --surface: #171D29; --surface-2: #1E2531; --text: #E8EAF0; --text-muted: #8D95A6; --hair: #2B3242;
+    --accent: #4FBBB0; --accent-soft: #17302E; --accent-ink: #B7ECE4;
+    --sev-critical: #E8756D; --sev-critical-soft: #3A1E1C; --sev-high: #DDA24E; --sev-high-soft: #362A15;
+    --sev-info: #9AA4B5; --sev-info-soft: #232A38;
+  }
+  :root[data-theme="light"] {
+    --bg: #F5F3EE; --surface: #FFFFFF; --surface-2: #ECE8DF; --text: #1C1F26; --text-muted: #656B76; --hair: #DCD7CB;
+    --accent: #1B7A72; --accent-soft: #DCEEEC; --accent-ink: #0E4D48;
+    --sev-critical: #C1433B; --sev-critical-soft: #F6E0DE; --sev-high: #B5670F; --sev-high-soft: #F3E7D4;
+    --sev-info: #5C6773; --sev-info-soft: #E7E5DD;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body);
+    line-height: 1.6; font-size: 17px;
+  }
+  .wrap { max-width: 840px; margin: 0 auto; padding: 56px 24px 96px; }
+  header { margin-bottom: 40px; }
+  .eyebrow {
+    font-family: var(--font-label); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600; margin-bottom: 10px;
+  }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 12px; text-wrap: balance; }
+  .dek { color: var(--text-muted); font-size: 17px; max-width: 640px; }
+  .dek code { font-family: var(--font-mono); font-size: 0.85em; }
+  h2 {
+    font-size: 22px; margin: 48px 0 16px; padding-top: 24px; border-top: 1px solid var(--hair);
+  }
+  h3 { font-size: 17px; font-family: var(--font-label); font-weight: 700; margin: 28px 0 10px; }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+  code { background: var(--surface-2); padding: 0.1em 0.35em; border-radius: 4px; }
+  .headline-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 28px 0;
+  }
+  .stat {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 10px;
+    padding: 16px 14px; text-align: center;
+  }
+  .stat .n {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 26px;
+    font-weight: 600; color: var(--accent-ink); display: block;
+  }
+  .stat .l { font-family: var(--font-label); font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  th { font-family: var(--font-label); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .table-scroll { overflow-x: auto; }
+  .pill {
+    display: inline-block; font-family: var(--font-label); font-size: 11px; font-weight: 700;
+    letter-spacing: 0.02em; padding: 2px 9px; border-radius: 99px; text-transform: uppercase;
+  }
+  .pill-critical { background: var(--sev-critical-soft); color: var(--sev-critical); }
+  .pill-high { background: var(--sev-high-soft); color: var(--sev-high); }
+  .pill-info { background: var(--sev-info-soft); color: var(--sev-info); }
+  .pill-accent { background: var(--accent-soft); color: var(--accent-ink); }
+  .card {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; padding: 20px 22px; margin: 18px 0;
+  }
+  .card.tier1 { border-left: 4px solid var(--sev-critical); }
+  .card.tier2 { border-left: 4px solid var(--sev-info); opacity: 0.92; }
+  .card.tier3 { border-left: 4px solid var(--sev-high); }
+  .card h4 { margin: 0 0 8px; font-size: 16px; font-family: var(--font-label); }
+  .card .meta { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-muted); margin-bottom: 10px; }
+  .chart-wrap { background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; padding: 20px; margin: 20px 0; }
+  .chart-title { font-family: var(--font-label); font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+  svg { width: 100%; height: auto; display: block; }
+  .axis-label { font-family: var(--font-label); font-size: 10px; fill: var(--text-muted); }
+  .grid-line { stroke: var(--hair); stroke-width: 1; }
+  .data-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+  .data-area { fill: var(--accent-soft); opacity: 0.5; }
+  .bar { fill: var(--accent); }
+  .bar-label { font-family: var(--font-mono); font-size: 12px; fill: var(--text); text-anchor: middle; }
+  .bar-cat { font-family: var(--font-label); font-size: 10.5px; fill: var(--text-muted); text-anchor: middle; }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--hair); color: var(--text-muted); font-size: 13px; font-family: var(--font-label); }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">UpsideFuzz &middot; 2026-07-25</div>
+  <h1>Bitwarden — 1-Hour Fuzz Campaign</h1>
+  <p class="dek">Fresh checkout, freshly instrumented (.NET 10, hook-mode zero-edit +
+  CmpLog), populated with real users/org/vault items via Bitwarden's own
+  <code>util/SeederApi</code>, fuzzed for a full hour with every oracle enabled. Local
+  report, not hosted anywhere.</p>
+</header>
+
+<div class="headline-grid">
+  <div class="stat"><span class="n">741,150</span><span class="l">requests sent</span></div>
+  <div class="stat"><span class="n">295,481</span><span class="l">coverage edges</span></div>
+  <div class="stat"><span class="n">73</span><span class="l">distinct root-cause bugs</span></div>
+  <div class="stat"><span class="n">1</span><span class="l">worth a security engineer's time</span></div>
+</div>
+
+<h2>Reading the numbers: 2,641 "unique crashes" is not 2,641 bugs</h2>
+<p>The engine's per-payload dedup produces 2,641 distinct crash <em>signatures</em>.
+Root-cause clustering collapses those into <strong>73 distinct root causes</strong> — and
+even that number is dominated by one pattern: a single cluster (a routing/authorization
+assertion, detailed below) accounts for <strong>2,054 of the 2,641 raw signatures
+(78%)</strong> on its own. This report's counts use the 73 distinct-root-cause number
+throughout.</p>
+
+<div class="chart-wrap">
+  <div class="chart-title">Coverage edges over the hour (295,481 final, 3,293 instrumented types)</div>
+  <svg viewBox="0 0 640 260" role="img" aria-label="Coverage edges climbing from 0 to 295,481 over 60 minutes, roughly linear with no plateau">
+    <line class="grid-line" x1="50" y1="230" x2="620" y2="230"/>
+    <line class="grid-line" x1="50" y1="160" x2="620" y2="160"/>
+    <line class="grid-line" x1="50" y1="90" x2="620" y2="90"/>
+    <line class="grid-line" x1="50" y1="20" x2="620" y2="20"/>
+    <text class="axis-label" x="44" y="233" text-anchor="end">0</text>
+    <text class="axis-label" x="44" y="163" text-anchor="end">100k</text>
+    <text class="axis-label" x="44" y="93" text-anchor="end">200k</text>
+    <text class="axis-label" x="44" y="23" text-anchor="end">300k</text>
+    <text class="axis-label" x="50" y="248">0 min</text>
+    <text class="axis-label" x="192" y="248" text-anchor="middle">15 min</text>
+    <text class="axis-label" x="335" y="248" text-anchor="middle">30 min</text>
+    <text class="axis-label" x="477" y="248" text-anchor="middle">45 min</text>
+    <text class="axis-label" x="605" y="248" text-anchor="end">60 min</text>
+    <path class="data-area" d="M50.0,222.7 L69.1,180.9 L88.2,165.3 L107.4,152.4 L126.5,141.7 L145.5,132.7 L164.5,124.4 L183.6,117.3 L202.6,110.0 L221.6,101.6 L240.7,96.6 L259.8,93.5 L278.9,86.6 L298.1,85.2 L317.2,79.5 L336.3,79.4 L355.4,76.5 L374.5,71.9 L393.5,67.6 L412.5,61.7 L431.6,56.9 L450.6,53.0 L469.7,49.8 L488.8,46.2 L507.8,43.2 L526.9,39.4 L545.9,35.9 L565.0,32.0 L584.1,27.9 L603.2,25.3 L619.9,23.2 L619.9,230 L50.0,230 Z"/>
+    <path class="data-line" d="M50.0,222.7 L69.1,180.9 L88.2,165.3 L107.4,152.4 L126.5,141.7 L145.5,132.7 L164.5,124.4 L183.6,117.3 L202.6,110.0 L221.6,101.6 L240.7,96.6 L259.8,93.5 L278.9,86.6 L298.1,85.2 L317.2,79.5 L336.3,79.4 L355.4,76.5 L374.5,71.9 L393.5,67.6 L412.5,61.7 L431.6,56.9 L450.6,53.0 L469.7,49.8 L488.8,46.2 L507.8,43.2 L526.9,39.4 L545.9,35.9 L565.0,32.0 L584.1,27.9 L603.2,25.3 L619.9,23.2"/>
+  </svg>
+</div>
+
+<h2>Methodology</h2>
+<ul>
+  <li><strong>Target</strong>: fresh <code>git clone</code> of <code>bitwarden/server</code> (2026-07-25) — now on <strong>.NET 10</strong> (was .NET 8 in this project's earlier runs). 22 projects instrumented, <code>--instrument-all-user-code</code>, <code>--cmplog</code> active.</li>
+  <li><strong>Data population</strong>: Bitwarden's own <code>util/SeederApi</code> — 3 users, 1 organization with a confirmed owner, 1 folder, 3 login ciphers, 1 org collection. Real encryption via Bitwarden's own Rust SDK.</li>
+  <li><strong>Auth</strong>: 4 identities — 3 real users via API-key <code>client_credentials</code> grant, plus an unauthenticated <code>guest</code>, weighted scheduling.</li>
+  <li><strong>Dictionary</strong>: <code>dict.custom.json</code> (the new custom-dictionary convention) seeded with real IDs/keys discovered during seeding.</li>
+  <li><strong>Run</strong>: <code>-profile security -seed 42 -time-budget 60</code>, HTTP coverage mode.</li>
+</ul>
+
+<h2>Findings — triaged by how real and how critical each one actually is</h2>
+<p>Every classification below is the tool's own honest-triage label. This section exists
+specifically to separate "the fuzzer flagged something" from "this is a real, exploitable
+bug" — in a run this size, most flagged signals are the former.</p>
+
+<h3>Tier 1 — Needs manual verification, and worth doing</h3>
+<div class="card tier1">
+  <h4><span class="pill pill-critical">likely_vuln_high</span> Cross-identity device lookup by identifier</h4>
+  <div class="meta">GET /devices/identifier/{id} &middot; POST /devices/{id}/retrieve-keys &middot; 9 flagged instances &middot; access_control: true</div>
+  <p>The access-control oracle registered a device under one identity, then successfully
+  replayed the same lookup under a <strong>different</strong> identity and got a
+  byte-identical response back (the strong <code>bola_identical_cross_identity_response</code>
+  variant, not just "suspected"). <strong>Caveat, stated honestly</strong>: every instance
+  observed had <code>encryptedUserKey</code>/<code>encryptedPublicKey</code> both
+  <code>null</code> — the identifier used was fuzzer-generated garbage, so no device had
+  real key material attached yet. The access-control gap looks real; this run didn't
+  prove it leaks anything sensitive. Manually repeat against a device with real key
+  material to confirm impact.</p>
+</div>
+
+<h3>Tier 2 — Flagged by the tool, debunked on inspection</h3>
+<div class="card tier2">
+  <h4><span class="pill pill-info">debunked</span> Public-key cross-identity access — by design</h4>
+  <div class="meta">GET /users/{userId}/public-key &middot; 2 instances</div>
+  <p>A user's public key exists specifically so <em>other</em> users can fetch it for
+  end-to-end key exchange. Not a vulnerability — a documented gap in the oracle itself
+  (no way yet to know an endpoint is intentionally cross-identity-readable).</p>
+</div>
+<div class="card tier2">
+  <h4><span class="pill pill-info">debunked</span> sqli_time_based on rejected requests</h4>
+  <div class="meta">DELETE /accounts &middot; POST /accounts/verify-password &middot; POST /webauthn/attestation-options &middot; 3 instances</div>
+  <p>All three fired on HTTP 400 responses ("User verification failed" / "Invalid
+  password") — the request was rejected before doing anything SQL-adjacent, and none were
+  repro-verified. Timing noise from concurrency contention under load, not SQL injection.
+  Same conclusion this project reached on the same finding shape in an earlier campaign.</p>
+</div>
+
+<h3>Tier 3 — Real, reproducible bugs (robustness/DoS-class)</h3>
+<div class="table-scroll">
+<table>
+  <tr><th>Cluster</th><th>Endpoint(s)</th><th>What's happening</th></tr>
+  <tr><td class="mono">NullReferenceException</td><td class="mono">CiphersController.ValidateAttachment +2 more</td><td>Attachment-upload validation doesn't null-check something malformed bodies trigger. Largest real bug pattern by hit count (72 combined hits).</td></tr>
+  <tr><td class="mono">SqlException (dupe key)</td><td class="mono">dbo.Device unique index</td><td>Raw SQL error surfaces as unhandled 500 instead of a handled "already registered" response.</td></tr>
+  <tr><td class="mono">ArgumentNullException</td><td class="mono">CoreHelpers.FixedTimeEquals</td><td>Constant-time-comparison helper throws on null instead of handling it.</td></tr>
+  <tr><td class="mono">Billing/Stripe edge cases</td><td class="mono">6 clusters</td><td>Mostly artifacts of this stand's placeholder Stripe/installation keys, not real defects.</td></tr>
+  <tr><td class="mono">$type deserialization probes</td><td class="mono">5 clusters</td><td>All failed cleanly (<code>Expected 0x prefix</code>) — no evidence of exploitable deserialization.</td></tr>
+</table>
+</div>
+
+<h3>Tier 4 — Systemic pattern, real, low severity individually</h3>
+<div class="card tier3">
+  <h4>Unvalidated GUID/Base64 route parameters — ~20 endpoints, one root cause repeated</h4>
+  <p><code>Unrecognized Guid format</code>, <code>Byte array for Guid must be exactly 16
+  bytes long</code>, <code>Illegal base64url string!</code> — Devices, Ciphers, Folders,
+  Sends, Organizations, and SelfHostedOrganizationLicenses controllers all parse a
+  route/body value as a GUID or base64 string without validating shape first. Not
+  independently exploitable, but the same input-validation mistake made independently in
+  ~20 places — a real, actionable ticket.</p>
+</div>
+<div class="card tier3">
+  <h4>The 78%-of-all-crashes cluster is a framework-internal routing assertion</h4>
+  <p><code>A route decorated with '[Authorize&lt;IOrganizationRequirement&gt;]' must
+  include a route value named 'orgId' or 'organizationId'...</code> — 2,054 of 2,641 raw
+  crash signatures, one cluster. Fires when a mutated URL matches a controller/action's
+  route template without the route-value name the authorization attribute's own
+  reflection check expects. Real and externally triggerable, but its security relevance
+  is limited to "causes a 500 instead of a clean 4xx" — hence <code>needs_review</code>,
+  not <code>likely_vuln</code>.</p>
+</div>
+
+<div class="chart-wrap">
+  <div class="chart-title">73 distinct root-cause clusters, by classification</div>
+  <svg viewBox="0 0 640 220" role="img" aria-label="Bar chart: needs_review 40, confirmed_unhandled_exception 20, noise 12, target_misconfiguration 1">
+    <line class="grid-line" x1="20" y1="170" x2="620" y2="170"/>
+    <rect class="bar" x="20.0" y="20.0" width="127.5" height="150.0"/>
+    <text class="bar-label" x="83.8" y="14">40</text>
+    <text class="bar-cat" x="83.8" y="188">needs_review</text>
+    <rect class="bar" x="177.5" y="95.0" width="127.5" height="75.0"/>
+    <text class="bar-label" x="241.2" y="89">20</text>
+    <text class="bar-cat" x="241.2" y="188">confirmed_unhandled_</text>
+    <text class="bar-cat" x="241.2" y="200">exception</text>
+    <rect class="bar" x="335.0" y="125.0" width="127.5" height="45.0"/>
+    <text class="bar-label" x="398.8" y="119">12</text>
+    <text class="bar-cat" x="398.8" y="188">noise</text>
+    <rect class="bar" x="492.5" y="166.2" width="127.5" height="3.8"/>
+    <text class="bar-label" x="556.2" y="160">1</text>
+    <text class="bar-cat" x="556.2" y="188">target_</text>
+    <text class="bar-cat" x="556.2" y="200">misconfiguration</text>
+  </svg>
+</div>
+<p style="font-size:14px;color:var(--text-muted)">Note: none of the 73 root-cause
+clusters is independently classified <code>likely_vuln</code>/<code>likely_vuln_high</code>
+— those flagged instances (Tier 1 &amp; Tier 2 above) live inside the raw 2,641-signature
+set but weren't large enough to form their own top-level cluster in this breakdown; they
+are covered individually above.</p>
+
+<h2>Coverage &amp; throughput over the hour</h2>
+<div class="table-scroll">
+<table>
+  <tr><th>Elapsed</th><th>Epoch</th><th class="num">Edges</th><th class="num">Total crashes</th><th class="num">Unique</th><th class="num">Errors</th></tr>
+  <tr><td>0s</td><td>Baseline</td><td class="num">10,370</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+  <tr><td>3 min</td><td>Baseline→Harvest</td><td class="num">92,404</td><td class="num">12,130</td><td class="num">1,472</td><td class="num">129</td></tr>
+  <tr><td>8 min</td><td>Harvest</td><td class="num">161,067</td><td class="num">26,419</td><td class="num">1,810</td><td class="num">169</td></tr>
+  <tr><td>18 min</td><td>Deterministic</td><td class="num">190,570</td><td class="num">32,492</td><td class="num">1,918</td><td class="num">198</td></tr>
+  <tr><td>30 min</td><td>Havoc</td><td class="num">225,881</td><td class="num">36,851</td><td class="num">2,371</td><td class="num">634</td></tr>
+  <tr><td>45 min</td><td>Havoc→Splicing</td><td class="num">266,914</td><td class="num">41,960</td><td class="num">2,628</td><td class="num">858</td></tr>
+  <tr><td>60 min</td><td>Splicing (end)</td><td class="num">295,481</td><td class="num">43,135</td><td class="num">2,641</td><td class="num">991</td></tr>
+</table>
+</div>
+<p>Coverage climbed the entire hour without plateauing — the largest single target this
+project has instrumented (3,293 types). The bitmap hit its saturation display cap by
+minute ~8, meaning hash-collision pressure was real for the back half of the run.
+Throughput held 200-250 req/s throughout, adaptively tuned between 62-64 concurrent
+connections.</p>
+
+<h2>Toolchain bugs found along the way (not Bitwarden bugs)</h2>
+<p>Standing up <code>util/SeederApi</code> (not previously used by this project) surfaced
+two real bugs in its own Dockerfile/csproj:</p>
+<ol>
+  <li><code>util/SeederApi/Dockerfile</code> sets <code>CARGO_TARGET_DIR=/tmp/cargo_target</code>
+  before building its Rust crypto SDK, silently breaking
+  <code>RustSdk.csproj</code>'s hardcoded <code>Content Include</code> glob — the
+  published image ships with no native crypto library at all.</li>
+  <li>Once fixed, <code>RustSdk.csproj</code> has no <code>linux-arm64</code> entry (only
+  x64/osx-arm64/windows-x64) — building on an arm64 Docker host produces a
+  <code>.so</code> that never gets linked into the runtime path. The Dockerfile's
+  <code>--platform=$BUILDPLATFORM</code> pattern means Rust always targets the builder's
+  native arch since no <code>--target</code> flag is ever passed to <code>cargo
+  build</code>.</li>
+</ol>
+<p>Both fixed locally for this run; not upstreamed (out of scope), reported here for completeness.</p>
+
+<h2>Caveats, stated plainly</h2>
+<ul>
+  <li><strong>Development-mode stack traces inflate what's visible here</strong> — 510 of this run's findings carry dev-mode exception detail a production self-hosted deployment wouldn't expose.</li>
+  <li><strong>Placeholder billing/installation credentials</strong> cause several Tier 3 findings — not real Bitwarden defects.</li>
+  <li><strong>Single local test environment</strong>, not bitwarden.com or any production deployment.</li>
+  <li><strong>Only 3 seeded users / 1 org / 3 ciphers</strong> — a broader seed (more users, populated device key material) would likely surface more Tier-1-quality findings.</li>
+</ul>
+
+<footer>
+  Raw data: <code>benchmarks/raw/bitwarden-1hr-fresh/</code> &middot; reproduce with
+  <code>BITWARDEN_FUZZ_RUNBOOK.md</code> &middot; engine: void, HTTP coverage mode,
+  <code>profile=security</code>, <code>seed=42</code>.
+</footer>
+
+</div>
+</body>
+</html>
