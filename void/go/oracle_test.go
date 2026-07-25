@@ -84,6 +84,59 @@ func TestExploitationSignalsSSTIEvaluated(t *testing.T) {
 	}
 }
 
+// TestExploitationSignalsSSRFEchoIsNotFlagged is a regression test for a real false
+// positive found fuzzing Bitwarden's PUT /settings/domains: a store-then-return endpoint
+// (save a user-submitted domain list, respond with the saved list) trivially "leaked
+// cloud metadata" under the old marker set, because two of the four body markers were
+// themselves literal substrings of the SSRF payload we sent -- so echoing our own input
+// back was indistinguishable from the target actually fetching the URL.
+func TestExploitationSignalsSSRFEchoIsNotFlagged(t *testing.T) {
+	for _, payload := range ssrfMetadataPayloads {
+		res := SendResult{
+			Item: WorkItem{Method: "PUT", Path: "/settings/domains", Body: `{"equivalentDomains":[["` + payload + `"]]}`},
+			Body: `{"equivalentDomains":[["` + payload + `"]],"object":"domains"}`,
+		}
+		for _, s := range exploitationSignals(res) {
+			if s == "ssrf_metadata_reflected" {
+				t.Errorf("payload %q: pure echo of the submitted value must not be flagged as SSRF, got signals %v", payload, exploitationSignals(res))
+			}
+		}
+	}
+}
+
+// TestExploitationSignalsSSRFRealMetadataIsFlagged verifies genuine cloud-metadata-shaped
+// content in the response -- content the target could only have produced by actually
+// fetching the URL, not by echoing what we sent -- still fires the oracle.
+func TestExploitationSignalsSSRFRealMetadataIsFlagged(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		body    string
+	}{
+		{"aws metadata directory listing", "http://169.254.169.254/latest/meta-data/",
+			`{"proxyResponse":"ami-id\nami-launch-index\nhostname\ninstance-id\ninstance-type\n"}`},
+		{"aws temp credentials", "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+			`{"proxyResponse":"{\"AccessKeyId\":\"ASIA...\",\"SecretAccessKey\":\"...\",\"Token\":\"...\"}"}`},
+		{"gcp service account", "http://metadata.google.internal/computeMetadata/v1/",
+			`{"proxyResponse":"service-accounts/\nnumeric-project-id\n"}`},
+	}
+	for _, c := range cases {
+		res := SendResult{
+			Item: WorkItem{Method: "PUT", Path: "/proxy/fetch", Body: `{"url":"` + c.payload + `"}`},
+			Body: c.body,
+		}
+		found := false
+		for _, s := range exploitationSignals(res) {
+			if s == "ssrf_metadata_reflected" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected ssrf_metadata_reflected for genuine metadata content, got none", c.name)
+		}
+	}
+}
+
 func TestMergePrivilegeFieldsJSON(t *testing.T) {
 	body, injected, ok := mergePrivilegeFieldsJSON(`{"name":"alice","email":"a@b.c"}`)
 	if !ok || len(injected) == 0 {

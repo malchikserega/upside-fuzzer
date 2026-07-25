@@ -103,6 +103,7 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.UniqueCrashFile, "unique-crash-file", filepath.Join("./crashes", "unique-crashes-"+nowTS+".jsonl"), "Path to unique crash JSONL")
 	flag.StringVar(&cfg.SummaryFile, "summary-file", filepath.Join("./summaries", "summary-"+nowTS+".json"), "Path to run summary JSON")
 	flag.StringVar(&cfg.ReportFile, "report-file", "", "Path to structured crash report JSON (default: derived from --summary-file)")
+	flag.StringVar(&cfg.SARIFFile, "sarif-file", "", "Path to write findings as SARIF 2.1.0 (optional; drops into GitHub code scanning / DefectDojo). Empty = don't write one.")
 	flag.IntVar(&cfg.BootstrapMax, "bootstrap-max", 20, "Max GET requests in runtime bootstrap harvest")
 	flag.BoolVar(&cfg.AccessProbe, "access-probe", true, "Master toggle for access-control oracles (BOLA + auth-bypass + mass-assignment)")
 	flag.BoolVar(&cfg.ProbeBOLA, "probe-bola", true, "Cross-identity BOLA/IDOR replay (requires -access-probe)")
@@ -133,6 +134,9 @@ func parseFlags() Config {
 		cfg.ReportFile = deriveReportPathFromSummary(cfg.SummaryFile)
 	} else {
 		cfg.ReportFile = absPath(cfg.ReportFile)
+	}
+	if strings.TrimSpace(cfg.SARIFFile) != "" {
+		cfg.SARIFFile = absPath(cfg.SARIFFile)
 	}
 	cfg.PocDir = absPath(cfg.PocDir)
 	cfg.TimelineDir = absPath(cfg.TimelineDir)

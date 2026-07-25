@@ -28,11 +28,14 @@ isn't grading UpsideFuzz on its own curve.
 |---|---:|---:|
 | Median distinct bugs (5 reps) | 1 | **3** |
 | Median coverage edges | 155 | **357** |
-| Bug classes found | numeric_boundary | numeric_boundary, ssrf, unhandled_exception |
+| Bug classes found | numeric_boundary | numeric_boundary, unhandled_exception |
 
 RESTler cannot structurally emit oracle-driven findings (BOLA, mass-assignment,
-injection, SSRF) — it has no equivalent detection layer. The `ssrf` class above
-is exactly that gap in practice, not a tuning difference.
+injection, SSRF) — it has no equivalent detection layer, and that gap is real. The
+`ssrf` class *originally* listed here was not a valid example of it, though: it was a
+false positive (the same `ssrf_metadata_reflected` bug documented in the correction
+below), removed from this table on 2026-07-25 rather than left standing as an
+overstated advantage.
 
 **Coverage over the 10-minute budget** (real polled data, one representative
 rep per tool): UpsideFuzz keeps climbing the whole budget and even triggers a
@@ -87,7 +90,6 @@ Real output from these runs, unedited.
 | Severity | Endpoint | What happened | Target |
 |---|---|---|---|
 | `likely_vuln_high` | `GET /api/catalog-items/{id}` | Identical response body returned to a second, unrelated identity — cross-identity object access (BOLA) | eShopOnWeb |
-| `likely_vuln_high` | `POST /settings/domains` | Cloud-metadata address in a domain-verification field was fetched and reflected back — SSRF | Bitwarden |
 | `confirmed_unhandled_exception` | `POST /devices` | Reproducible unhandled exception post-authentication — real stack trace captured | Bitwarden |
 | `needs_review` | `GET /items?pageSize=<negative>` | Unbounded list-range slice throws on out-of-range input — same bug class UpsideFuzz found for real on eShopOnWeb's own catalog endpoint | Fixture (T0) |
 
@@ -97,6 +99,22 @@ misconfigurations are excluded from the count entirely, and a handful of
 borderline timing-based signals from this same run were left out of this
 table rather than presented as confirmed — they're in the raw crash logs for
 manual follow-up, unembellished.
+
+> **Correction (2026-07-25): the `POST /settings/domains` SSRF row above has been
+> removed — it was a false positive, and the oracle bug that caused it is now fixed.**
+> `/settings/domains` stores an arbitrary user-submitted domain list and echoes it back
+> unchanged (`Bit.Api.Controllers.SettingsController` → `DomainsResponseModel`) — there is
+> no outbound HTTP fetch anywhere in that code path. The old `ssrf_metadata_reflected`
+> check flagged it anyway because two of its four body markers
+> (`"iam/security-credentials"`, `"computemetadata"`) were themselves literal substrings
+> of the SSRF payloads being sent, so a plain echo of our own input satisfied the check —
+> indistinguishable from a real fetch under the old logic. Root-caused and fixed in
+> `void/go/identity.go::exploitationSignals` (strips known payload substrings from the
+> body before matching, and drops the two self-matching markers) after a fresh 1-hour
+> campaign failed to reproduce this finding — see
+> `benchmarks/reports/BITWARDEN_1HOUR_REPORT.md` for the investigation and
+> `oracle_test.go::TestExploitationSignalsSSRFEchoIsNotFlagged`/
+> `TestExploitationSignalsSSRFRealMetadataIsFlagged` for the regression tests.
 
 ---
 

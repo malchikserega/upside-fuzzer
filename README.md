@@ -312,6 +312,7 @@ A profile only sets knobs you didn't pass yourself — any individual flag below
 | `-sqli-time-threshold` | `1.5` s | Latency (also ≥3× baseline) that flags a sleep/benchmark SQLi payload |
 | `-cmplog` | `true` | Poll `/shm/cmplog` for comparison operands harvested from the target's own IL (needs `--cmplog` at instrument time, hook mode only) and blend them into string/int mutation |
 | `-cmplog-interval` | `3.0` s | Seconds between `/shm/cmplog` polls |
+| `-sarif-file` | empty | Path to also write findings as SARIF 2.1.0 (drops into GitHub code scanning / DefectDojo). Empty = don't write one. |
 
 Full reference: `./void/go/void --help` or [void/README.md](void/README.md)
 

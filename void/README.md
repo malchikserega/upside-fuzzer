@@ -306,6 +306,7 @@ A cross-identity or no-credential 2xx to another principal's resource is reporte
 | `-unique-crash-file` | `crashes/unique-crashes-<ts>.jsonl` | Deduplicated crashes |
 | `-summary-file` | `summaries/summary-<ts>.json` | Run statistics |
 | `-report-file` | _(derived from summary)_ | Structured bug report JSON |
+| `-sarif-file` | empty (not written) | Findings as SARIF 2.1.0 — drops into GitHub code scanning / DefectDojo without a custom parser. One SARIF "rule" per distinct root-cause cluster or strong oracle signal (`sqli_time_based`, `bola_identical_cross_identity_response`, ...); `noise`/`target_misconfiguration` findings excluded |
 | `-poc-dir` | `crashes/pocs` | Reproducer shell scripts with sensitive auth headers redacted |
 | `-timeline-dir` | `crashes/timelines` | Mermaid exploit flow diagrams |
 

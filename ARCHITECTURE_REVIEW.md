@@ -240,7 +240,9 @@ Positive oracles beyond 500s: **BOLA/IDOR** (replay a successful authed resource
 
 ---
 
-## 7. Crash Triage, Clustering, Minimization, Reporting (`crash.go`, `cluster.go`, `triage.go`, `minimize.go`, `report.go`, `poc.go`)
+## 7. Crash Triage, Clustering, Minimization, Reporting (`crash.go`, `cluster.go`, `triage.go`, `minimize.go`, `report.go`, `poc.go`, `sarif.go`)
+
+> **✅ Implementation status (partial):** weakness **#3 (no standard-format export)** below is now fixed: `sarif.go`'s `buildSARIFReport` (opt-in via `-sarif-file`) emits SARIF 2.1.0, wired to drop directly into GitHub code scanning / DefectDojo. The one real design question — what a SARIF "rule" should *be* for a fuzzer whose findings aren't from a fixed static-analysis checker catalog — is resolved by reusing machinery this project already has: a rule is either a strong, specific oracle reason tag (`sqli_time_based`, `bola_identical_cross_identity_response`, ...) when the finding has one, or the finding's own root-cause `ClusterKey` (§ this section's existing two-level dedup) otherwise, with the cluster's own label as the human-readable rule description. Getting this right required a real bug fix first: an earlier version picked whichever reason tag came first, and generic contextual tags identity.go/oracle.go attach to nearly every 500 (`server_error`, `dev_stack`, `post_auth_execution`, ...) drowned out the specific ones — verified against a real Bitwarden run, `"server_error"` alone accounted for 1,601 of 1,602 rule-id picks, collapsing every distinct exception type into one SARIF rule. Fixed with an explicit allowlist of strong tags (`sarifStrongReasonTags`) rather than a denylist of weak ones, so a future new contextual tag defaults to non-specific instead of silently becoming a rule id. `noise`/`target_misconfiguration` classifications are excluded from SARIF output entirely, consistent with every other report this project emits. Weaknesses **#1**, **#2**, and **#4** below remain open.
 
 ### Current architecture
 Two-level dedup: fine-grained `crashSignature` (method+path+status+exception+response-fingerprint, mode-configurable) and root-cause `ClusterKey` (normalized exception message + top *app* stack frame, else `(method,status,route-template)`). Honest classification tiers (`likely_vuln`/`confirmed_unhandled_exception`/`needs_review`/`target_misconfiguration`/`noise`). Per-crash minimization (`minimize.go`), repro verification (`reproCheckCrash`), curl PoC + Mermaid timeline generation.
@@ -253,11 +255,10 @@ Two-level dedup: fine-grained `crashSignature` (method+path+status+exception+res
 ### Weaknesses
 1. **[MED] Root-cause clustering degrades hard in production mode.** Without a stack trace, clustering falls back to `(method, status, route-template)`, which *under*-clusters (same bug on different routes = different clusters) — the inverse of the signature problem. The production-mode `X-Exception-Message` helps but there's no symbolication/normalization of app frames without dev mode.
 2. **[MED] Triage scoring is a hand-tuned additive heuristic** (`+4` for 500, `+1.5` stack leak, etc., `triage.go`). Reasonable but arbitrary and unvalidated; severity numbers will not correspond to real CVSS and shouldn't be presented as if they do.
-3. **[LOW] No crash bucket export to standard formats** (SARIF, so results drop into GitHub code scanning / DefectDojo). This is a pure adoption feature.
+3. ~~**[LOW] No crash bucket export to standard formats** (SARIF, so results drop into GitHub code scanning / DefectDojo). This is a pure adoption feature.~~ **✅ DONE** — see the status note above.
 4. **[LOW] Minimization is field-removal only**, not value-simplification (shrinking a 10k string to the minimal triggering length).
 
 ### Recommended redesign
-- **SARIF output** for the whole findings set (CI/security-tooling integration).
 - **Value-level minimization** (bisect string lengths / numeric magnitudes), not just field removal.
 - Keep the taxonomy — it's a strength; just document that severity scores are heuristic, not CVSS.
 
@@ -324,12 +325,12 @@ Multi-identity from an auth JSON file (`docs/FUZZER_AUTHENTICATION.md` schema): 
 - Multi-target repo clutter and 4-script pipeline; long runbooks per target.
 
 **What features would I immediately miss?**
-Out-of-band interaction server; ownership-matrix BOLA; auto-login/OAuth2; persistent corpus; SARIF/HTML report; a no-Docker mode; hit-count coverage I can graph against a real denominator; a resumable run.
+Out-of-band interaction server; ownership-matrix BOLA; auto-login/OAuth2; persistent corpus; an HTML findings dashboard (SARIF export itself now exists); a no-Docker mode; hit-count coverage I can graph against a real denominator; a resumable run.
 
 **What vulnerabilities is it unlikely to find today?**
 Blind injection (SSRF/XXE/RCE/blind-SQLi) without OAST; multi-step business-logic bugs needing state modeling; true cross-tenant BOLA where bodies differ; race conditions beyond simple bursts; auth bugs needing verb/path/parser confusion differentials; anything in AOT/trimmed targets; anything gated behind loop-depth the binary-coverage signal can't see.
 
-**What would make me switch *to* it?** The oracle suite + coverage feedback on .NET is unique. If instrumentation were one command and self-verifying, OAST existed, and there were a resumable corpus + SARIF output, this becomes my default .NET API fuzzer over Schemathesis/RESTler.
+**What would make me switch *to* it?** The oracle suite + coverage feedback on .NET is unique. If instrumentation were one command and self-verifying, OAST existed, and there were a resumable corpus, this becomes my default .NET API fuzzer over Schemathesis/RESTler.
 
 ---
 
@@ -343,7 +344,7 @@ Blind injection (SSRF/XXE/RCE/blind-SQLi) without OAST; multi-step business-logi
 | Scheduling / MOpt / corpus | **Strong** | ✅ CMPLOG-lite (#11) + field-aware boundary mutation (#14, partial) landed; no persistence still open |
 | Sequences / state | Medium | Flat key-value, not state-graph reward |
 | Oracles | **Strong (differentiator)** | No OAST; body-heuristic BOLA; no differentials |
-| Triage / cluster / report | Strong | Prod-mode under-clustering; no SARIF |
+| Triage / cluster / report | Strong | ✅ SARIF export (#16, partial — HTML dashboard still open) landed; prod-mode under-clustering still open |
 | Auth / identity | Medium | Manual token file; no auto-login/OIDC |
 | DX / CI / reliability | Improving (was **Weak**) | ✅ first E2E CI gate (#7); still thin unit coverage beyond it, repo clutter, 4-language pipeline |
 
@@ -370,13 +371,13 @@ Ordering rationale: coverage resolution and instrumentation universality gate *e
 | 13 | **Credential auto-login + OAuth2/OIDC per identity** | P1 | Med | 2 wk | — | Med | High | Removes token-file friction; enables long unattended runs |
 | 14 | ✅ **DONE (partial) — Structure-aware mutation over typed model** (`Segment.MinLength/MaxLength/Minimum/Maximum/Pattern/EnumValues`, blended additively into `mutateInt`/`mutateNumber`/`mutateStringCategorized`) — per-field boundaries from constraints now reach mutation; full typed-model structural mutation (deserialization/polymorphism) still open | P1 | Med | 2–3 wk | Med | Med | — | Depends on #9/#10; unlocks deserialization/polymorphism bugs |
 | 15 | **Persistent, resumable corpus + coverage frontier** (`corpus/` dir) | P2 | Low–Med | 1 wk | Med | — | — | Warm restarts; reproducibility; researcher productivity |
-| 16 | **SARIF + HTML findings export** | P2 | Low | 3–5 d | — | — | Med | Drops into CI / DefectDojo / GitHub scanning |
+| 16 | ◑ **DONE (partial) — SARIF findings export** (`void/go/sarif.go`, `-sarif-file`, SARIF 2.1.0) — HTML dashboard still open | P2 | Low | 3–5 d | — | — | Med | Drops into CI / DefectDojo / GitHub scanning |
 | 17 | ✅ **DONE (partial) — Bitmap sizing from real instrumented-type count; smarter reset; honest capacity** (`instrumentor/Program.cs` writes `.upsidefuzz_instrumented.jsonl`; `fuzz-prep-multi.py::ResolveShmSize` auto-sizes SHM_SIZE from it when unset; `void/go/coverage.go::SHMCoverageReader.Init` trusts the real on-disk file size instead of truncating to a stale flag; `worker.go::shouldResetCoverageBitmap` now requires saturation AND stagnation, not saturation alone) — sizes from instrumented TYPE count (a proxy; SharpFuzz exposes no public branch/edge count), not a literal edge count | P2 | Low | 3–5 d | Med | — | — | Honest metrics; fewer collisions on big apps |
 | 18 | ✅ **DONE (partial) — Differential oracles** (`oracle.go::maybeEnqueueDifferentialProbes` — verb (GET→HEAD), content-type (JSON→text/plain, same bytes), route-case, param-location confusion; gated on `authRequiredEndpoints` strength 2 so a hit means the confusion itself bypassed a real check) — param-location technique duplicates the same id as a query param rather than a differently-owned id (no ownership-matrix infra yet — see #8) | P2 | Med | 2 wk | — | Med | — | New auth-bypass & parser-confusion bug class |
 | 19 | ✅ **DONE (partial) — Single `upsidefuzz` CLI orchestrator** (`upsidefuzz.py`, subcommands `instrument`/`build`/`up`/`down`/`verify`/`grammar`/`fuzz`/`run`/`doctor`; zero-install Docker mode via `./upsidefuzz` + `Dockerfile.cli`, bundling Python/.NET SDK/void so only Docker is required locally). Repo hygiene (purging target checkouts from history) still open | P2 | Med | 2 wk | — | — | High | Adoption; hides 4-language pipeline |
 | 20 | **Value-level minimization + behavioral mass-assign confirmation** | P2 | Low–Med | 1 wk | — | Med | — | Better PoCs; catches silent privilege writes |
 
-**Status roll-up (verified against the tree):** DONE — #1, #2, #3, #4, #7, #9, #10, #11, #12, #14, #17, #18, #19 (several "partial", see per-row notes). OPEN — #5 (OAST), #6 (non-Docker host mode), #8 (ownership-matrix BOLA), #13 (auth/OIDC), #15 (persistent corpus), #16 (SARIF/HTML — no first-party exporter found), #20 (value-min + behavioral mass-assign).
+**Status roll-up (verified against the tree):** DONE — #1, #2, #3, #4, #7, #9, #10, #11, #12, #14, #16, #17, #18, #19 (several "partial", see per-row notes). OPEN — #5 (OAST), #6 (non-Docker host mode), #8 (ownership-matrix BOLA), #13 (auth/OIDC), #15 (persistent corpus), #20 (value-min + behavioral mass-assign).
 
 ---
 
@@ -448,6 +449,7 @@ Because most of the original twenty are now landed, this is the next tranche. Sa
 8. **`analyzer/RoslynUtil.IsTestPath` excluded any directory merely *starting with* "test".** Found and fixed 2026-07-23 while building the Top-20 #7 E2E fixture: the check was `lower.Contains("/test")` (missing the trailing `/`), so a legitimate directory like `fixtures/planted-bug-api`'s original name `testdata/planted-bug-api` matched and the analyzer silently parsed 0 files from it. Fixed to match whole path *segments* (`test`, `tests`, `*.Tests`) instead of a bare substring — verified the fix doesn't regress eShopOnWeb (same 209 files / 33 endpoints before and after).
 9. **`analyzer/RouteAuthWalker` never scanned top-level-statement `Program.cs` files for minimal-API routes — only class bodies.** Found and fixed 2026-07-23: `BuildMinimalApiEndpoints` iterated `idx.AllClasses`, but C# 9+ top-level statements (the modern ASP.NET default template style: `var app = ...; app.MapGet(...);` directly in `Program.cs`, no enclosing class) have no `ClassDeclarationSyntax` in the parsed syntax tree at all — the "Program" class wrapper is a compile-time/semantic construct, not a syntactic one. `SourceIndex` now also retains each file's `CompilationUnitSyntax` root (`FileRoots`), and `RouteAuthWalker` additionally scans each file's top-level `GlobalStatementSyntax` nodes. Verified against `fixtures/planted-bug-api` (0 → 4 endpoints detected) with no regression on eShopOnWeb (still 33, all class-based there).
 10. **`compile-grammar.sh` crashed with `ROSLYN_ARGS[@]: unbound variable` whenever `--src` was omitted, on macOS specifically.** Found and fixed 2026-07-23 while writing `scripts/e2e-test.sh` (the first automated, non-interactive exercise of the `--src`-less code path). Root cause: macOS's system `/bin/bash` is 3.2 (GPLv3 avoidance) — a version with a known bug where `"${empty_array[@]}"` under `set -u` throws "unbound variable" even for a *declared-but-empty* array, unlike bash ≥ 4.4. Fixed with an explicit `${#ROSLYN_ARGS[@]} -gt 0` length guard before expansion. Would not have reproduced on a GitHub Actions `ubuntu-latest` runner (modern bash), which is exactly why the interactive, manually-driven verification earlier in this session never caught it — the E2E script's value as a regression gate is already paying for itself.
+11. **`ssrf_metadata_reflected` fired on pure request-echo, no outbound fetch required — a real, previously-presented-as-genuine false positive.** Found 2026-07-25 while investigating why an earlier Bitwarden campaign's headline SSRF finding (`POST/PUT /settings/domains`) didn't reproduce in a fresh 1-hour run. Root cause: `void/go/identity.go::exploitationSignals`'s SSRF check matched the response body against four markers after confirming a metadata-shaped payload was sent, but two of those four (`"iam/security-credentials"`, `"computemetadata"`) were themselves literal substrings of the payloads in `mutations.go`'s `ssrf` category — so any endpoint that simply echoes back whatever value it was given (a completely ordinary "save X, return the saved X" REST pattern; `/settings/domains` stores a user's equivalent-domains preference list and returns it unchanged, no HTTP fetch anywhere in that code path) would trivially satisfy the check. Confirmed the identical false positive on this project's own T0 benchmark fixture too (`POST /items` echoing a `name` field) — a general oracle bug, not a Bitwarden-specific artifact. **Fixed**: `exploitationSignals` now strips every known SSRF payload string (`mutations.go`'s new shared `ssrfMetadataPayloads`) out of the response body *before* matching, and the two self-matching markers were replaced with content only a genuine metadata-service response would contain (AWS temp-credential JSON keys, real directory-listing shape, GCP service-account paths). Regression tests lock in both directions (`oracle_test.go::TestExploitationSignalsSSRFEchoIsNotFlagged`/`TestExploitationSignalsSSRFRealMetadataIsFlagged`). The original finding was struck from `benchmarks/reports/RESULTS_REPORT.md`/`.html` rather than left standing as an overstated result.
 
 ---
 
@@ -496,7 +498,7 @@ Key properties:
 
 **Phase 3 — Grammar independence (P1):** ✅ first-party OpenAPI typed grammar + retire RESTler (#9), ✅ real Roslyn analyzer (#10), ✅ structure-aware mutation (#14, partial) — all done (`grammarc/`, `analyzer/`, `Segment` constraint fields). *Outcome so far: grammar quality no longer target-sensitive to RESTler's coverage/bugs/maintenance cadence, and per-field boundaries now reach mutation; still open: full typed-model structural mutation (deserialization/polymorphism).*
 
-**Phase 4 — Product polish (P2):** persistent/resumable corpus (#15), SARIF/HTML (#16), honest coverage metrics (#17), ✅ single CLI orchestrator (#19, partial — `upsidefuzz.py` + `./upsidefuzz` Docker launcher done; repo hygiene and versioned releases/packaging still open), value-level minimization (#20). *Outcome: an adoptable, reproducible, releasable product.*
+**Phase 4 — Product polish (P2):** persistent/resumable corpus (#15), ✅ SARIF findings export (#16, partial — `sarif.go`, HTML dashboard still open), honest coverage metrics (#17), ✅ single CLI orchestrator (#19, partial — `upsidefuzz.py` + `./upsidefuzz` Docker launcher done; repo hygiene and versioned releases/packaging still open), value-level minimization (#20). *Outcome: an adoptable, reproducible, releasable product.*
 
 ## What would make it the best open-source feedback-guided REST API fuzzer for .NET
 1. **Coverage you can trust** — bucketed, per-request, honestly measured.

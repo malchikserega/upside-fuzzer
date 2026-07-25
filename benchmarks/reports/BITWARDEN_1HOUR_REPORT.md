@@ -290,6 +290,44 @@ spirit as everything else in this report.
 
 ---
 
+## Follow-up: why the earlier SSRF finding didn't reproduce here — resolved
+
+An earlier campaign (20-minute Bitwarden run, prior checkout) reported a `likely_vuln_high`
+SSRF finding on `POST/PUT /settings/domains` — a cloud-metadata address was supposedly
+"fetched and reflected back." This run didn't reproduce it, which prompted a real
+investigation rather than a shrug. **It was never a real finding.**
+
+`/settings/domains` (`Bit.Api.Controllers.SettingsController`) stores an arbitrary
+user-submitted equivalent-domains list on the user record and returns it unchanged —
+`DomainsResponseModel` deserializes exactly what was saved and hands it back. There is no
+outbound HTTP request anywhere in that code path; it's a personal autofill-matching
+preference list, unrelated to the (separate, real) organization domain-*ownership*
+verification feature.
+
+The oracle that flagged it (`void/go/identity.go::exploitationSignals`,
+`ssrf_metadata_reflected`) checked the response body for four substrings after sending a
+cloud-metadata-shaped payload. Two of those four —
+`"iam/security-credentials"` and `"computemetadata"` — are themselves literal substrings
+of the SSRF payloads being sent. So an endpoint that simply **echoes back whatever it was
+given** (a completely ordinary "update X, return the updated X" REST pattern) would
+trivially satisfy the check, indistinguishable from a target that actually fetched the URL
+and got real metadata content back. Confirmed the same false-positive fired identically on
+this project's own T0 benchmark fixture (`POST /items` echoing a `name` field) — not a
+Bitwarden-specific fluke, a general bug in the oracle.
+
+**Fixed**: `exploitationSignals` now strips every known SSRF payload string out of the
+response body *before* checking for metadata markers, and the two self-matching markers
+were replaced with content that only a genuine metadata-service response would contain
+(`"accesskeyid"`, `"secretaccesskey"`, real AWS directory-listing shape, GCP
+service-account paths). Regression tests
+(`oracle_test.go::TestExploitationSignalsSSRFEchoIsNotFlagged`/
+`TestExploitationSignalsSSRFRealMetadataIsFlagged`) lock in both directions: pure echo of
+any of the four SSRF-metadata payloads must never fire the oracle, and genuine
+metadata-shaped content still does. The original SSRF row has been struck from
+`benchmarks/reports/RESULTS_REPORT.md`/`.html` rather than left standing.
+
+---
+
 ## Caveats, stated plainly
 
 - **Development-mode stack traces inflate what's visible here.** This stand runs with

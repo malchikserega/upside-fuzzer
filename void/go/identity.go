@@ -730,11 +730,33 @@ func exploitationSignals(res SendResult) []string {
 		out = append(out, "file_read_success")
 	}
 
-	// SSRF: cloud metadata contents echoed back (only counts if we actually asked for it).
-	if strings.Contains(sentLow, "169.254.169.254") || strings.Contains(sentLow, "metadata.google") {
-		if strings.Contains(bodyLow, "ami-id") || strings.Contains(bodyLow, "iam/security-credentials") ||
-			strings.Contains(bodyLow, "instance-identity") || strings.Contains(bodyLow, "computemetadata") {
-			out = append(out, "ssrf_metadata_reflected")
+	// SSRF: cloud metadata contents echoed back (only counts if we actually asked for it) --
+	// AND only if the match isn't just our own payload being echoed back verbatim. A field
+	// that stores-then-returns whatever string it was given (a very common "update X,
+	// respond with the updated X" REST pattern) trivially satisfies a naive substring check:
+	// two of the markers this used to check for ("iam/security-credentials",
+	// "computemetadata") are themselves literal substrings of the SSRF payloads below, so
+	// they could never distinguish "the target fetched this URL and got real metadata back"
+	// from "the target just handed my own string back to me". Found as a real false positive
+	// on Bitwarden's PUT /settings/domains, which stores an arbitrary user-submitted domain
+	// list and returns it unchanged -- no outbound fetch anywhere in that code path.
+	// bodyWithoutEcho strips every literal occurrence of a known SSRF payload from the body
+	// before matching, so a marker overlapping a payload substring (now or in the future)
+	// can't be satisfied by pure echo, only by content the target itself generated.
+	if strings.Contains(sentLow, "169.254.169.254") || strings.Contains(sentLow, "metadata.google") ||
+		strings.Contains(sentLow, "100.100.100.200") {
+		bodyWithoutEcho := bodyLow
+		for _, payload := range ssrfMetadataPayloads {
+			bodyWithoutEcho = strings.ReplaceAll(bodyWithoutEcho, strings.ToLower(payload), "")
+		}
+		for _, m := range []string{
+			"ami-id", "instance-identity", "accesskeyid", "secretaccesskey", "sessiontoken",
+			"service-accounts/", "numeric-project-id", "hostname\nid\n",
+		} {
+			if strings.Contains(bodyWithoutEcho, m) {
+				out = append(out, "ssrf_metadata_reflected")
+				break
+			}
 		}
 	}
 

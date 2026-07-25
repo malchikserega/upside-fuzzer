@@ -91,6 +91,8 @@
   .finding-target { font-family: var(--font-label); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
   .caveat { background: var(--surface-2); border-left: 3px solid var(--sev-info); padding: 14px 18px; font-family: var(--font-label); font-size: 13.5px; color: var(--text-muted); line-height: 1.6; margin-top: 14px; }
   .caveat b { color: var(--text); }
+  .correction { background: var(--sev-critical-soft); border-left: 3px solid var(--sev-critical); padding: 14px 18px; font-family: var(--font-label); font-size: 13.5px; color: var(--text); line-height: 1.6; margin-top: 14px; }
+  .correction b { color: var(--sev-critical); }
   footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--hair); font-family: var(--font-label); font-size: 12.5px; color: var(--text-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
   code, .mono { font-family: var(--font-mono); }
 </style>
@@ -135,9 +137,9 @@
         <div class="h2h-tool">UpsideFuzz</div>
         <div class="h2h-metric"><span class="h2h-metric-label">Median distinct bugs (5 reps)</span><span class="h2h-metric-val">3</span></div>
         <div class="h2h-metric"><span class="h2h-metric-label">Median coverage edges</span><span class="h2h-metric-val">357</span></div>
-        <div class="h2h-metric"><span class="h2h-metric-label">Bug classes found</span><span class="h2h-metric-val">numeric_boundary, ssrf, unhandled_exception</span></div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Bug classes found</span><span class="h2h-metric-val">numeric_boundary, unhandled_exception</span></div>
       </div>
-      <div class="h2h-foot">RESTler cannot structurally emit oracle-driven findings (BOLA, mass-assignment, injection, SSRF) — it has no equivalent detection layer. The <code>ssrf</code> class above is exactly that gap in practice, not a tuning difference.</div>
+      <div class="h2h-foot">RESTler cannot structurally emit oracle-driven findings (BOLA, mass-assignment, injection, SSRF) — it has no equivalent detection layer, and that gap is real. An <code>ssrf</code> class was originally listed here but was a false positive (see the correction below) — removed 2026-07-25 rather than left standing as an overstated advantage.</div>
     </div>
 
     <div class="chart-card">
@@ -291,11 +293,6 @@
         <div class="finding-target">eShopOnWeb</div>
       </div>
       <div class="finding">
-        <span class="sev-chip sev-critical">likely_vuln_high</span>
-        <div><div class="finding-route"><span class="verb">POST</span> /settings/domains</div><div class="finding-desc">Cloud-metadata address in a domain-verification field was fetched and reflected back — server-side request forgery.</div></div>
-        <div class="finding-target">Bitwarden</div>
-      </div>
-      <div class="finding">
         <span class="sev-chip sev-high">confirmed_unhandled_exception</span>
         <div><div class="finding-route"><span class="verb">POST</span> /devices</div><div class="finding-desc">Reproducible unhandled exception post-authentication — real stack trace captured, not a guessed classification.</div></div>
         <div class="finding-target">Bitwarden</div>
@@ -308,6 +305,7 @@
     </div>
 
     <p class="caveat">Every finding above is the tool's own <b>honest triage</b> label, not a marketing gloss: <code>needs_review</code> stays <code>needs_review</code>, dependency-injection misconfigurations are excluded from the count entirely, and a handful of borderline timing-based signals from this same run were left out of this table rather than presented as confirmed — they're in the raw crash logs for manual follow-up, unembellished.</p>
+    <p class="correction"><b>Correction (2026-07-25):</b> a <code>POST /settings/domains</code> SSRF row previously shown here has been removed — it was a false positive, and the oracle bug that caused it is now fixed. That endpoint stores an arbitrary user-submitted domain list and echoes it back unchanged (<code>SettingsController</code> → <code>DomainsResponseModel</code>) — there is no outbound HTTP fetch anywhere in that code path. The old <code>ssrf_metadata_reflected</code> check flagged it anyway because two of its four body markers were themselves literal substrings of the SSRF payloads being sent, so a plain echo of our own input satisfied the check. Root-caused and fixed in <code>void/go/identity.go::exploitationSignals</code> after a fresh 1-hour campaign failed to reproduce this finding — see <code>benchmarks/reports/BITWARDEN_1HOUR_REPORT.md</code> for the investigation.</p>
   </section>
 
   <footer>

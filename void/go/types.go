@@ -101,18 +101,22 @@ type Config struct {
 	UniqueCrashFile             string
 	SummaryFile                 string
 	ReportFile                  string
-	BootstrapMax                int
-	AccessProbe                 bool // master toggle for all access-control probes
-	ProbeBOLA                   bool // cross-identity BOLA/IDOR replay
-	ProbeAuthBypass             bool // no-credential replay (gated by 401/403 precondition)
-	ProbeMassAssign             bool // privileged-field over-posting
-	ProbeDifferential           bool // verb/content-type/route-case parser-confusion auth-bypass replay
-	AccessProbeProb             float64
-	AccessProbeMaxPerEndpoint   int
-	AccessProbeQueueMax         int
-	InjectionOracle             bool
-	SQLiTimeThresholdSec        float64
-	Profile                     string
+	// SARIFFile, when set, additionally writes findings in SARIF 2.1.0 format
+	// (Top-20 §16) so they drop directly into GitHub code scanning / DefectDojo /
+	// any other SARIF-consuming dashboard. Opt-in: empty (the default) writes nothing.
+	SARIFFile                 string
+	BootstrapMax              int
+	AccessProbe               bool // master toggle for all access-control probes
+	ProbeBOLA                 bool // cross-identity BOLA/IDOR replay
+	ProbeAuthBypass           bool // no-credential replay (gated by 401/403 precondition)
+	ProbeMassAssign           bool // privileged-field over-posting
+	ProbeDifferential         bool // verb/content-type/route-case parser-confusion auth-bypass replay
+	AccessProbeProb           float64
+	AccessProbeMaxPerEndpoint int
+	AccessProbeQueueMax       int
+	InjectionOracle           bool
+	SQLiTimeThresholdSec      float64
+	Profile                   string
 	// CmpLog (Top-20+ #21): poll /shm/cmplog for comparison operands harvested from
 	// the target's own IL and blend them into string/int mutation. No-ops cleanly
 	// (empty pool) against a target built without --cmplog, or in --inject-mode source.

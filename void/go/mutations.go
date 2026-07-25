@@ -26,6 +26,21 @@ var (
 	mutationCategories []*MutationCategory
 	mutCatMu           sync.RWMutex
 )
+
+// ssrfMetadataPayloads is the subset of the "ssrf" category's payloads that target a cloud
+// metadata service specifically (as opposed to generic localhost/loopback/file/dict/gopher
+// SSRF probes below, which the exploitationSignals oracle doesn't apply metadata markers
+// to). Shared with identity.go::exploitationSignals so it can strip these exact strings out
+// of a response body before checking for real metadata content -- otherwise an endpoint
+// that simply echoes back whatever it was given (store-then-return, a common REST pattern)
+// would trivially "leak metadata" by handing us back the very URL we submitted.
+var ssrfMetadataPayloads = []string{
+	"http://169.254.169.254/latest/meta-data/",
+	"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+	"http://metadata.google.internal/computeMetadata/v1/",
+	"http://100.100.100.200/latest/meta-data/",
+}
+
 func init() {
 	mutationCategories = []*MutationCategory{
 		{Name: "boundary", Weight: 1.0, Payloads: []string{
@@ -77,11 +92,7 @@ func init() {
 			"....//....//....//etc/passwd",
 			"..%252f..%252f..%252fetc%252fpasswd",
 		}},
-		{Name: "ssrf", Weight: 1.5, Payloads: []string{
-			"http://169.254.169.254/latest/meta-data/",
-			"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-			"http://metadata.google.internal/computeMetadata/v1/",
-			"http://100.100.100.200/latest/meta-data/",
+		{Name: "ssrf", Weight: 1.5, Payloads: append(append([]string{}, ssrfMetadataPayloads...), []string{
 			"http://localhost/",
 			"http://0.0.0.0/",
 			"http://[::1]/",
@@ -91,7 +102,7 @@ func init() {
 			"file:///proc/self/environ",
 			"dict://localhost:6379/INFO",
 			"gopher://localhost:6379/_%2A1%0D%0A",
-		}},
+		}...)},
 		{Name: "open_redirect", Weight: 1.0, Payloads: []string{
 			"//evil.com",
 			"\\/\\/evil.com",

@@ -470,6 +470,7 @@ void/go/
 ├── triage.go              Source-aware priority and crash route scoring
 ├── poc.go                 PoC shell scripts and timeline generation
 ├── report.go              Final JSON crash report and findings summary
+├── sarif.go               SARIF 2.1.0 findings export (-sarif-file, opt-in)
 ├── minimize.go            Crash minimization and repro verification
 ├── identity.go            Auth identities, multi-identity scheduling, race probing
 ├── auth.go                JWT/header/cookie auth state and login fallback
@@ -781,6 +782,23 @@ A `likely_vuln*` label **requires a concrete exploitation signal** — a bare 50
 ### Root-Cause Clustering (`cluster.go`)
 The per-crash signature folds in path and mutation, so one bug reached from many routes/payloads yields many signatures — massively over-counting distinct bugs (a real run produced 933 "unique" crashes for ~5 actual bugs). `cluster.go` adds a **ClusterKey** that groups crashes by root cause: the normalized backend exception message plus the first *application* stack frame (framework frames skipped). When no exception detail is available (production mode), it falls back to a coarsened `(method, status, path-template)` key. The report exposes `distinct_root_causes` and a `root_cause_clusters` roll-up — the honest "how many real bugs" number.
 
+### SARIF Findings Export (`sarif.go`, Top-20+ #16)
+Opt-in (`-sarif-file`): writes the run's findings as SARIF 2.1.0 alongside the existing
+JSON report, so they drop directly into GitHub code scanning / DefectDojo / any other
+SARIF-consuming dashboard with no custom parser. `noise`/`target_misconfiguration`
+classifications are excluded, matching every other report this project emits.
+The one real design decision — what a SARIF "rule" should *be* for a fuzzer that has no
+fixed static-analysis checker catalog — reuses machinery this section already
+describes: a rule is a strong, specific oracle reason tag (`sqli_time_based`,
+`bola_identical_cross_identity_response`, ...) when the finding carries one, or
+otherwise the finding's own root-cause `ClusterKey` (above), with the cluster's label as
+the human-readable rule description. `sarifStrongReasonTags` is an explicit *allowlist*
+of specific tags, not a denylist of generic ones (`server_error`, `dev_stack`,
+`post_auth_execution`, ...) — verified necessary against a real Bitwarden run, where the
+generic `server_error` tag (present on nearly every 500 regardless of cause) accounted
+for 1,601 of 1,602 naive rule-id picks before the allowlist existed, collapsing every
+distinct exception type into one bucket.
+
 ### Vulnerability Oracles (`oracle.go`)
 Because a 500 is only a robustness signal, UpsideFuzz adds oracles that reuse the multi-identity and mutation machinery to detect *actual* vulnerabilities:
 - **BOLA/IDOR + broken auth:** After any successful resource-scoped request under an authenticated identity, the identical request is replayed under every *other* identity and with *no* credentials. A 2xx returning a real body to a different or anonymous principal is a Broken Object-Level Authorization or broken-authentication finding (`access_control: true`, `origin_identity` → `shadow_identity`). Identical bodies score `likely_vuln_high`; differing 2xx bodies score `likely_vuln` and are flagged for manual verification. **Auth-bypass precondition:** the no-credential probe only fires on endpoints the engine has already seen reject unauthenticated access (401/403) — tracked in `authRequiredEndpoints` with a strength (2 = rejected an unauthenticated caller, 1 = rejected someone). A truly public endpoint never accumulates evidence, so it is never flagged, eliminating the public-endpoint false positive. Each oracle has its own flag (`-probe-bola`, `-probe-auth-bypass`, `-probe-mass-assign`) under the `-access-probe` master toggle.
@@ -911,6 +929,7 @@ upside-fuzzer/
 │   │   ├── triage.go           Source-aware triage and scoring logic
 │   │   ├── poc.go              PoC shell scripts and timelines
 │   │   ├── report.go           JSON bug report builder
+│   │   ├── sarif.go            SARIF 2.1.0 findings export (-sarif-file, opt-in)
 │   │   ├── minimize.go         Crash minimization and repro logic
 │   │   ├── ui.go               Terminal UI and plain logging
 │   │   ├── utils.go            Common helpers and constants

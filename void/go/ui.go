@@ -750,4 +750,12 @@ func (f *Fuzzer) printFinalReport() {
 	fmt.Printf("Unique crash file: %s\n", f.cfg.UniqueCrashFile)
 	fmt.Printf("Summary file: %s\n", f.cfg.SummaryFile)
 	fmt.Printf("Report file: %s\n", f.cfg.ReportFile)
+	if strings.TrimSpace(f.cfg.SARIFFile) != "" {
+		sarif := f.buildSARIFReport()
+		_ = os.MkdirAll(filepath.Dir(f.cfg.SARIFFile), 0o755)
+		if b, err := json.MarshalIndent(sarif, "", "  "); err == nil {
+			_ = os.WriteFile(f.cfg.SARIFFile, append(b, '\n'), 0o644)
+		}
+		fmt.Printf("SARIF file: %s\n", f.cfg.SARIFFile)
+	}
 }

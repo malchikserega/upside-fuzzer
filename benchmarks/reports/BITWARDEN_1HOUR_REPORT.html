@@ -360,6 +360,29 @@ two real bugs in its own Dockerfile/csproj:</p>
 </ol>
 <p>Both fixed locally for this run; not upstreamed (out of scope), reported here for completeness.</p>
 
+<h2>Follow-up: why the earlier SSRF finding didn't reproduce here — resolved</h2>
+<div class="card tier1">
+  <p>An earlier campaign (20-minute Bitwarden run, prior checkout) reported a
+  <code>likely_vuln_high</code> SSRF finding on <code>POST/PUT /settings/domains</code> — a
+  cloud-metadata address supposedly "fetched and reflected back." This run didn't
+  reproduce it. <strong>It was never a real finding.</strong></p>
+  <p><code>/settings/domains</code> stores an arbitrary user-submitted domain list and
+  returns it unchanged (<code>SettingsController</code> → <code>DomainsResponseModel</code>)
+  — no outbound HTTP request exists anywhere in that code path. The oracle
+  (<code>ssrf_metadata_reflected</code>) checked the response for markers, but two of the
+  four were themselves literal substrings of the SSRF payloads being sent
+  (<code>"iam/security-credentials"</code>, <code>"computemetadata"</code>) — so an
+  endpoint that simply echoes back whatever it was given trivially satisfied the check,
+  indistinguishable from a real fetch. Confirmed the identical false positive on this
+  project's own T0 benchmark fixture too — a general oracle bug, not a Bitwarden-specific
+  fluke.</p>
+  <p><strong>Fixed</strong>: the oracle now strips known SSRF payload strings out of the
+  response body before checking markers, and the two self-matching markers were replaced
+  with content only a genuine metadata-service response would contain. Regression tests
+  lock in both directions. The original finding has been struck from
+  <code>RESULTS_REPORT.md</code>/<code>.html</code> rather than left standing.</p>
+</div>
+
 <h2>Caveats, stated plainly</h2>
 <ul>
   <li><strong>Development-mode stack traces inflate what's visible here</strong> — 510 of this run's findings carry dev-mode exception detail a production self-hosted deployment wouldn't expose.</li>
