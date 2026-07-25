@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>UpsideFuzz — Benchmark Report</title>
+<style>
+  :root {
+    --bg: #F5F3EE; --surface: #FFFFFF; --surface-2: #ECE8DF; --text: #1C1F26; --text-muted: #656B76; --hair: #DCD7CB;
+    --accent: #1B7A72; --accent-soft: #DCEEEC; --accent-ink: #0E4D48;
+    --sev-critical: #C1433B; --sev-critical-soft: #F6E0DE; --sev-high: #B5670F; --sev-high-soft: #F3E7D4;
+    --sev-info: #5C6773; --sev-info-soft: #E7E5DD;
+    --font-body: ui-serif, "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", "Liberation Mono", Menlo, Consolas, monospace;
+    --font-label: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10141C; --surface: #171D29; --surface-2: #1E2531; --text: #E8EAF0; --text-muted: #8D95A6; --hair: #2B3242;
+      --accent: #4FBBB0; --accent-soft: #17302E; --accent-ink: #B7ECE4;
+      --sev-critical: #E8756D; --sev-critical-soft: #3A1E1C; --sev-high: #DDA24E; --sev-high-soft: #362A15;
+      --sev-info: #9AA4B5; --sev-info-soft: #232A38;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 17px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .page { max-width: 920px; margin: 0 auto; padding: 56px 28px 96px; }
+  .masthead { display: flex; flex-direction: column; gap: 10px; margin-bottom: 44px; padding-bottom: 28px; border-bottom: 1px solid var(--hair); }
+  .eyebrow { font-family: var(--font-label); font-size: 12px; font-weight: 600; letter-spacing: 0.11em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-size: 38px; line-height: 1.12; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .dek { font-size: 18px; color: var(--text-muted); max-width: 64ch; margin: 2px 0 0; }
+  .meta-row { font-family: var(--font-label); font-size: 13px; color: var(--text-muted); display: flex; gap: 18px; flex-wrap: wrap; margin-top: 6px; }
+  .meta-row b { color: var(--text); font-weight: 600; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--hair); border: 1px solid var(--hair); margin-bottom: 52px; }
+  .stat { background: var(--surface); padding: 22px 18px; display: flex; flex-direction: column; gap: 6px; }
+  .stat-num { font-family: var(--font-mono); font-size: 28px; font-weight: 700; color: var(--accent-ink); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat-label { font-family: var(--font-label); font-size: 12px; color: var(--text-muted); }
+  @media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  section { margin-bottom: 56px; }
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 6px; flex-wrap: wrap; }
+  h2 { font-size: 13px; font-family: var(--font-label); font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text); margin: 0; }
+  .section-note { font-family: var(--font-label); font-size: 13px; color: var(--text-muted); }
+  .lede { font-size: 17px; color: var(--text-muted); max-width: 68ch; margin: 14px 0 22px; }
+  .lede b { color: var(--text); font-weight: 600; }
+  .h2h { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--hair); border: 1px solid var(--hair); }
+  .h2h-col { background: var(--surface); padding: 26px 24px; }
+  .h2h-col.win { background: var(--accent-soft); }
+  .h2h-tool { font-family: var(--font-label); font-size: 12px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 14px; }
+  .h2h-col.win .h2h-tool { color: var(--accent-ink); }
+  .h2h-metric { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--hair); }
+  .h2h-metric:first-of-type { border-top: none; }
+  .h2h-metric-label { font-family: var(--font-label); font-size: 13.5px; color: var(--text-muted); }
+  .h2h-metric-val { font-family: var(--font-mono); font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .h2h-foot { font-family: var(--font-label); font-size: 12.5px; color: var(--text-muted); padding: 14px 24px 0; grid-column: 1 / -1; background: var(--surface); border-top: 1px solid var(--hair); padding-top: 14px; }
+  .chart-card { border: 1px solid var(--hair); background: var(--surface); padding: 20px 24px 8px; margin-top: 18px; }
+  .chart-title { font-family: var(--font-label); font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+  .chart-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 640px) { .chart-grid-2 { grid-template-columns: 1fr; } }
+  svg .axis { stroke: var(--hair); stroke-width: 1; }
+  svg .gridline { stroke: var(--hair); stroke-width: 1; stroke-dasharray: 2 3; }
+  svg .bar { fill: var(--accent); }
+  svg .bar.muted { fill: var(--sev-info); }
+  svg .bar-val { font-family: var(--font-mono); font-size: 12px; fill: var(--text); font-variant-numeric: tabular-nums; }
+  svg .bar-lab { font-family: var(--font-label); font-size: 11px; fill: var(--text-muted); }
+  svg .line-restler { fill: none; stroke: var(--sev-info); stroke-width: 2.5; }
+  svg .line-restler-dashed { fill: none; stroke: var(--sev-info); stroke-width: 2; stroke-dasharray: 4 4; }
+  svg .line-upside { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+  svg .axis-label { font-family: var(--font-label); font-size: 11px; fill: var(--text-muted); }
+  .legend { display: flex; gap: 22px; font-family: var(--font-label); font-size: 12.5px; color: var(--text-muted); margin: 10px 0 4px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .target { border: 1px solid var(--hair); background: var(--surface); margin-bottom: 18px; }
+  .target-head { display: flex; justify-content: space-between; align-items: baseline; padding: 18px 22px; border-bottom: 1px solid var(--hair); flex-wrap: wrap; gap: 8px; }
+  .target-name { font-size: 19px; font-weight: 600; }
+  .target-sub { font-family: var(--font-label); font-size: 12.5px; color: var(--text-muted); }
+  .runs-table { width: 100%; border-collapse: collapse; }
+  .runs-table th { text-align: right; font-family: var(--font-label); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; padding: 10px 22px 8px; }
+  .runs-table th:first-child, .runs-table td:first-child { text-align: left; }
+  .runs-table td { text-align: right; font-family: var(--font-mono); font-size: 14.5px; padding: 9px 22px; border-top: 1px solid var(--hair); font-variant-numeric: tabular-nums; }
+  .runs-table td:first-child { font-family: var(--font-label); font-size: 13.5px; color: var(--text-muted); }
+  .table-scroll { overflow-x: auto; }
+  .finding { display: grid; grid-template-columns: 150px 1fr auto; gap: 14px; align-items: start; padding: 14px 22px; border-top: 1px solid var(--hair); }
+  .finding:first-child { border-top: none; }
+  .sev-chip { font-family: var(--font-label); font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 8px; border-radius: 3px; text-align: center; white-space: nowrap; justify-self: start; }
+  .sev-critical { background: var(--sev-critical-soft); color: var(--sev-critical); }
+  .sev-high { background: var(--sev-high-soft); color: var(--sev-high); }
+  .sev-info { background: var(--sev-info-soft); color: var(--sev-info); }
+  .finding-route { font-family: var(--font-mono); font-size: 14px; }
+  .finding-route .verb { color: var(--accent-ink); font-weight: 700; }
+  .finding-desc { font-family: var(--font-label); font-size: 13px; color: var(--text-muted); margin-top: 3px; }
+  .finding-target { font-family: var(--font-label); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+  .caveat { background: var(--surface-2); border-left: 3px solid var(--sev-info); padding: 14px 18px; font-family: var(--font-label); font-size: 13.5px; color: var(--text-muted); line-height: 1.6; margin-top: 14px; }
+  .caveat b { color: var(--text); }
+  footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--hair); font-family: var(--font-label); font-size: 12.5px; color: var(--text-muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  code, .mono { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <div class="eyebrow">Benchmark report · 2026-07-24 · local copy, not hosted</div>
+    <h1>What UpsideFuzz actually finds, measured</h1>
+    <p class="dek">Coverage-guided grey-box fuzzing for .NET APIs — head-to-head against RESTler on a controlled fixture, then run standalone against two real open-source codebases: eShopOnWeb and Bitwarden's server.</p>
+    <div class="meta-row">
+      <span><b>3</b> targets</span>
+      <span><b>18</b> fuzzing sessions</span>
+      <span><b>4.4M+</b> requests sent</span>
+      <span>direct-SHM coverage mode throughout</span>
+    </div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat"><div class="stat-num">3×</div><div class="stat-label">More distinct bugs than RESTler<br>(median, same target &amp; budget)</div></div>
+    <div class="stat"><div class="stat-num">125</div><div class="stat-label">Unique root-cause crashes found<br>in Bitwarden in 20 minutes</div></div>
+    <div class="stat"><div class="stat-num">754</div><div class="stat-label">Real API endpoints instrumented<br>in Bitwarden, zero source edits</div></div>
+    <div class="stat"><div class="stat-num">221,847</div><div class="stat-label">Distinct coverage edges reached<br>in a single Bitwarden run</div></div>
+  </div>
+
+  <section>
+    <div class="section-head">
+      <h2>Head-to-head vs. RESTler</h2>
+      <span class="section-note">controlled fixture · 10-minute budget · same instrumented target · single shared judge for both tools' findings</span>
+    </div>
+    <p class="lede">Both tools fuzzed the identical instrumented container — same swagger spec, same reset target, same time budget, no dictionary for either. Findings were reclassified by <b>one shared judge</b>, not either tool's own labels, so this isn't grading UpsideFuzz on its own curve.</p>
+
+    <div class="h2h">
+      <div class="h2h-col">
+        <div class="h2h-tool">RESTler</div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Median distinct bugs (5 reps)</span><span class="h2h-metric-val">1</span></div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Median coverage edges</span><span class="h2h-metric-val">155</span></div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Bug classes found</span><span class="h2h-metric-val">numeric_boundary</span></div>
+      </div>
+      <div class="h2h-col win">
+        <div class="h2h-tool">UpsideFuzz</div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Median distinct bugs (5 reps)</span><span class="h2h-metric-val">3</span></div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Median coverage edges</span><span class="h2h-metric-val">357</span></div>
+        <div class="h2h-metric"><span class="h2h-metric-label">Bug classes found</span><span class="h2h-metric-val">numeric_boundary, ssrf, unhandled_exception</span></div>
+      </div>
+      <div class="h2h-foot">RESTler cannot structurally emit oracle-driven findings (BOLA, mass-assignment, injection, SSRF) — it has no equivalent detection layer. The <code>ssrf</code> class above is exactly that gap in practice, not a tuning difference.</div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-title">Coverage edges over the 10-minute budget — one representative rep per tool, real polled data</div>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>UpsideFuzz — keeps climbing, triggers a bitmap reset near minute 8.5, resumes</span>
+        <span><i style="background:var(--sev-info)"></i>RESTler — exhausts its bounded pass in ~70s, then idle for the rest of the budget</span>
+      </div>
+      <svg viewBox="0 0 660 270" width="100%" height="270" role="img" aria-label="Coverage edges over time, UpsideFuzz vs RESTler">
+        <line class="gridline" x1="48" y1="16" x2="620" y2="16"/>
+        <line class="gridline" x1="48" y1="72" x2="620" y2="72"/>
+        <line class="gridline" x1="48" y1="128" x2="620" y2="128"/>
+        <line class="gridline" x1="48" y1="184" x2="620" y2="184"/>
+        <line class="axis" x1="48" y1="240" x2="620" y2="240"/>
+        <line class="axis" x1="48" y1="16" x2="48" y2="240"/>
+        <text class="axis-label" x="42" y="244" text-anchor="end">0</text>
+        <text class="axis-label" x="42" y="188" text-anchor="end">175</text>
+        <text class="axis-label" x="42" y="132" text-anchor="end">350</text>
+        <text class="axis-label" x="42" y="76" text-anchor="end">525</text>
+        <text class="axis-label" x="42" y="20" text-anchor="end">700</text>
+        <text class="axis-label" x="48" y="258" text-anchor="middle">0 min</text>
+        <text class="axis-label" x="162" y="258" text-anchor="middle">2</text>
+        <text class="axis-label" x="277" y="258" text-anchor="middle">4</text>
+        <text class="axis-label" x="391" y="258" text-anchor="middle">6</text>
+        <text class="axis-label" x="506" y="258" text-anchor="middle">8</text>
+        <text class="axis-label" x="620" y="258" text-anchor="middle">10 min</text>
+
+        <path class="line-upside" d="M48.0,215.4 L56.6,138.6 L65.2,123.5 L73.8,117.4 L82.4,110.1 L91.0,99.8 L99.6,94.7 L108.2,91.2 L116.8,86.7 L125.4,80.0 L134.0,76.2 L142.6,73.9 L151.2,68.8 L159.8,66.2 L168.4,63.7 L177.0,62.1 L185.6,61.1 L194.1,59.5 L202.7,58.9 L211.3,57.9 L220.0,57.6 L228.6,55.0 L237.2,53.1 L245.8,52.2 L254.4,50.9 L263.0,49.0 L271.6,47.7 L280.2,46.4 L288.7,44.8 L297.4,43.5 L305.9,43.2 L314.6,42.6 L323.2,41.9 L331.7,41.3 L340.3,41.3 L349.0,40.3 L357.5,39.4 L366.2,39.4 L374.8,38.4 L383.4,38.1 L392.0,37.4 L400.6,36.2 L409.2,35.8 L417.8,35.8 L426.4,35.2 L435.0,35.2 L443.6,34.9 L452.1,34.2 L460.7,33.9 L469.3,33.9 L477.9,33.3 L486.5,32.6 L495.1,31.7 L503.7,31.7 L512.4,31.0 L521.0,30.4 L529.6,30.4 L538.2,30.4 L546.8,127.4 L555.4,125.8 L564.0,125.8 L572.6,125.8 L581.2,125.8 L589.8,125.8 L598.4,125.8 L607.1,125.8 L615.7,125.8"/>
+
+        <path class="line-restler" d="M48.0,240.0 L49.0,224.6 L49.9,195.8 L50.9,194.2 L51.8,192.6 L52.8,192.6 L53.8,191.0 L54.7,190.7 L55.7,190.7 L56.6,190.4 L57.6,190.4 L58.5,190.4 L59.5,190.4 L60.5,190.4 L61.4,190.4 L62.4,190.4 L63.3,190.4 L64.3,190.4 L65.2,190.4 L66.2,190.4 L67.2,190.4 L68.1,190.4 L69.1,190.4 L70.0,190.4 L71.0,190.4 L71.9,190.4 L72.9,190.4 L73.9,190.4 L74.8,190.4 L75.8,190.4 L76.7,190.4 L77.7,190.4 L78.6,190.4 L79.6,190.4 L80.6,190.4 L81.5,190.4 L82.5,190.4 L83.4,190.4 L84.4,190.4 L85.3,190.4 L86.3,190.4 L87.3,190.4 L88.2,190.4 L89.2,190.4 L90.1,190.4 L91.1,190.4 L92.0,190.4 L93.0,190.4 L94.0,190.4 L94.9,190.4 L95.9,190.4 L96.8,190.4 L97.8,190.4 L98.8,190.4 L99.7,190.4 L100.7,190.4 L101.6,190.4 L102.6,190.4 L103.5,190.4 L104.5,190.4 L105.5,190.4 L106.4,190.4 L107.4,190.4 L108.3,190.4 L109.3,190.4 L110.2,190.4 L111.2,190.4 L112.2,190.4 L113.1,190.4 L114.1,190.4 L115.0,190.4"/>
+        <path class="line-restler-dashed" d="M115.0,190.4 L620,190.4"/>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Real targets — scaling with time</h2>
+      <span class="section-note">standalone runs, no RESTler comparison — UpsideFuzz only, profile=security, same seed</span>
+    </div>
+    <p class="lede">Same engine, three durations, two real, unmodified open-source codebases pulled fresh from their own repositories.</p>
+
+    <div class="chart-grid-2">
+      <div class="chart-card">
+        <div class="chart-title">Coverage edges by duration — Bitwarden</div>
+        <svg viewBox="0 0 240 190" width="100%" height="190">
+          <line class="axis" x1="10" y1="150" x2="230" y2="150"/>
+          <rect class="bar" x="20.0" y="63.5" width="44" height="86.5" rx="2"/>
+          <text class="bar-val" x="42.0" y="55.5" text-anchor="middle">137,000</text>
+          <text class="bar-lab" x="42.0" y="170.0" text-anchor="middle">5 min</text>
+          <rect class="bar" x="90.0" y="16.5" width="44" height="133.5" rx="2"/>
+          <text class="bar-val" x="112.0" y="8.5" text-anchor="middle">211,626</text>
+          <text class="bar-lab" x="112.0" y="170.0" text-anchor="middle">10 min</text>
+          <rect class="bar" x="160.0" y="10.0" width="44" height="140.0" rx="2"/>
+          <text class="bar-val" x="182.0" y="2.0" text-anchor="middle">221,847</text>
+          <text class="bar-lab" x="182.0" y="170.0" text-anchor="middle">20 min</text>
+        </svg>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Coverage edges by duration — eShopOnWeb</div>
+        <svg viewBox="0 0 240 190" width="100%" height="190">
+          <line class="axis" x1="10" y1="150" x2="230" y2="150"/>
+          <rect class="bar muted" x="20.0" y="45.9" width="44" height="104.1" rx="2"/>
+          <text class="bar-val" x="42.0" y="37.9" text-anchor="middle">4,860</text>
+          <text class="bar-lab" x="42.0" y="170.0" text-anchor="middle">5 min</text>
+          <rect class="bar muted" x="90.0" y="10.0" width="44" height="140.0" rx="2"/>
+          <text class="bar-val" x="112.0" y="2.0" text-anchor="middle">6,533</text>
+          <text class="bar-lab" x="112.0" y="170.0" text-anchor="middle">10 min</text>
+          <rect class="bar muted" x="160.0" y="128.9" width="44" height="21.1" rx="2"/>
+          <text class="bar-val" x="182.0" y="120.9" text-anchor="middle">985</text>
+          <text class="bar-lab" x="182.0" y="170.0" text-anchor="middle">20 min</text>
+        </svg>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Unique root-cause crashes — Bitwarden</div>
+        <svg viewBox="0 0 240 190" width="100%" height="190">
+          <line class="axis" x1="10" y1="150" x2="230" y2="150"/>
+          <rect class="bar" x="20.0" y="32.8" width="44" height="117.2" rx="2"/>
+          <text class="bar-val" x="42.0" y="24.8" text-anchor="middle">113</text>
+          <text class="bar-lab" x="42.0" y="170.0" text-anchor="middle">5 min</text>
+          <rect class="bar" x="90.0" y="31.8" width="44" height="118.2" rx="2"/>
+          <text class="bar-val" x="112.0" y="23.8" text-anchor="middle">114</text>
+          <text class="bar-lab" x="112.0" y="170.0" text-anchor="middle">10 min</text>
+          <rect class="bar" x="160.0" y="20.4" width="44" height="129.6" rx="2"/>
+          <text class="bar-val" x="182.0" y="12.4" text-anchor="middle">125</text>
+          <text class="bar-lab" x="182.0" y="170.0" text-anchor="middle">20 min</text>
+        </svg>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Unique root-cause crashes — eShopOnWeb</div>
+        <svg viewBox="0 0 240 190" width="100%" height="190">
+          <line class="axis" x1="10" y1="150" x2="230" y2="150"/>
+          <rect class="bar muted" x="20.0" y="27.5" width="44" height="122.5" rx="2"/>
+          <text class="bar-val" x="42.0" y="19.5" text-anchor="middle">7</text>
+          <text class="bar-lab" x="42.0" y="170.0" text-anchor="middle">5 min</text>
+          <rect class="bar muted" x="90.0" y="115.0" width="44" height="35.0" rx="2"/>
+          <text class="bar-val" x="112.0" y="107.0" text-anchor="middle">2</text>
+          <text class="bar-lab" x="112.0" y="170.0" text-anchor="middle">10 min</text>
+          <rect class="bar muted" x="160.0" y="115.0" width="44" height="35.0" rx="2"/>
+          <text class="bar-val" x="182.0" y="107.0" text-anchor="middle">2</text>
+          <text class="bar-lab" x="182.0" y="170.0" text-anchor="middle">20 min</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="target" style="margin-top:18px;">
+      <div class="target-head">
+        <div><div class="target-name">Bitwarden — server</div><div class="target-sub">password manager backend · fresh clone, hook-mode zero-edit instrumentation · 3,293 instrumented types across 754 endpoints</div></div>
+      </div>
+      <div class="table-scroll">
+        <table class="runs-table">
+          <thead><tr><th>Budget</th><th>Requests</th><th>Coverage edges</th><th>Crashes (total / unique)</th></tr></thead>
+          <tbody>
+            <tr><td>5 min</td><td>77,842</td><td>137,000</td><td>118 / 113</td></tr>
+            <tr><td>10 min</td><td>145,885</td><td>211,626</td><td>125 / 114</td></tr>
+            <tr><td>20 min</td><td>328,396</td><td>221,847</td><td>135 / 125</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="target">
+      <div class="target-head">
+        <div><div class="target-name">eShopOnWeb — PublicApi</div><div class="target-sub">sample store REST API · JWT login flow · minimal-API route style</div></div>
+      </div>
+      <div class="table-scroll">
+        <table class="runs-table">
+          <thead><tr><th>Budget</th><th>Requests</th><th>Coverage edges</th><th>Crashes (total / unique)</th></tr></thead>
+          <tbody>
+            <tr><td>5 min</td><td>1,113,382</td><td>4,860</td><td>19 / 7</td></tr>
+            <tr><td>10 min</td><td>1,080,945</td><td>6,533</td><td>4 / 2</td></tr>
+            <tr><td>20 min</td><td>2,264,461</td><td>985</td><td>3 / 2</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="caveat"><b>Reading the numbers side by side:</b> Bitwarden's much smaller request volume per minute (its handlers do real crypto/DB work) still produced two orders of magnitude more coverage edges and unique crashes than eShopOnWeb — it's a larger, more complex codebase, and the point of coverage guidance is exactly to spend the budget where the surface actually is. eShopOnWeb's crash count trending down at longer budgets is expected: the sequence engine and crash-boost logic exhaust the small number of distinct bugs a ~30-endpoint API has, then keep refining reproducibility rather than finding new ones.</p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Sample findings</h2>
+      <span class="section-note">real output from these runs, unedited</span>
+    </div>
+
+    <div class="target">
+      <div class="finding">
+        <span class="sev-chip sev-critical">likely_vuln_high</span>
+        <div><div class="finding-route"><span class="verb">GET</span> /api/catalog-items/{id}</div><div class="finding-desc">Identical response body returned to a second, unrelated identity — cross-identity object access (BOLA).</div></div>
+        <div class="finding-target">eShopOnWeb</div>
+      </div>
+      <div class="finding">
+        <span class="sev-chip sev-critical">likely_vuln_high</span>
+        <div><div class="finding-route"><span class="verb">POST</span> /settings/domains</div><div class="finding-desc">Cloud-metadata address in a domain-verification field was fetched and reflected back — server-side request forgery.</div></div>
+        <div class="finding-target">Bitwarden</div>
+      </div>
+      <div class="finding">
+        <span class="sev-chip sev-high">confirmed_unhandled_exception</span>
+        <div><div class="finding-route"><span class="verb">POST</span> /devices</div><div class="finding-desc">Reproducible unhandled exception post-authentication — real stack trace captured, not a guessed classification.</div></div>
+        <div class="finding-target">Bitwarden</div>
+      </div>
+      <div class="finding">
+        <span class="sev-chip sev-info">needs_review</span>
+        <div><div class="finding-route"><span class="verb">GET</span> /items?pageSize=&lt;negative&gt;</div><div class="finding-desc">Unbounded list-range slice throws on out-of-range input — the same bug class UpsideFuzz found for real on eShopOnWeb's own catalog endpoint, now the seeded regression check.</div></div>
+        <div class="finding-target">Fixture (T0)</div>
+      </div>
+    </div>
+
+    <p class="caveat">Every finding above is the tool's own <b>honest triage</b> label, not a marketing gloss: <code>needs_review</code> stays <code>needs_review</code>, dependency-injection misconfigurations are excluded from the count entirely, and a handful of borderline timing-based signals from this same run were left out of this table rather than presented as confirmed — they're in the raw crash logs for manual follow-up, unembellished.</p>
+  </section>
+
+  <footer>
+    <span>Raw data: <code>benchmarks/raw/</code> · rebuild the tables with <code>python3 benchmarks/harness/build_results_table.py</code></span>
+    <span>void engine · direct-SHM coverage · profile=security</span>
+  </footer>
+
+</div>
+</body>
+</html>

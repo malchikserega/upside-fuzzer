@@ -102,6 +102,15 @@ type Fuzzer struct {
 	findings     []CrashFinding
 	pocCount     int
 
+	// Benchmark event streams (BENCHMARK_PLAN.md Top-15 #6, opt-in via
+	// -event-log). nil (disabled) unless cfg.EventLog is set; every call site
+	// must check for nil itself -- JSONLWriter.Write is not nil-receiver-safe
+	// (it locks a mutex before checking, so calling it on a nil *JSONLWriter
+	// panics rather than no-oping).
+	eventLogWriter      *JSONLWriter
+	epochEventWriter    *JSONLWriter
+	sequenceEventWriter *JSONLWriter
+
 	currentConcurrency       int
 	lastTuneTS               time.Time
 	lastTuneDone             int
@@ -225,6 +234,36 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		return nil, err
 	}
 
+	// Benchmark event streams (Top-15 #6/#new): opt-in via -event-log. The
+	// sibling epoch_event.jsonl/sequence_event.jsonl paths are derived from
+	// the same directory so the whole per-run event set lands together, per
+	// BENCHMARK_PLAN.md §12's raw/<experiment>/<run_id>/ layout.
+	var eventLogWriter, epochEventWriter, sequenceEventWriter *JSONLWriter
+	if strings.TrimSpace(cfg.EventLog) != "" {
+		eventLogWriter, err = NewJSONLWriter(cfg.EventLog)
+		if err != nil {
+			_ = crashWriter.Close()
+			_ = uniqueWriter.Close()
+			return nil, fmt.Errorf("failed to open -event-log: %w", err)
+		}
+		dir := filepath.Dir(cfg.EventLog)
+		epochEventWriter, err = NewJSONLWriter(filepath.Join(dir, "epoch_event.jsonl"))
+		if err != nil {
+			_ = crashWriter.Close()
+			_ = uniqueWriter.Close()
+			_ = eventLogWriter.Close()
+			return nil, fmt.Errorf("failed to open epoch_event.jsonl: %w", err)
+		}
+		sequenceEventWriter, err = NewJSONLWriter(filepath.Join(dir, "sequence_event.jsonl"))
+		if err != nil {
+			_ = crashWriter.Close()
+			_ = uniqueWriter.Close()
+			_ = eventLogWriter.Close()
+			_ = epochEventWriter.Close()
+			return nil, fmt.Errorf("failed to open sequence_event.jsonl: %w", err)
+		}
+	}
+
 	f := &Fuzzer{
 		cfg:                   cfg,
 		target:                target,
@@ -269,6 +308,9 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		identityCursor:        0,
 		crashWriter:           crashWriter,
 		uniqueWriter:          uniqueWriter,
+		eventLogWriter:        eventLogWriter,
+		epochEventWriter:      epochEventWriter,
+		sequenceEventWriter:   sequenceEventWriter,
 		findings:              make([]CrashFinding, 0, 64),
 		raceQueue:             make([]WorkItem, 0, 128),
 		currentConcurrency: clampInt(cfg.Concurrency,
@@ -307,6 +349,15 @@ func (f *Fuzzer) Close() {
 	_ = f.coverage.Close()
 	_ = f.crashWriter.Close()
 	_ = f.uniqueWriter.Close()
+	if f.eventLogWriter != nil {
+		_ = f.eventLogWriter.Close()
+	}
+	if f.epochEventWriter != nil {
+		_ = f.epochEventWriter.Close()
+	}
+	if f.sequenceEventWriter != nil {
+		_ = f.sequenceEventWriter.Close()
+	}
 }
 
 func (f *Fuzzer) Run() error {

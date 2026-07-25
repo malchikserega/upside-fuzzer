@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,9 @@ func parseFlags() Config {
 	flag.StringVar(&cfg.Profile, "profile", "", "Preset knob bundle: fast | deep | security. Individual flags you pass still override the profile.")
 	flag.StringVar(&cfg.GrammarDir, "grammar", ".", "Path to directory containing grammar.py and dict.json")
 	flag.StringVar(&cfg.SourceDir, "src", "", "Path to source tree for source-aware endpoint prioritization")
+	flag.Int64Var(&cfg.Seed, "seed", 0, "Seed math/rand's global source for reproducible mutation/scheduling draws (0 = unseeded/random, the default). Not bit-for-bit deterministic under concurrency, but removes the dominant source of run-to-run variance.")
+	flag.StringVar(&cfg.RunID, "run-id", "", "Opaque run identifier stamped into every -event-log row (benchmark harness use; purely a label, no behavior change)")
+	flag.StringVar(&cfg.EventLog, "event-log", "", "Path to a per-request JSONL event log (epoch, mutation category, coverage delta, sequence/corpus ancestry, identity, valid/state-change flags). Off by default -- opt in for benchmark data collection (BENCHMARK_PLAN.md Top-15 #6); adds one JSON-encode+write per completed request when enabled.")
 	flag.StringVar(&cfg.DictPath, "dict", "", "Path to custom JSON dictionary")
 	flag.StringVar(&cfg.TemplatesJSON, "templates-json", "", "Path to exported templates JSON (default: <grammar>/templates.export.json)")
 	flag.BoolVar(&cfg.RefreshTemplates, "refresh-templates", false, "Re-export templates from grammar.py even if templates JSON exists")
@@ -284,6 +288,21 @@ func applyProfile(cfg *Config, set map[string]bool) {
 
 func main() {
 	cfg := parseFlags()
+	// Benchmark reproducibility (BENCHMARK_PLAN.md Top-15 #8): every mutation/
+	// scheduling decision in this codebase draws from math/rand's top-level,
+	// process-global source. Since Go 1.20 that source is auto-seeded randomly
+	// at startup, so two runs never produce the same sequence of choices unless
+	// -seed pins it explicitly. This does NOT make a run bit-for-bit
+	// deterministic under concurrency (worker goroutines draw from the shared
+	// source in scheduler-dependent order), but it removes the single biggest
+	// source of run-to-run variance and is what the benchmark plan's fairness
+	// contract (§5) requires as the honest baseline: "unseeded" unless stated.
+	if cfg.Seed != 0 {
+		rand.Seed(cfg.Seed)
+		fmt.Printf("RNG seed: %d (deterministic mutation/scheduling draws, not bit-for-bit under concurrency)\n", cfg.Seed)
+	} else {
+		fmt.Printf("RNG seed: unseeded (default: random per run — pass -seed <n> for reproducibility)\n")
+	}
 	f, err := NewFuzzer(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init failed: %v\n", err)

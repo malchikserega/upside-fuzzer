@@ -1,0 +1,34 @@
+[
+  {
+    "config_id": "C1-restler-none",
+    "reps": 5,
+    "target_dir": "/tmp/bench-planted-bug-prep",
+    "compose_file": "docker-compose.instrumented.yml",
+    "readiness_url": "http://localhost:7777/health",
+    "coverage_base": "http://localhost:7777",
+    "target_container": "bench-planted-bug-prep-instrumented-1",
+    "tool": "restler",
+    "restler_dir": "/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/restler_bin/restler",
+    "restler_mode": "fuzz",
+    "restler_grammar": "Compile/grammar.py",
+    "restler_dict": "Compile/dict.json",
+    "restler_settings": "Compile/engine_settings.json",
+    "restler_target_port": "7777",
+    "budget_minutes": 10,
+    "dict_tag": "none"
+  },
+  {
+    "config_id": "C3-upsidefuzz-none",
+    "reps": 5,
+    "target_dir": "/tmp/bench-planted-bug-prep",
+    "compose_file": "docker-compose.instrumented.yml",
+    "readiness_url": "http://localhost:7777/health",
+    "coverage_base": "http://localhost:7777",
+    "target_container": "bench-planted-bug-prep-instrumented-1",
+    "tool": "upsidefuzz",
+    "void_bin": "/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/void/go/void",
+    "grammar_dir": "/tmp/bench-grammar",
+    "budget_minutes": 10,
+    "dict_tag": "none"
+  }
+]

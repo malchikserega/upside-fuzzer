@@ -85,6 +85,8 @@ func (f *Fuzzer) mainLoop() error {
 
 		epIdx, ep := currentEpoch(epochs, time.Since(f.startTime), timeBudget)
 		if ep.Name != lastEpoch {
+			epochFrom := lastEpoch
+			rebalanceReason := ""
 			// On epoch transition: rebalance remaining time based on productivity.
 			if lastEpoch != "" {
 				prevEdges := f.currentEdges - epochEdgesAtStart[lastEpoch]
@@ -106,6 +108,7 @@ func (f *Fuzzer) mainLoop() error {
 									break
 								}
 							}
+							rebalanceReason = fmt.Sprintf("%s unproductive (edgeRate=%.5f) -> stole %.0f%% for Havoc", lastEpoch, edgeRate, stolen*100)
 							f.addEvent(fmt.Sprintf("REBALANCE %s -> Havoc (%.0f%% stolen, edgeRate=%.5f)", lastEpoch, stolen*100, edgeRate))
 							break
 						}
@@ -122,6 +125,7 @@ func (f *Fuzzer) mainLoop() error {
 				f.addEvent(fmt.Sprintf("BASELINE CEILING set: %d edges (real coverage ceiling)", f.baselineEdgesCeiling))
 			}
 			f.addEvent(fmt.Sprintf("EPOCH %d: %s", epIdx+1, ep.Name))
+			f.logEpochEvent(epochFrom, ep.Name, rebalanceReason)
 			lastEpoch = ep.Name
 		}
 		desired := f.currentConcurrency
@@ -575,6 +579,73 @@ func (f *Fuzzer) handleResult(res SendResult) {
 			f.lastCoverageReset = time.Now()
 		}
 	}
+
+	f.logRequestEvent(res, edgeShare)
+}
+
+// logRequestEvent appends one row to the -event-log request stream
+// (BENCHMARK_PLAN.md §12 request_event.jsonl), a no-op unless -event-log was
+// passed. Scope note: only the primary fuzzing-loop path (this function,
+// pre-oracle-early-return) is logged -- access-control/differential oracle
+// probes are a separate, already-persisted stream (unique-crashes.jsonl via
+// oracle.go), and including them here would double-count traffic against the
+// plan's "total requests" budget metric. mutation_category is populated from
+// MutationName (the engine's own category label: mutate/havoc/sequence/
+// crash_replay/...); the finer mcat_<security-category> tag (sqli/xss/...)
+// lives inside mutation_label -- dict_tokens_used[] is left empty pending
+// separate token-accounting instrumentation (BENCHMARK_PLAN.md §16 marks
+// this P1, not P0).
+func (f *Fuzzer) logRequestEvent(res SendResult, coverageDelta int) {
+	if f.eventLogWriter == nil {
+		return
+	}
+	seqID := ""
+	seqDepth := 0
+	if res.Item.SeqState != nil {
+		seqID = res.Item.SeqState.ID
+		seqDepth = res.Item.SeqDepth
+	}
+	validFlag := res.Status >= 200 && res.Status < 400
+	stateChangeFlag := isWriteMethod(res.Item.Method) && res.Status >= 200 && res.Status < 300
+	row := map[string]any{
+		"run_id":            f.cfg.RunID,
+		"ts":                time.Now().Unix(),
+		"elapsed_s":         time.Since(f.startTime).Seconds(),
+		"request_index":     f.totalDone,
+		"epoch":             res.Item.EpochName,
+		"mutation_category": res.Item.MutationName,
+		"mutation_label":    res.Item.MutationLabel,
+		"dict_tokens_used":  []string{},
+		"corpus_seed_idx":   res.Item.SeedIdx,
+		"sequence_id":       seqID,
+		"seq_depth":         seqDepth,
+		"method":            res.Item.Method,
+		"endpoint_template": normalizeEndpointPath(res.Item.Path),
+		"status":            res.Status,
+		"coverage_delta":    coverageDelta,
+		"identity":          res.Item.Identity,
+		"valid_flag":        validFlag,
+		"state_change_flag": stateChangeFlag,
+	}
+	_ = f.eventLogWriter.Write(row)
+}
+
+// logEpochEvent appends one row to epoch_event.jsonl on every epoch
+// transition (BENCHMARK_PLAN.md §12), a no-op unless -event-log was passed.
+func (f *Fuzzer) logEpochEvent(epochFrom, epochTo, rebalanceReason string) {
+	if f.epochEventWriter == nil {
+		return
+	}
+	row := map[string]any{
+		"run_id":           f.cfg.RunID,
+		"ts":               time.Now().Unix(),
+		"elapsed_s":        time.Since(f.startTime).Seconds(),
+		"request_index":    f.totalDone,
+		"epoch_from":       epochFrom,
+		"epoch_to":         epochTo,
+		"rebalance_reason": rebalanceReason,
+	}
+	_ = f.epochEventWriter.Write(row)
 }
 
 // shouldResetCoverageBitmap decides whether the coverage bitmap should be

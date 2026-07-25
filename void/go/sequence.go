@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // sequence.go — Stateful sequences: producer→consumer chain discovery,
@@ -207,11 +208,6 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 		return
 	}
 
-	// Must have produced some coverage overall
-	if state.Energy <= 0 {
-		return
-	}
-
 	// Must be mostly successful
 	successCount := 0
 	for _, step := range state.History {
@@ -219,7 +215,21 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 			successCount++
 		}
 	}
-	if float64(successCount)/float64(len(state.History)) < 0.5 {
+	successRatio := float64(successCount) / float64(len(state.History))
+
+	// Benchmark event stream (BENCHMARK_PLAN.md §12 sequence_event.jsonl, a
+	// no-op unless -event-log was passed): every sequence that reached this
+	// terminal point (depth>=2) is logged here, regardless of whether it goes
+	// on to be persisted to disk below -- "sequences attempted" needs the full
+	// population, not just the successful subset.
+	f.logSequenceEvent(state, successRatio >= 0.5)
+
+	// Must have produced some coverage overall
+	if state.Energy <= 0 {
+		return
+	}
+
+	if successRatio < 0.5 {
 		return
 	}
 
@@ -237,6 +247,40 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 	// Save to disk
 	f.persistWorkflow(state)
 	f.workflowsPersisted++
+}
+
+// logSequenceEvent appends one row to sequence_event.jsonl (BENCHMARK_PLAN.md
+// §12), a no-op unless -event-log was passed. new_coverage reports
+// state.Energy as the closest available proxy -- it blends real coverage
+// gain with the state-novelty bonus (Top-20 #12, stateNoveltyBonus), not a
+// pure edge count; produced_bug_id is left empty, since this codebase has no
+// mechanism today correlating a specific crash/finding back to the sequence
+// that produced it (a genuine gap, not silently faked here).
+func (f *Fuzzer) logSequenceEvent(state *SequenceState, successFlag bool) {
+	if f.sequenceEventWriter == nil {
+		return
+	}
+	steps := make([]map[string]any, 0, len(state.History))
+	for _, step := range state.History {
+		steps = append(steps, map[string]any{
+			"method": step.Method,
+			"path":   step.Path,
+			"status": step.Status,
+		})
+	}
+	row := map[string]any{
+		"run_id":             f.cfg.RunID,
+		"ts":                 time.Now().Unix(),
+		"sequence_id":        state.ID,
+		"shape_signature":    sequenceStateSignature(state),
+		"depth":              state.Depth,
+		"steps":              steps,
+		"harvested_entities": state.Values,
+		"success_flag":       successFlag,
+		"new_coverage":       state.Energy,
+		"produced_bug_id":    "",
+	}
+	_ = f.sequenceEventWriter.Write(row)
 }
 
 // sequenceStateSignature computes a coarse state signature for a sequence: the

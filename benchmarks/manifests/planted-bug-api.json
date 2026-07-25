@@ -1,0 +1,35 @@
+{
+  "target_id": "T0",
+  "target_name": "planted-bug-api",
+  "target_location": "fixtures/planted-bug-api/",
+  "manifest_authorship": "self-authored (same author as the tool under test) -- BENCHMARK_PLAN.md §18 Threats to Validity: 'Implementation bias (self-authored fixture/tool)' applies to this manifest. Do not use T0 alone for headline detection-accuracy claims; a second, externally-authored controlled target's manifest is required for that (§4 Group 1, not yet sourced -- tracked separately, out of scope for the T0-only smoke pilot).",
+  "manifest_version": "1.0.0",
+  "source_commit_note": "src/PlantedBugApi/Program.cs::ItemHandlers.ListItems, read 2026-07-24",
+  "vulns": [
+    {
+      "vuln_id": "T0-VULN-001",
+      "bug_class": "numeric_boundary",
+      "head_to_head_eligible": true,
+      "endpoints": [
+        {
+          "method": "GET",
+          "path_template": "/items"
+        }
+      ],
+      "required_preconditions": "none -- triggers against a completely empty item list (no prior POST /items needed)",
+      "required_sequence": null,
+      "root_cause": "ListItems(int pageSize = 10, int pageIndex = 0) computes `skip = pageIndex * pageSize` and calls `Items.GetRange(skip, Math.Min(pageSize, Items.Count - skip))` with no bounds check. GetRange throws ArgumentOutOfRangeException (unhandled -> HTTP 500) whenever the computed `count` argument is negative or `skip` is out of the list's valid range.",
+      "expected_oracle": "crash triage: confirmed_unhandled_exception / likely_vuln (500 with ArgumentOutOfRangeException / ArgumentException stack frame in ItemHandlers.ListItems)",
+      "severity": "medium",
+      "known_triggering_inputs": [
+        "GET /items?pageSize=-2&pageIndex=0",
+        "GET /items?pageSize=1&pageIndex=1 (triggers against an EMPTY list: skip=1, count=Min(1, 0-1)=-1 -- observed directly during RESTler validation, 2026-07-24, see benchmarks/RESTLER_RUNBOOK.md)",
+        "any (pageSize, pageIndex) pair where pageIndex*pageSize exceeds the current item count, or pageSize is negative"
+      ],
+      "notes": "Easier to trigger than the single canonical example the fixture's own README leads with (`pageSize=-2`) suggests -- against a freshly-reset (empty) target, almost any nonzero pageIndex with a comparable pageSize already overshoots Items.Count and triggers it. A tool that ever sends a nonzero pageIndex early in a run (before any POST /items has grown the list) is likely to find this fast; a tool that only probes pageSize in isolation with pageIndex=0 needs pageSize<0 specifically."
+    }
+  ],
+  "recall_denominator": 1,
+  "precision_definition": "confirmed findings (per BENCHMARK_PLAN.md §8 validation pipeline: reproduced, minimized, evidence-captured) that map to vuln_id T0-VULN-001, divided by all confirmed findings on this target. Any other confirmed 500/finding on T0 is NOT in this manifest and must be treated as a false positive relative to ground truth (or flagged for manifest review if it looks like a second real, previously-unnoticed bug -- see 'Manifest maintenance' below).",
+  "manifest_maintenance_note": "If a benchmark run confirms a distinct-root-cause bug on T0 that is NOT vuln_id T0-VULN-001, do not silently count it as a false positive without human review first -- it may be a second real bug in the fixture that this manifest simply hasn't caught up to yet (the fixture's own README only documents the one deliberately planted bug; it has not been exhaustively audited for incidental ones)."
+}

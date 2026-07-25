@@ -315,7 +315,7 @@ Multi-identity from an auth JSON file (`docs/FUZZER_AUTHENTICATION.md` schema): 
 
 *Reviewed as a working offensive-security engineer deciding whether to run this on a client engagement.*
 
-**Would I trust it?** Partially. The honest triage taxonomy and the FP-engineering in `oracle.go` earn credibility fast. But *no CI, untested instrumentation, and a coverage signal I can't verify* make me nervous about both false negatives (silently uninstrumented assemblies → "no bugs" that are really "no coverage") and the "% coverage" numbers. I would not trust a clean run to mean "this API is safe."
+**Would I trust it?** More than at first review. The honest triage taxonomy and FP-engineering in `oracle.go` earn credibility fast, and the trust gaps I flagged are now largely closed: there **is** CI (`e2e.yml` on a planted-bug fixture), instrumentation is **self-verifying and fail-closed** (`checkCoverageHealth`, `/shm/health`), and coverage is bucketed + honestly sized. Remaining trust gap: no deterministic record/replay yet (#25), so a specific finding isn't guaranteed bit-for-bit repeatable. I would still not read a clean run as "this API is safe" (no OAST → blind vulns), but I'd trust the coverage numbers.
 
 **What would frustrate me?**
 - Getting it running: Docker-only grey-box, regex Dockerfile adaptation that may misdetect my build, pasting JWTs that expire mid-run, RESTler in the loop.
@@ -337,8 +337,8 @@ Blind injection (SSRF/XXE/RCE/blind-SQLi) without OAST; multi-step business-logi
 
 | Subsystem | Maturity | Gating weakness |
 |---|---|---|
-| IL rewriting / SharpFuzz | Good | Docker-only; silent per-assembly link failures; no AOT |
-| Coverage signal | **Weak** | Binary edges, no buckets, concurrency smearing |
+| IL rewriting / SharpFuzz | Good | ✅ zero-edit hook + load-time linking (lazy assemblies) + fail-closed health done; still Docker-only, no AOT |
+| Coverage signal | Good (was Weak) | ✅ AFL hit-count buckets + single-scan first-observer-wins attribution done; per-*input* path novelty / CMPLOG-via-IL (#21) still open |
 | Grammar generation | Good (was Medium) | ✅ RESTler retired (`grammarc/`), ✅ real Roslyn SSE (`analyzer/`, syntax-tree scope); no typed body model / structural mutation still open |
 | Scheduling / MOpt / corpus | **Strong** | ✅ CMPLOG-lite (#11) + field-aware boundary mutation (#14, partial) landed; no persistence still open |
 | Sequences / state | Medium | Flat key-value, not state-graph reward |
@@ -375,6 +375,31 @@ Ordering rationale: coverage resolution and instrumentation universality gate *e
 | 18 | ✅ **DONE (partial) — Differential oracles** (`oracle.go::maybeEnqueueDifferentialProbes` — verb (GET→HEAD), content-type (JSON→text/plain, same bytes), route-case, param-location confusion; gated on `authRequiredEndpoints` strength 2 so a hit means the confusion itself bypassed a real check) — param-location technique duplicates the same id as a query param rather than a differently-owned id (no ownership-matrix infra yet — see #8) | P2 | Med | 2 wk | — | Med | — | New auth-bypass & parser-confusion bug class |
 | 19 | ✅ **DONE (partial) — Single `upsidefuzz` CLI orchestrator** (`upsidefuzz.py`, subcommands `instrument`/`build`/`up`/`down`/`verify`/`grammar`/`fuzz`/`run`/`doctor`; zero-install Docker mode via `./upsidefuzz` + `Dockerfile.cli`, bundling Python/.NET SDK/void so only Docker is required locally). Repo hygiene (purging target checkouts from history) still open | P2 | Med | 2 wk | — | — | High | Adoption; hides 4-language pipeline |
 | 20 | **Value-level minimization + behavioral mass-assign confirmation** | P2 | Low–Med | 1 wk | — | Med | — | Better PoCs; catches silent privilege writes |
+
+**Status roll-up (verified against the tree):** DONE — #1, #2, #3, #4, #7, #9, #10, #11, #12, #14, #17, #18, #19 (several "partial", see per-row notes). OPEN — #5 (OAST), #6 (non-Docker host mode), #8 (ownership-matrix BOLA), #13 (auth/OIDC), #15 (persistent corpus), #16 (SARIF/HTML — no first-party exporter found), #20 (value-min + behavioral mass-assign).
+
+---
+
+# Additional High-ROI Improvements (21–32)
+
+Because most of the original twenty are now landed, this is the next tranche. Same columns. Ordering favors (a) trust/reproducibility and (b) depth unlocks that build on machinery the project already owns (Cecil IL rewriting, the `analyzer/` Roslyn pass, `grammarc/`, the oracle layer).
+
+| # | Improvement | Priority | Difficulty | Effort | Δ Coverage | Δ Bugs | Δ Universality | Why it ranks here / files |
+|---|---|---|---|---|---|---|---|---|
+| 21 | **CmpLog/RedQueen via IL comparison instrumentation** — capture operands of `==`/`Equals`/`StartsWith`/switch at rewrite time and feed them to the fuzzer as a live dictionary | P0 | High | 3–4 wk | **High** | High | — | Owns the Cecil pipeline (`instrumentor/Program.cs`); the .NET analog of AFL++'s biggest depth feature. Beats magic-value checks that buckets+mutation can't guess. Distinct from #11 (that mines 400 bodies) |
+| 22 | **Binary constant/string extraction at instrument time** — Cecil harvests string/numeric literals from IL into `dict.json` | P1 | Low | 3–5 d | High | Med | — | Cheap (one existing Cecil pass); free domain dictionary, like `afl -x` |
+| 23 | **Response-schema conformance oracle** — validate response bodies against the OpenAPI schema; mismatch = bug | P1 | Low | 3–5 d | — | Med | — | `grammarc/` already parses the spec; a whole free bug class (leaked fields, type drift) currently ignored |
+| 24 | **JWT / session-lifecycle oracle** — `alg=none`, `kid` injection, tampered/expired token, replay after logout, mid-session privilege change | P1 | Med | 2 wk | — | High | — | High-value, very .NET; reuses `identity.go`/`auth.go`; natural extension of the oracle lead |
+| 25 | **Deterministic record/replay + global seed** — journal of requests + one RNG seed so any run/finding replays bit-for-bit | P0 | Med | 2 wk | — | — (trust) | — | The direct 6→8 mover. `math/rand` is currently unseeded → runs are unrepeatable |
+| 26 | **Sensitive-data / PII exposure oracle** — detect emails/tokens/PAN/connection-strings/stack traces in 2xx bodies | P1 | Low | 1 wk | — | High | — | Real finding class independent of 500s; regex over bodies already collected (`learnFromResponse`) |
+| 27 | **Taint-marking of injected values** — tag fuzzer payloads, detect where they resurface (response, SQL error, file path) | P1 | Med | 1–2 wk | — | High | — | Sharpens injection precision in `oracle.go`, finds reflected sinks, cuts false positives |
+| 28 | **Regression / diff-guided fuzzing** — fuzz only code changed between two commits (Cecil knows the methods; prioritize their endpoints) | P1 | Med | 2 wk | — | Med | — | Adoption killer-feature for CI ("fuzz just this PR in 5 min"); nothing in .NET does it out of the box |
+| 29 | **Non-REST surfaces: gRPC, GraphQL (HotChocolate), SignalR/WebSocket** | P2 | High | 4–6 wk | Med | High | High | Large real .NET surface currently outside `template.go`; GraphQL brings its own oracle class (introspection, alias/depth DoS, batching) |
+| 30 | **Algorithmic-complexity / ReDoS / resource-exhaustion oracle** — flag response-time/memory blow-up on crafted inputs | P2 | Med | 2 wk | — | Med | — | DoS class atop existing latency baseline (`baselineLatMS`) + `/shm` (add GC/mem) |
+| 31 | **Readiness-gated startup + DB-seeding harness** — poll readiness instead of `sleep 45`; seed known per-identity objects | P1 | Low | 1 wk | — | — (reliability) | — | Removes the startup flap (bit us in `verify-hook.sh`) AND provides ground truth for ownership-matrix BOLA (#8) |
+| 32 | **Distributed parallel fuzzing + corpus sync** (AFL `-M/-S` across N target replicas) | P2 | High | 3 wk | — | Med (throughput) | — | Scale on large apps; synergizes with persistent corpus (#15) |
+
+**Suggested near-term order (mixing old + new):** trust first — #7 (done) → **#25 record/replay** → **#31 readiness/seeding** → finish #4; then depth — **#21 CmpLog** → **#22 constants** → **#5 OAST** ; then new finding classes — **#23 schema-conformance** → **#26 PII** → **#24 JWT** → **#27 taint**. The cheapest single credibility win remaining is **#25** (reproducibility); the biggest bug-depth win is **#21** (CmpLog).
 
 ---
 

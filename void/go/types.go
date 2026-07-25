@@ -15,6 +15,9 @@ import (
 // Seed, Epoch, JSONLWriter, FenwickSampler, and all stat/record structs.
 
 type Config struct {
+	Seed                        int64
+	RunID                       string
+	EventLog                    string
 	GrammarDir                  string
 	SourceDir                   string
 	DictPath                    string

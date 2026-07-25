@@ -88,6 +88,12 @@ bitwarden_prep*/
 crashes/
 summaries/
 
+# ── Benchmark run artifacts (BENCHMARK_PLAN.md raw/ data model) ───────────────
+# Raw per-run crash JSONLs are large (hundreds of MB to GB per run at longer
+# budgets) and regenerable by re-running the harness -- keep the harness code,
+# manifests, configs, and docs under benchmarks/ tracked, but not raw/.
+benchmarks/raw/
+
 # ── Target project source clones (large, not part of this tool) ──────────────
 
 btcpayserver/
