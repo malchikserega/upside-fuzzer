@@ -81,6 +81,17 @@
   .pill-high { background: var(--sev-high-soft); color: var(--sev-high); }
   .pill-info { background: var(--sev-info-soft); color: var(--sev-info); }
   .pill-accent { background: var(--accent-soft); color: var(--accent-ink); }
+  .payload {
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 8px;
+    padding: 12px 14px; margin: 10px 0 4px; overflow-x: auto;
+  }
+  .payload pre {
+    margin: 0; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .payload .req { color: var(--text); }
+  .payload .resp { color: var(--accent-ink); }
+  .payload .k { color: var(--text-muted); }
   .card {
     background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; padding: 20px 22px; margin: 18px 0;
   }
@@ -179,6 +190,17 @@ bug" — in a run this size, most flagged signals are the former.</p>
   real key material attached yet. The access-control gap looks real; this run didn't
   prove it leaks anything sensitive. Manually repeat against a device with real key
   material to confirm impact.</p>
+  <div class="payload"><pre><span class="req">POST /devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/retrieve-keys
+Authorization: Bearer &lt;user2-fuzzuser2 JWT&gt;
+
+(empty body)</span>
+
+<span class="resp">200 OK
+{"id":"4564d60c-a2ad-44a6-abb2-b492002ece2e","name":"57e70f25-FuzzCorp","type":0,
+ "identifier":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+ "creationDate":"2026-07-25T02:50:24.7933333Z",
+ "encryptedUserKey":null,"encryptedPublicKey":null,"object":"protectedDevice"}</span></pre></div>
+  <p style="font-size:13px;color:var(--text-muted)">Same identifier, same identity, via <code>GET /devices/identifier/{id}</code> — identical result. The identifier itself is fuzzer-generated garbage, not a real device value.</p>
 </div>
 
 <h3>Tier 2 — Flagged by the tool, debunked on inspection</h3>
@@ -188,6 +210,12 @@ bug" — in a run this size, most flagged signals are the former.</p>
   <p>A user's public key exists specifically so <em>other</em> users can fetch it for
   end-to-end key exchange. Not a vulnerability — a documented gap in the oracle itself
   (no way yet to know an endpoint is intentionally cross-identity-readable).</p>
+  <div class="payload"><pre><span class="req">GET /users/52d692d5-abea-46e8-a72a-b492002e0d8b/public-key
+Authorization: Bearer &lt;user2-fuzzuser2 JWT&gt;   (a different user's token)</span>
+
+<span class="resp">200 OK
+{"userId":"52d692d5-abea-46e8-a72a-b492002e0d8b",
+ "publicKey":"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2bOrlQtyfqzydFagzWfDFbskocb/..."}</span></pre></div>
 </div>
 <div class="card tier2">
   <h4><span class="pill pill-info">debunked</span> sqli_time_based on rejected requests</h4>
@@ -195,7 +223,19 @@ bug" — in a run this size, most flagged signals are the former.</p>
   <p>All three fired on HTTP 400 responses ("User verification failed" / "Invalid
   password") — the request was rejected before doing anything SQL-adjacent, and none were
   repro-verified. Timing noise from concurrency contention under load, not SQL injection.
-  Same conclusion this project reached on the same finding shape in an earlier campaign.</p>
+  Same conclusion this project reached on the same finding shape in an earlier campaign.
+  The actual attempted payloads, for the record:</p>
+  <div class="payload"><pre><span class="req">POST /accounts/verify-password
+{"masterPasswordHash":"1'; WAITFOR DELAY '0:0:2'-- -","otp":"..%252f..%252f..%252fetc%252fpasswd", ...}</span>
+<span class="resp">→ 400 {"validationErrors":{"MasterPasswordHash":["Invalid password."]}}</span>
+
+<span class="req">POST /webauthn/attestation-options
+{"$type":"System.Diagnostics.Process, System","masterPasswordHash":"a","otp":"1 AND pg_sleep(2)", ...}</span>
+<span class="resp">→ 400 {"validationErrors":{"":["User verification failed."]}}</span>
+
+<span class="req">DELETE /accounts
+{"masterPasswordHash":"fuzzstring","otp":"1) AND SLEEP(2)-- -", ...}</span>
+<span class="resp">→ 400 {"validationErrors":{"":["User verification failed."]}}</span></pre></div>
 </div>
 
 <h3>Tier 3 — Real, reproducible bugs (robustness/DoS-class)</h3>
@@ -209,6 +249,24 @@ bug" — in a run this size, most flagged signals are the former.</p>
   <tr><td class="mono">$type deserialization probes</td><td class="mono">5 clusters</td><td>All failed cleanly (<code>Expected 0x prefix</code>) — no evidence of exploitable deserialization.</td></tr>
 </table>
 </div>
+<div class="payload"><pre><span class="req">POST /ciphers/0/attachment-admin
+(empty body)</span>
+<span class="resp">→ 500 {"exceptionMessage":"Object reference not set to an instance of an object.",
+       "exceptionStackTrace":"   at Bit.Api.Vault.Controllers.CiphersController.ValidateAttachment() ..."}</span>
+
+<span class="req">POST /devices
+Authorization: Bearer &lt;org-owner-fuzzuser0 JWT&gt;
+{"identifier":"fuzzstring","name":"upsidefuzz","type":21}</span>
+<span class="resp">→ 500 {"exceptionMessage":"Cannot insert duplicate key row in object 'dbo.Device' with
+       unique index 'UX_Device_UserId_Identifier'. The duplicate key value is
+       (52d692d5-abea-46e8-a72a-b492002e0d8b, fuzzstring)."}</span>
+
+<span class="req">POST /ciphers/attachment/validate/azure
+Authorization: Bearer &lt;guest — no real token&gt;
+(empty body)</span>
+<span class="resp">→ 500 {"exceptionMessage":"Value cannot be null. (Parameter 's')",
+       "exceptionStackTrace":"   at System.Text.Encoding.GetBytes(String s)
+   at Bit.Core.Utilities.CoreHelpers.FixedTimeEquals ..."}</span></pre></div>
 
 <h3>Tier 4 — Systemic pattern, real, low severity individually</h3>
 <div class="card tier3">
@@ -219,6 +277,11 @@ bug" — in a run this size, most flagged signals are the former.</p>
   route/body value as a GUID or base64 string without validating shape first. Not
   independently exploitable, but the same input-validation mistake made independently in
   ~20 places — a real, actionable ticket.</p>
+  <div class="payload"><pre><span class="req">DELETE /accounts/sso/admin&#8203;
+Authorization: Bearer &lt;org-owner-fuzzuser0 JWT&gt;</span>
+<span class="resp">→ 500 {"exceptionMessage":"Unrecognized Guid format.",
+       "exceptionStackTrace":"   at System.Guid..ctor(String g)
+   at Bit.Api.Auth.Controllers.AccountsController.DeleteSsoUser(String organizationId) ..."}</span></pre></div>
 </div>
 <div class="card tier3">
   <h4>The 78%-of-all-crashes cluster is a framework-internal routing assertion</h4>
@@ -229,6 +292,10 @@ bug" — in a run this size, most flagged signals are the former.</p>
   reflection check expects. Real and externally triggerable, but its security relevance
   is limited to "causes a 500 instead of a clean 4xx" — hence <code>needs_review</code>,
   not <code>likely_vuln</code>.</p>
+  <div class="payload"><pre><span class="req">POST /organizations/0/users/0
+Authorization: Bearer &lt;org-owner-fuzzuser0 JWT&gt;
+{}</span>
+<span class="resp">→ 500 {"error":"unhandled_exception"}</span></pre></div>
 </div>
 
 <div class="chart-wrap">

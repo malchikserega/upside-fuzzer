@@ -87,6 +87,28 @@ created through a real login flow, not a fuzzer POST). This is the one finding f
 run worth a security engineer's time; everything else below is either debunked, a
 robustness bug, or informational.
 
+**Example — request as `user2-fuzzuser2`, but the returned device belongs to a
+different, earlier identity:**
+```
+POST /devices/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/retrieve-keys
+Authorization: Bearer <user2-fuzzuser2 JWT>
+
+(empty body)
+```
+```json
+200 OK
+{"id":"4564d60c-a2ad-44a6-abb2-b492002ece2e","name":"57e70f25-FuzzCorp","type":0,
+ "identifier":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+ "creationDate":"2026-07-25T02:50:24.7933333Z",
+ "encryptedUserKey":null,"encryptedPublicKey":null,"object":"protectedDevice"}
+```
+Same result from `GET /devices/identifier/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
+(same identifier, same identity) — `lastActivityDate`/`isTrusted` also returned, still
+`encryptedUserKey`/`encryptedPublicKey`: `null`. The identifier itself is fuzzer-generated
+garbage (`bbbb...`), not a real device value — which is exactly why the null key fields
+don't prove a leak by themselves, and exactly why this needs a manual repeat against a
+real, key-bearing device.
+
 ### Tier 2 — Flagged by the tool, debunked on inspection (not real bugs)
 
 - **`GET /users/{userId}/public-key`** flagged `likely_vuln_high` /
@@ -96,6 +118,17 @@ robustness bug, or informational.
   oracle currently has no way to know a given endpoint is *intentionally*
   cross-identity-readable (a documented gap — `ARCHITECTURE_REVIEW.md` #8, "ownership-matrix
   BOLA" is still open). Excluded from the real-finding count.
+
+  ```
+  GET /users/52d692d5-abea-46e8-a72a-b492002e0d8b/public-key
+  Authorization: Bearer <user2-fuzzuser2 JWT>   (a different user's token)
+  ```
+  ```json
+  200 OK
+  {"userId":"52d692d5-abea-46e8-a72a-b492002e0d8b",
+   "publicKey":"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2bOrlQtyfqzydFagzWfDFbskocb/8jWFUIJ0Rgq5BTXBtNOO8oR328B4tR5hLmATkMP5ws4ULXbOdEuIy9mEcEzl3FnCzx2+9AdK28JQYjJpUtRrpRMeg4q/nikkLucw5sy3u0KUgJVwDW6wJPD2yLkAvyDgJ4HZ/rrBMFr16sTWV/mvBXIFujAPaPa0/O7GVn..."}
+  ```
+
 - **`sqli_time_based`** on `DELETE /accounts`, `POST /accounts/verify-password`,
   `POST /webauthn/attestation-options` (3 instances, all `likely_vuln_high`). All three
   fired on **HTTP 400** responses whose bodies read `"User verification failed"` /
@@ -104,6 +137,25 @@ robustness bug, or informational.
   rejected, validation-failed request is far more consistent with concurrency contention
   under a 64-connection fuzzing load than genuine SQL execution. Same conclusion this
   project reached on the same finding shape in an earlier campaign — excluded here too.
+
+  The actual payloads the oracle flagged (real attempted injections, for the record — the
+  reason they're excluded is the 400+no-repro combination above, not that the payloads
+  look harmless):
+  ```
+  POST /accounts/verify-password
+  {"masterPasswordHash":"1'; WAITFOR DELAY '0:0:2'-- -","otp":"..%252f..%252f..%252fetc%252fpasswd", ...}
+  → 400 {"validationErrors":{"MasterPasswordHash":["Invalid password."]}}
+
+  POST /webauthn/attestation-options
+  {"$type":"System.Diagnostics.Process, System","masterPasswordHash":"a","otp":"1 AND pg_sleep(2)", ...}
+  → 400 {"validationErrors":{"":["User verification failed."]}}
+
+  DELETE /accounts
+  {"masterPasswordHash":"fuzzstring","otp":"1) AND SLEEP(2)-- -", ...}
+  → 400 {"validationErrors":{"":["User verification failed."]}}
+  ```
+  All three are rejected by model validation *before* any query would run — the
+  `WAITFOR`/`SLEEP`/`pg_sleep` payloads never reach a database.
 
 ### Tier 3 — Real, reproducible bugs (robustness/DoS-class, not directly exploitable)
 
@@ -119,6 +171,29 @@ of a security vulnerability. Cited by real cluster label:
 | Billing/Stripe edge cases (`BillingException`, `Invalid API Key provided: SECRET`, `Could not find plan for type ...`) | 6 clusters | Mostly artifacts of this test environment's placeholder Stripe/installation keys (a real deployment has real billing credentials) rather than bugs in Bitwarden's billing logic itself — noted for completeness, not counted as security findings. |
 | `$type`-deserialization-gadget probes (`System.Windows.Data.ObjectDataProvider`, `System.Configuration.Install.AssemblyInstaller`, ...) → `Expected 0x prefix` | 5 clusters | The engine's built-in insecure-deserialization gadget probes were tried against GUID-shaped route parameters. Every one failed with a clean parse error (`Expected 0x prefix`), not a type-confusion signal — **no evidence of exploitable deserialization**; the crash itself (uncaught `FormatException` instead of a 400) is a minor robustness gap, nothing more. |
 
+**Example payloads, straight from the crash log:**
+```
+POST /ciphers/0/attachment-admin
+(empty body)
+→ 500 {"exceptionMessage":"Object reference not set to an instance of an object.",
+       "exceptionStackTrace":"   at Bit.Api.Vault.Controllers.CiphersController.ValidateAttachment() ..."}
+
+POST /devices
+Authorization: Bearer <org-owner-fuzzuser0 JWT>
+{"identifier":"fuzzstring","name":"upsidefuzz","type":21}
+→ 500 {"exceptionMessage":"Cannot insert duplicate key row in object 'dbo.Device' with
+       unique index 'UX_Device_UserId_Identifier'. The duplicate key value is
+       (52d692d5-abea-46e8-a72a-b492002e0d8b, fuzzstring).\nThe statement has been terminated."}
+
+POST /ciphers/attachment/validate/azure
+Authorization: Bearer <guest — no real token>
+(empty body)
+→ 500 {"exceptionMessage":"Value cannot be null. (Parameter 's')",
+       "exceptionStackTrace":"   at System.ArgumentNullException.Throw(String paramName)
+   at System.Text.Encoding.GetBytes(String s)
+   at Bit.Core.Utilities.CoreHelpers.FixedTimeEquals ..."}
+```
+
 ### Tier 4 — Systemic pattern, real, low severity individually, but worth an engineering ticket
 
 **Unvalidated GUID/Base64 route parameters, ~20 endpoints, one root cause repeated.**
@@ -132,6 +207,14 @@ exception instead of a clean 400. Not independently exploitable beyond "uncaught
 stack trace disclosure in dev mode," but it's the same mistake made independently in ~20
 places — a real, actionable pattern for whoever owns input validation conventions here.
 
+```
+DELETE /accounts/sso/admin​
+Authorization: Bearer <org-owner-fuzzuser0 JWT>
+→ 500 {"exceptionMessage":"Unrecognized Guid format.",
+       "exceptionStackTrace":"   at System.Guid..ctor(String g)
+   at Bit.Api.Auth.Controllers.AccountsController.DeleteSsoUser(String organizationId) ..."}
+```
+
 **The 78%-of-all-crashes cluster is a framework-internal routing assertion, not a
 business-logic bug.** `A route decorated with '[Authorize<IOrganizationRequirement>]'
 must include a route value named 'orgId' or 'organizationId'...` — 2,054 of the run's
@@ -143,6 +226,13 @@ infrastructure, not attacker-controlled business logic. It is real (externally
 triggerable, causes a 500 instead of a 404/400) but its security relevance is limited to
 "this class of malformed URL causes a stack trace instead of a clean rejection," which is
 why it's `needs_review`, not `likely_vuln`.
+
+```
+POST /organizations/0/users/0
+Authorization: Bearer <org-owner-fuzzuser0 JWT>
+{}
+→ 500 {"error":"unhandled_exception"}
+```
 
 ### Excluded entirely (test-environment artifacts)
 
