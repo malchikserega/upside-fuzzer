@@ -116,7 +116,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   ├── boundary.py             Boundary-value synthesis (min-1/max+1, canned formats, etc.)
 │   ├── multipart.py            Multipart/form-data template synthesis
 │   ├── emit_templates.py       Writes templates.export.json (Go engine contract)
-│   ├── emit_dict.py            Writes dict.json (Go engine contract)
+│   ├── emit_dict.py            Writes dict.json (Go engine contract); scaffolds + merges dict.custom.json
 │   └── cli.py                  Orchestration entry point (python3 -m grammarc.cli)
 │
 ├── analyzer/                   Roslyn syntax-tree analyzer (C# tool, Microsoft.CodeAnalysis.CSharp)
@@ -227,6 +227,11 @@ curl -s http://localhost:8080/swagger/v1/swagger.json -o swagger.json
 
 One command, no Docker, no RESTler — writes `templates.export.json` + `dict.json` directly to
 `--out` (default `grammars/<swagger-basename>/`).
+
+**Adding your own fuzzing values?** You don't need `--dict` for that (it's a separate, one-off
+mechanism) — the first compile also creates `<out>/dict.custom.json`, a starter file that's
+merged into `dict.json` on every future run and never overwritten. Edit that file directly; see
+[INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format) for the full workflow.
 
 ### 5. Run the fuzzer
 

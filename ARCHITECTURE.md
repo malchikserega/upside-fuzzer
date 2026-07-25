@@ -414,6 +414,37 @@ same live-fuzz session hit the same known `pageSize` overflow bug class ~7x more
 in the same time budget after this change (124 vs. 18 crash hits, from 18k vs 54k total
 requests — depth over breadth).
 
+### 6b. Custom dictionary convention (`dict.custom.json`)
+
+`dict.json` (§6's final artifact) is fully auto-discovered and fully overwritten by
+`grammarc` on every compile — never a safe place for hand-added domain values,
+since the next spec change or re-run silently discards them. `grammarc/emit_dict.py`
+adds a second, deliberately separate file with the opposite lifecycle:
+
+- **`scaffold_custom_dict_if_missing(out_dir)`** — called once per `compile_grammar`
+  invocation (`cli.py`), before the pool is finalized. Writes `dict.custom.json` with
+  an inline `_readme` (plain JSON string array — no real comment syntax exists in
+  JSON, so the documentation has to be data, not decoration) and one placeholder key
+  (`exampleFieldName`, deliberately shaped so it can never be mistaken for a real
+  target field) **only if the file doesn't already exist**; a no-op — returns
+  `False`, touches nothing — on every subsequent run.
+- **`merge_custom_dict_convention(pool, out_dir)`** — thin wrapper over the existing
+  `merge_external_dict` (the same function `--dict <path>` already used), pointed at
+  the fixed `out_dir / "dict.custom.json"` path instead of a CLI-supplied one. Called
+  unconditionally after any explicit `--dict` merge, so the two are independent and
+  additive: a one-off/CI-supplied `--dict` file for pipeline-specific values, plus
+  the convention file for values a human maintains by hand across runs.
+
+Net effect: `dict.custom.json` is created once, read every time, and never written to
+again by the tool — the inverse lifecycle of `dict.json` — so values added there
+survive indefinitely across regenerations, including ones triggered by the target's
+own OpenAPI spec changing. No `--dict` flag or other configuration is required for
+this path; it's purely a fixed filename convention inside `--out`. Full user-facing
+workflow: `INSTRUCTIONS.md` §10 ("Custom Dictionary Format"). Tests:
+`grammarc/test_emit_dict.py` (`python3 -m unittest grammarc.test_emit_dict`),
+covering scaffold creation, the never-overwrite guarantee, and a full two-run
+survives-regeneration simulation.
+
 ---
 
 ## 7. Void Architecture

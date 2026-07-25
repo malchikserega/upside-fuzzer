@@ -39,13 +39,20 @@ First-party pipeline (RESTler retired — no Docker, no external compiler):
   Output: templates.export.json + dict.json written directly to --out — no
   intermediate grammar.py, no manual `cp`, no separate export-templates.py step.
 
+  Also writes/maintains --out/dict.custom.json: a starter file created once (never
+  overwritten again) for YOUR domain-specific fuzzing values -- real tenant IDs,
+  coupon codes, staging API keys, etc. It's auto-merged into dict.json on every
+  future run, so edits there survive regeneration with no flag needed. See
+  INSTRUCTIONS.md section 10 ("Custom Dictionary Format") for the full workflow.
+
 Usage:
   ./compile-grammar.sh <swagger.json> [--dict <dict.json>] [--src <source_dir>] [--out <dir>]
   ./compile-grammar.sh <swagger.json> [dict.json] [src_dir]   # positional form
 
 Arguments:
   <swagger.json>          Path to the OpenAPI/Swagger JSON file (required)
-  --dict, -d <file>       Custom dictionary JSON with domain-specific values (optional)
+  --dict, -d <file>       Additional one-off dictionary JSON to merge (optional;
+                           separate from --out/dict.custom.json, see above)
   --src,  -s <directory>  .NET source tree for Roslyn constraint extraction (optional)
   --out,  -o <directory>  Output directory (default: grammars/<swagger-basename>/)
 

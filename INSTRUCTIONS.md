@@ -716,7 +716,32 @@ Use this target when you want anti-forgery tokens, cookie-based auth, and a modu
 
 ## 10. Custom Dictionary Format
 
-The `--dict` flag to `compile-grammar.sh` accepts a JSON file that provides domain-specific values to seed the fuzzer's mutation engine. `grammarc/emit_dict.py` writes (and `void/go/store.go` reads) a simple **flat map**: each key is a request field/payload name, each value an array of candidate strings.
+Every `compile-grammar.sh` run writes two dictionary files into the grammar's `--out` directory, and they have opposite lifecycles — knowing which is which is the whole trick to using this effectively:
+
+| File | Written by | Lifecycle | Edit it? |
+|------|-----------|-----------|----------|
+| `dict.json` | `grammarc`, auto-discovered from the target's own OpenAPI spec (+ Roslyn constraints, if `--src` was given) | **Fully overwritten every compile.** | No — hand edits here are silently lost on the next run. |
+| `dict.custom.json` | **You.** `grammarc` writes a starter copy the first time it compiles a given `--out` directory | **Never touched again once it exists** — `grammarc` only ever reads it (to merge into `dict.json`), never writes to it | **Yes — this is the file.** |
+
+### The workflow
+
+1. Run `compile-grammar.sh` once. If `dict.custom.json` doesn't exist yet in `--out`, `grammarc` creates a starter copy with an inline `_readme` (plain JSON strings — the file stays valid JSON, since real comments aren't legal there) and one obviously-fake `exampleFieldName` key to show the shape.
+2. Open the freshly-written `dict.json` in the same directory to see the real field/payload keys `grammarc` discovered for this target (`currencyCode`, `userId`, `amount`, ...).
+3. Edit `dict.custom.json`: add the keys you care about with values you actually know are meaningful for this system — real tenant/org IDs, known-valid coupon codes, staging API keys, currency/locale codes the domain actually uses, admin usernames, anything the spec itself can't express but you know from working with it. Delete the placeholder `exampleFieldName` key once you've added your own.
+4. Re-run `compile-grammar.sh` (e.g. after the target's API changes) as often as you like — `dict.custom.json` is read and merged into the fresh `dict.json` every time, and is itself never regenerated or overwritten. Your additions survive indefinitely.
+
+```
+grammars/myproject/
+├── templates.export.json    ← auto-generated, overwritten every compile
+├── dict.json                ← auto-generated, overwritten every compile (spec-derived + your merged custom values)
+└── dict.custom.json         ← yours, created once, never overwritten — edit this one
+```
+
+You never need to pass `--dict` for this — the merge is automatic by convention (same directory, fixed filename). `--dict <path>` still exists as a *separate*, explicit mechanism for a one-off or CI-supplied dictionary file living anywhere else; it's merged independently and doesn't replace `dict.custom.json`.
+
+### Format
+
+`grammarc/emit_dict.py` writes (and `void/go/store.go` reads) a simple **flat map**: each key is a request field/payload name, each value an array of candidate strings. `dict.custom.json` uses the identical format.
 
 ### Structure (recommended — what `grammarc` itself emits)
 

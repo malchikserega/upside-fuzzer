@@ -49,3 +49,62 @@ def write_dict(pool: Dict[str, List[str]], out_path: Path) -> None:
     final = {k: uniq([v for v in vs if v != ""]) for k, vs in pool.items()}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(final, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+# ── Custom dictionary convention (add-your-own values, survives regeneration) ──
+#
+# dict.json (above) is fully regenerated -- and fully overwritten -- on every
+# compile-grammar.sh run, so it is not a safe place to hand-edit values. This is
+# the dedicated file for that: grammarc auto-creates a starter copy the first time
+# it compiles a given --out directory, auto-merges it into every dict.json it
+# writes from then on (see compile_grammar in cli.py), and never overwrites or
+# deletes it once it exists -- edits made here persist across every regeneration,
+# including ones triggered by the target's OpenAPI spec changing.
+CUSTOM_DICT_FILENAME = "dict.custom.json"
+
+_CUSTOM_DICT_SCAFFOLD: Dict[str, Any] = {
+    "_readme": [
+        "This file is yours. compile-grammar.sh reads and merges it into dict.json",
+        "on every run, but NEVER overwrites or deletes it -- values you add here",
+        "survive re-running compile-grammar.sh, including after the target's API changes.",
+        "",
+        "Format: flat map. Each key is a request field/payload name; each value is an",
+        "array of candidate strings the fuzzer tries for that field, blended in",
+        "alongside its own generic boundary-value mutations -- not a replacement for them.",
+        "",
+        "Key matching is case/separator-insensitive: userId, user_id, UserId, and",
+        "user-id all resolve to the same pool (void/go/store.go::canonicalKey).",
+        "",
+        "To find real field names worth targeting, open dict.json in this same",
+        "directory (fully regenerated every run, auto-discovered from this target's",
+        "own OpenAPI spec + Roslyn constraints) and copy the keys you care about here",
+        "with values you actually want tried: real tenant/org IDs, known-valid",
+        "coupon/promo codes, staging API keys, currency/locale codes your domain",
+        "actually uses, admin usernames, etc. -- anything the spec can't tell the",
+        "fuzzer but you know from working with this system.",
+        "",
+        "Full docs: INSTRUCTIONS.md section 10, 'Custom Dictionary Format'.",
+    ],
+    "exampleFieldName": [
+        "REPLACE-ME -- not a real field in this target, delete this key once you've added your own",
+    ],
+}
+
+
+def scaffold_custom_dict_if_missing(out_dir: Path) -> bool:
+    """Write a starter dict.custom.json in out_dir if one doesn't exist yet.
+    Never overwrites an existing file. Returns True if a new file was created."""
+    path = out_dir / CUSTOM_DICT_FILENAME
+    if path.exists():
+        return False
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_CUSTOM_DICT_SCAFFOLD, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def merge_custom_dict_convention(pool: Dict[str, List[str]], out_dir: Path) -> None:
+    """Merge <out_dir>/dict.custom.json into pool if present -- the convention path,
+    automatic on every compile, no --dict flag required. A separate, explicit --dict
+    (merge_external_dict) can still be used for one-off/CI-supplied dictionaries and
+    is merged independently; the two are not mutually exclusive."""
+    merge_external_dict(pool, out_dir / CUSTOM_DICT_FILENAME)

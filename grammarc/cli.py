@@ -24,7 +24,13 @@ from typing import Any, Dict, List
 from .boundary import values_from_constraints
 from .common import canonical_key
 from .dependencies import infer as infer_dependencies
-from .emit_dict import merge_external_dict, write_dict
+from .emit_dict import (
+    CUSTOM_DICT_FILENAME,
+    merge_custom_dict_convention,
+    merge_external_dict,
+    scaffold_custom_dict_if_missing,
+    write_dict,
+)
 from .emit_templates import build_template, write_templates_export
 from .multipart import build_multipart_template, multipart_dict_seeds
 from .oas import OASParser
@@ -123,6 +129,13 @@ def compile_grammar(swagger_path: Path, out_dir: Path, roslyn_path: Path | None,
     if external_dict_path:
         merge_external_dict(pool, external_dict_path)
 
+    # Custom dictionary convention: scaffold a starter dict.custom.json the first
+    # time this --out directory is compiled (never overwritten once it exists),
+    # then always merge whatever's in it -- so domain-specific values a user adds
+    # survive every future re-compile, without needing to remember --dict.
+    scaffolded = scaffold_custom_dict_if_missing(out_dir)
+    merge_custom_dict_convention(pool, out_dir)
+
     write_templates_export(templates, out_dir / "templates.export.json", skipped=skipped)
     write_dict(pool, out_dir / "dict.json")
 
@@ -131,6 +144,12 @@ def compile_grammar(swagger_path: Path, out_dir: Path, roslyn_path: Path | None,
         f"multipart_endpoints={len(multipart_eps)} roslyn_matched_types={roslyn_types_matched} "
         f"dict_keys={len(pool)} -> {out_dir}"
     )
+    if scaffolded:
+        print(f"[grammarc] Created starter custom dictionary: {out_dir / CUSTOM_DICT_FILENAME}")
+        print(f"[grammarc]   Add your own fuzzing values there -- it's merged automatically on every")
+        print(f"[grammarc]   future compile and never overwritten. See INSTRUCTIONS.md section 10.")
+    else:
+        print(f"[grammarc] Custom dictionary merged: {out_dir / CUSTOM_DICT_FILENAME}")
     return 0
 
 
