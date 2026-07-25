@@ -113,6 +113,11 @@ type Config struct {
 	InjectionOracle             bool
 	SQLiTimeThresholdSec        float64
 	Profile                     string
+	// CmpLog (Top-20+ #21): poll /shm/cmplog for comparison operands harvested from
+	// the target's own IL and blend them into string/int mutation. No-ops cleanly
+	// (empty pool) against a target built without --cmplog, or in --inject-mode source.
+	CmpLog         bool
+	CmpLogInterval float64 // seconds between /shm/cmplog polls
 }
 
 type Segment struct {

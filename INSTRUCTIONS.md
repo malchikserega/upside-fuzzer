@@ -166,7 +166,19 @@ python3 /path/to/upside-fuzzer/fuzz-prep-multi.py \
 | `hook` *(default)* | **Zero-edit.** Generates a self-contained `UpsideFuzz.Coverage` assembly and wires it via `DOTNET_STARTUP_HOOKS` + `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`. The target's `Program.cs`/`Startup.cs`/`.csproj` are never modified. Coverage is linked at load time, including lazily/dynamically loaded modules (via an `AssemblyLoad` handler). Verify with `curl /shm/health`. | Almost always — most robust and universal. |
 | `source` | **Legacy.** Injects `CoverageExtensions.cs` into the main project and edits `Program.cs`/`Startup.cs` to add the middleware/endpoints. | Only if you need the middleware *inside* the app's exception handler for maximal production-mode exception-type fidelity, or a target where startup hooks are disallowed. |
 
-Both modes expose the identical `/shm/*` endpoints and `X-Coverage-Delta` header — every step after instrumentation is the same.
+Both modes expose the identical `/shm/*` endpoints and `X-Coverage-Delta` header — every step after instrumentation is the same, with one exception: `/shm/cmplog` (CmpLog/RedQueen, Top-20+ #21 — see below) is hook-mode only.
+
+### CmpLog: recovering hardcoded "magic value" checks (hook mode only)
+
+Hook-mode builds also run a second, independent instrumentation pass that
+records the literal operands of the target's own string/int comparisons
+(`String.Equals`/`StartsWith`/`EndsWith`/`Contains`/`==`, and integer
+literal-vs-compare sites) straight out of its IL — recovering hardcoded checks
+like `if (code == "SUPER_SECRET_2026")` that no OpenAPI spec or dictionary could
+ever guess. Nothing to configure: it runs automatically for hook-mode builds, and
+the fuzzer polls it automatically (`-cmplog`, on by default — see §8 flag table).
+Full mechanism in `ARCHITECTURE.md` §7 ("CmpLog/RedQueen via IL Comparison
+Instrumentation").
 
 New command (explicit, equivalent to the default):
 ```bash
@@ -556,6 +568,8 @@ The following are **on by default** and only need explicit flags to *disable*:
 | `-sequence-fanout` | `6` | Raise to 8–10 for wide API surface |
 | `-skip-endpoint-on-500` | `false` | Set `true` when 500s are expected (misconfigured infra) |
 | `-coverage-interval` | `1` | Raise to 5–10 for throughput benchmarking |
+| `-cmplog` | `true` | Set `false` to skip polling `/shm/cmplog` (no effect against a target instrumented without `--cmplog`, or in `--inject-mode source`) |
+| `-cmplog-interval` | `3.0` s | Raise on very high-latency targets to cut poll overhead |
 
 ### Security flag interactions
 

@@ -156,6 +156,11 @@ type Fuzzer struct {
 	lastCoverageReset time.Time
 	// Monotonic request id sequence for low-overhead per-request attribution.
 	requestIDSeq uint64
+	// Last time /shm/cmplog was polled (Top-20+ #21) — throttled independently of
+	// the 100ms main-loop tick since it's a network round trip, not a local check.
+	lastCmpLogPoll time.Time
+	// Counts consecutive /shm/cmplog poll failures, only to log the first one.
+	cmpLogPollErrs int
 
 	// Reusable buffers for weighted template selection to avoid per-call allocations.
 	weightsBuf []float64

@@ -114,6 +114,8 @@ func parseFlags() Config {
 	flag.IntVar(&cfg.AccessProbeQueueMax, "access-probe-queue-max", 256, "Global max queued access-control probes")
 	flag.BoolVar(&cfg.InjectionOracle, "injection-oracle", true, "Enable positive injection oracles (time-based SQLi, SSTI arithmetic, reflection)")
 	flag.Float64Var(&cfg.SQLiTimeThresholdSec, "sqli-time-threshold", 1.5, "Absolute latency (seconds) above which a sleep/benchmark SQLi payload is flagged (also requires >=3x baseline)")
+	flag.BoolVar(&cfg.CmpLog, "cmplog", true, "Poll /shm/cmplog for comparison operands harvested from the target's own IL (Top-20+ #21) and blend them into string/int mutation. No-op against a target built without --cmplog or in --inject-mode source.")
+	flag.Float64Var(&cfg.CmpLogInterval, "cmplog-interval", 3.0, "Seconds between /shm/cmplog polls")
 	flag.Parse()
 
 	// Apply the preset profile ONLY to knobs the user did not explicitly set,

@@ -5,6 +5,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SharpFuzz" Version="2.0.0" />
+    <!-- Pinned to match the version fuzz-prep-multi.py's generated Dockerfile stages
+         install (sharpfuzz_version); 2.0.0 predates SharpFuzz.Options and doesn't build. -->
+    <PackageReference Include="SharpFuzz" Version="2.1.1" />
+    <!-- Top-20+ #21: independent Cecil pass (CmpLogInstrumentor) that instruments
+         comparison call sites; unrelated to SharpFuzz's own IL rewrite, which is a
+         self-contained black box (SharpFuzz.Fuzzer.Instrument) we don't get to hook. -->
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
 </Project>

@@ -242,6 +242,12 @@ func mutateStringCategorized(v string, hint *Segment) (string, string) {
 			return cands[rand.Intn(len(cands))], "mcat_field_constraint"
 		}
 	}
+	// Top-20+ #21: occasionally splice in a string literal harvested straight out of
+	// the target's own comparison IL (CmpLog) — the one class of "magic value" no
+	// dictionary, OpenAPI spec, or generic mutation category could ever guess.
+	if s, ok := cmplogPool.sampleString(); ok && rand.Float64() < 0.15 {
+		return s, "mcat_cmplog"
+	}
 	// 10% chance: value-derived mutations (reverse, null byte) that don't fit a category.
 	if rand.Float64() < 0.10 {
 		misc := []string{reverse(v), v + "\x00"}
@@ -302,6 +308,11 @@ func mutateInt(v string, hint *Segment) string {
 			max := int(*hint.Maximum)
 			cands = append(cands, max-1, max, max+1)
 		}
+	}
+	// Top-20+ #21: blend in integer literals harvested from the target's own
+	// comparison IL (e.g. a hardcoded `if (id == 8675309)` no schema declares).
+	if n, ok := cmplogPool.sampleInt(); ok {
+		cands = append(cands, int(n), int(n)-1, int(n)+1)
 	}
 	return strconv.Itoa(cands[rand.Intn(len(cands))])
 }

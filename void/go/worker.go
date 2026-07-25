@@ -83,6 +83,8 @@ func (f *Fuzzer) mainLoop() error {
 		default:
 		}
 
+		f.pollCmpLogIfDue()
+
 		epIdx, ep := currentEpoch(epochs, time.Since(f.startTime), timeBudget)
 		if ep.Name != lastEpoch {
 			epochFrom := lastEpoch

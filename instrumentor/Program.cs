@@ -12,16 +12,20 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+using Mono.Cecil.Rocks;
 
 // ── Parse CLI ──────────────────────────────────────────────────────────────
 if (args.Length == 0)
 {
-    Console.Error.WriteLine("Usage: instrumentor <path-to-dll> [--namespaces Ns1 Ns2 ...] [--instrument-all-user-code] [--config path]");
+    Console.Error.WriteLine("Usage: instrumentor <path-to-dll> [--namespaces Ns1 Ns2 ...] [--instrument-all-user-code] [--config path] [--cmplog]");
     Environment.Exit(1);
 }
 
 string dllPath = args[0];
 bool instrumentAll = false;
+bool cmpLogEnabled = false;
 string? configPath = null;
 var cliNamespaces = new List<string>();
 
@@ -30,6 +34,10 @@ for (int i = 1; i < args.Length; i++)
     if (args[i] == "--instrument-all-user-code")
     {
         instrumentAll = true;
+    }
+    else if (args[i] == "--cmplog")
+    {
+        cmpLogEnabled = true;
     }
     else if (args[i] == "--config" && i + 1 < args.Length)
     {
@@ -250,4 +258,249 @@ catch (Exception ex)
 {
     Console.Error.WriteLine($"[instrumentor] FAILED: {ex.Message}");
     Environment.Exit(1);
+}
+
+// ── CmpLog/RedQueen via IL comparison instrumentation (Top-20+ #21) ─────────
+// Independent of SharpFuzz's own coverage rewrite above (a separate Cecil pass,
+// re-reading the DLL SharpFuzz just wrote). Hook-mode only: the recorder calls
+// this pass injects target UpsideFuzz.Coverage.CmpLogProbe by assembly name, which
+// only resolves at runtime when that assembly is actually loaded (DOTNET_STARTUP_HOOKS
+// / ASPNETCORE_HOSTINGSTARTUPASSEMBLIES). --inject-mode source builds never load it,
+// so fuzz-prep-multi.py only ever passes --cmplog for hook-mode builds.
+//
+// Best-effort and strictly non-fatal: a failure here must never fail the build or
+// degrade the coverage instrumentation SharpFuzz already applied successfully above.
+if (cmpLogEnabled)
+{
+    try
+    {
+        CmpLogInstrumentor.Run(dllPath, ShouldInstrument);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[instrumentor] WARNING: CmpLog instrumentation skipped ({ex.GetType().Name}): {ex.Message}");
+    }
+}
+
+// ── CmpLog/RedQueen via IL comparison instrumentation ────────────────────────
+//
+// Rewrites two families of comparison sites so their operand(s) are recorded into
+// UpsideFuzz.Coverage.CmpLogProbe immediately before the original comparison
+// executes, leaving the target's own behavior completely unchanged:
+//
+//   1. String comparisons: calls to String.Equals/op_Equality (both the static
+//      2-arg and instance 1-arg overloads)/StartsWith/EndsWith/Contains, restricted
+//      to the plain (string[, string]) overloads -- overloads taking a
+//      StringComparison/CultureInfo aren't touched, since this recorder only knows
+//      how to safely pop/replay exactly two string-typed stack values.
+//   2. Integer literal-vs-compare sites: an ldc.i4/ldc.i8 immediately followed
+//      (skipping over any Nop) by ceq/beq/bne.un(.s) -- the single-instruction
+//      lookback AFL++'s own CmpLog targets most heavily (immediate-vs-variable
+//      compares), and the only numeric shape this pass attempts. General
+//      arithmetic-relational compares (clt/cgt/ble/bge) and switch-statement case
+//      values (both the sequential-Equals and hash-table-jump forms the C#
+//      compiler emits) are NOT covered -- an acknowledged v1 scope limit, not a
+//      silent gap: they'd need real stack-depth data-flow analysis to intercept
+//      safely, which this pass deliberately does not attempt.
+//
+// Both transforms are pure "record a copy, then replay the original stack exactly
+// as it was" -- they never remove, reorder, or alter any existing instruction, so
+// existing branch targets and exception-handler regions stay valid without needing
+// offset recalculation (Cecil resolves branches by Instruction object, not raw
+// offset, until AssemblyDefinition.Write() runs).
+public static class CmpLogInstrumentor
+{
+    public static void Run(string dllPath, Func<string, bool> shouldInstrument)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(dllPath)) ?? ".";
+        var resolver = new DefaultAssemblyResolver();
+        resolver.AddSearchDirectory(dir);
+        var readParams = new ReaderParameters
+        {
+            ReadWrite = true,
+            ReadSymbols = false,
+            AssemblyResolver = resolver,
+        };
+
+        using var asm = AssemblyDefinition.ReadAssembly(dllPath, readParams);
+        var module = asm.MainModule;
+
+        // Reference-by-name only, exactly like the coverage hook's own probes resolve
+        // SharpFuzz.Common.Trace at runtime (see fuzz-prep-multi.py's CoverageRuntime):
+        // UpsideFuzz.Coverage.dll is not present at instrument time (built separately,
+        // loaded into the process later), so this must never attempt .Resolve().
+        var probeAsmRef = new AssemblyNameReference("UpsideFuzz.Coverage", new Version(1, 0, 0, 0));
+        module.AssemblyReferences.Add(probeAsmRef);
+        var probeTypeRef = new TypeReference("UpsideFuzz.Coverage", "CmpLogProbe", module, probeAsmRef, false);
+
+        var voidRef = module.TypeSystem.Void;
+        var stringRef = module.TypeSystem.String;
+        var int64Ref = module.TypeSystem.Int64;
+
+        var recordStringRef = new MethodReference("RecordString", voidRef, probeTypeRef) { HasThis = false };
+        recordStringRef.Parameters.Add(new ParameterDefinition(stringRef));
+        recordStringRef.Parameters.Add(new ParameterDefinition(stringRef));
+
+        var recordIntRef = new MethodReference("RecordInt", voidRef, probeTypeRef) { HasThis = false };
+        recordIntRef.Parameters.Add(new ParameterDefinition(int64Ref));
+
+        int stringSites = 0, intSites = 0;
+
+        foreach (var type in module.Types.SelectMany(FlattenNestedTypes))
+        {
+            if (!shouldInstrument(type.FullName)) continue;
+            foreach (var method in type.Methods)
+            {
+                if (!method.HasBody) continue;
+                try
+                {
+                    var body = method.Body;
+                    body.SimplifyMacros();
+                    var il = body.GetILProcessor();
+                    stringSites += InstrumentStringComparisons(body, il, recordStringRef);
+                    intSites += InstrumentIntComparisons(body, il, recordIntRef);
+                    body.OptimizeMacros();
+                }
+                catch
+                {
+                    // Best-effort per method: one method's IL shape we didn't
+                    // anticipate must not sacrifice CmpLog coverage for the rest.
+                }
+            }
+        }
+
+        if (stringSites > 0 || intSites > 0)
+        {
+            asm.Write();
+            Console.WriteLine($"[instrumentor] CmpLog: {stringSites} string-comparison site(s), " +
+                               $"{intSites} int-comparison site(s) in {Path.GetFileName(dllPath)}");
+        }
+        else
+        {
+            Console.WriteLine($"[instrumentor] CmpLog: no eligible comparison sites found in {Path.GetFileName(dllPath)}");
+        }
+    }
+
+    static IEnumerable<TypeDefinition> FlattenNestedTypes(TypeDefinition t)
+    {
+        yield return t;
+        foreach (var nested in t.NestedTypes)
+            foreach (var n in FlattenNestedTypes(nested))
+                yield return n;
+    }
+
+    static bool IsExceptionBoundary(MethodBody body, Instruction instr)
+    {
+        if (!body.HasExceptionHandlers) return false;
+        foreach (var eh in body.ExceptionHandlers)
+        {
+            if (ReferenceEquals(eh.TryStart, instr) || ReferenceEquals(eh.TryEnd, instr) ||
+                ReferenceEquals(eh.HandlerStart, instr) || ReferenceEquals(eh.HandlerEnd, instr) ||
+                ReferenceEquals(eh.FilterStart, instr))
+                return true;
+        }
+        return false;
+    }
+
+    // ── String comparisons ───────────────────────────────────────────────────
+    static bool IsTargetStringComparisonMethod(MethodReference mref)
+    {
+        var name = mref.Name;
+        if (name != "Equals" && name != "op_Equality" && name != "StartsWith" &&
+            name != "EndsWith" && name != "Contains") return false;
+        // HasThis/Parameters come straight off the reference's own signature blob --
+        // no .Resolve() needed, so this works even when the declaring assembly
+        // (System.Private.CoreLib) isn't resolvable in this reader's context.
+        int expectedParams = mref.HasThis ? 1 : 2;
+        if (mref.Parameters.Count != expectedParams) return false;
+        foreach (var p in mref.Parameters)
+            if (p.ParameterType.FullName != "System.String") return false;
+        return true;
+    }
+
+    static int InstrumentStringComparisons(MethodBody body, ILProcessor il, MethodReference recordStringRef)
+    {
+        var targets = new List<Instruction>();
+        foreach (var instr in body.Instructions)
+        {
+            if (instr.OpCode != OpCodes.Call && instr.OpCode != OpCodes.Callvirt) continue;
+            if (instr.Operand is not MethodReference mref) continue;
+            if (mref.DeclaringType?.FullName != "System.String") continue;
+            if (!IsTargetStringComparisonMethod(mref)) continue;
+            if (IsExceptionBoundary(body, instr)) continue;
+            targets.Add(instr);
+        }
+
+        foreach (var callInstr in targets)
+        {
+            // Both shapes (static 2-arg call, instance 1-arg call) push exactly two
+            // string values consumed by the call, operandB on top of stack. Pop both
+            // into temp locals, replay them for our recorder call, then replay them
+            // again immediately before the untouched original call -- net effect on
+            // the stack and on program behavior is zero.
+            var tmpB = new VariableDefinition(body.Method.Module.TypeSystem.String);
+            var tmpA = new VariableDefinition(body.Method.Module.TypeSystem.String);
+            body.Variables.Add(tmpB);
+            body.Variables.Add(tmpA);
+
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Stloc, tmpB));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Stloc, tmpA));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Ldloc, tmpA));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Ldloc, tmpB));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Call, recordStringRef));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Ldloc, tmpA));
+            il.InsertBefore(callInstr, Instruction.Create(OpCodes.Ldloc, tmpB));
+        }
+        return targets.Count;
+    }
+
+    // ── Integer literal-vs-compare sites ─────────────────────────────────────
+    static bool IsInt32Const(Instruction instr) =>
+        instr.OpCode == OpCodes.Ldc_I4 || instr.OpCode == OpCodes.Ldc_I4_S ||
+        instr.OpCode == OpCodes.Ldc_I4_M1 ||
+        (instr.OpCode.Code >= Code.Ldc_I4_0 && instr.OpCode.Code <= Code.Ldc_I4_8);
+
+    static bool IsCompareOpcode(OpCode op) =>
+        op == OpCodes.Ceq || op == OpCodes.Beq || op == OpCodes.Beq_S ||
+        op == OpCodes.Bne_Un || op == OpCodes.Bne_Un_S;
+
+    static int InstrumentIntComparisons(MethodBody body, ILProcessor il, MethodReference recordIntRef)
+    {
+        var instrs = body.Instructions;
+        var sites = new List<(Instruction ldc, bool isI8)>();
+
+        for (int i = 0; i < instrs.Count; i++)
+        {
+            var cur = instrs[i];
+            bool isI4 = IsInt32Const(cur);
+            bool isI8 = cur.OpCode == OpCodes.Ldc_I8;
+            if (!isI4 && !isI8) continue;
+
+            int j = i + 1;
+            while (j < instrs.Count && instrs[j].OpCode == OpCodes.Nop) j++;
+            if (j >= instrs.Count || !IsCompareOpcode(instrs[j].OpCode)) continue;
+            if (IsExceptionBoundary(body, cur)) continue;
+
+            sites.Add((cur, isI8));
+        }
+
+        foreach (var (ldc, isI8) in sites)
+        {
+            // dup the constant, widen the DUPLICATE to int64 for the recorder call,
+            // leaving the original (int32 or int64) value on the stack untouched for
+            // the compare instruction that follows.
+            Instruction cursor = ldc;
+            var dup = Instruction.Create(OpCodes.Dup);
+            il.InsertAfter(cursor, dup);
+            cursor = dup;
+            if (!isI8)
+            {
+                var conv = Instruction.Create(OpCodes.Conv_I8);
+                il.InsertAfter(cursor, conv);
+                cursor = conv;
+            }
+            il.InsertAfter(cursor, Instruction.Create(OpCodes.Call, recordIntRef));
+        }
+        return sites.Count;
+    }
 }

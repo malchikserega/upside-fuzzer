@@ -522,6 +522,13 @@ RUN dotnet publish -c Release -o /covhook/out
         else:
             instrument_flag = "--config /instrumentor/bin/namespaces.json"
             mode_label = "namespace allowlist"
+        # Top-20+ #21: CmpLog only in hook mode -- its recorder calls target
+        # UpsideFuzz.Coverage.CmpLogProbe by assembly name, which only resolves at
+        # runtime when DOTNET_STARTUP_HOOKS actually loads that assembly. A
+        # --inject-mode source build never loads it, so passing --cmplog there would
+        # just throw at the first instrumented comparison call.
+        if inject_mode == "hook":
+            instrument_flag += " --cmplog"
         instrument_cmds = "\n".join([
             f'RUN if [ -f {publish_dir}/{dll} ]; then '
             f'echo "Instrumenting {dll} ({mode_label})"; '
@@ -543,6 +550,7 @@ COPY instrumentor_src/Program.cs ./
 COPY instrumentor_src/namespaces.json ./
 RUN dotnet add package SharpFuzz
 RUN dotnet add package System.Text.Json
+RUN dotnet add package Mono.Cecil --version 0.11.6
 RUN dotnet build -c Release -o /instrumentor/bin
 RUN cp namespaces.json /instrumentor/bin/namespaces.json
 
@@ -618,6 +626,10 @@ COPY --from=instrumentor-build /instrumentor/bin /instrumentor/bin
         print("  No original Dockerfile found, generating from scratch.")
         dll_list = [f"/src/{p.path}/bin/Release/{p.target_framework}/{p.name}.dll" for p in result.projects]
         instrument_flag = "--instrument-all-user-code" if result.instrument_all_safe else "--config /instrumentor/bin/namespaces.json"
+        # Top-20+ #21: see the matching comment in the "adapt original Dockerfile"
+        # branch above -- CmpLog only makes sense (and only gets wired) in hook mode.
+        if inject_mode == "hook":
+            instrument_flag += " --cmplog"
         instrument_commands = "\n".join(
             [f"RUN DOTNET_ROLL_FORWARD=Major dotnet /instrumentor/bin/instrumentor.dll {dll} {instrument_flag}" for dll in dll_list]
         )
@@ -636,6 +648,7 @@ COPY instrumentor_src/Program.cs ./
 COPY instrumentor_src/namespaces.json ./
 RUN dotnet add package SharpFuzz
 RUN dotnet add package System.Text.Json
+RUN dotnet add package Mono.Cecil --version 0.11.6
 RUN dotnet build -c Release -o /instrumentor/bin
 RUN cp namespaces.json /instrumentor/bin/namespaces.json
 
@@ -1344,12 +1357,21 @@ namespace UpsideFuzz.Coverage
                 // see void/go/coverage.go::checkCoverageHealth. app_assemblies below is
                 // purely diagnostic context for that decision.
                 bool shmBound = globalShmAddr != IntPtr.Zero;
+                var (cmplogStrs, cmplogInts) = CmpLogProbe.Counts();
                 return WriteJson(context, "{\"linked_assemblies\":" + linkCount + ",\"total_classes\":" + totalClasses +
                     ",\"shm_bound\":" + (shmBound ? "true" : "false") +
                     ",\"mode\":\"" + (isFileBacked ? "file-backed-mmap" : "heap") + "\"" +
                     ",\"instrumented_types\":" + InstrumentedTypeCount +
+                    ",\"cmplog_strings\":" + cmplogStrs + ",\"cmplog_ints\":" + cmplogInts +
                     ",\"app_assemblies\":" + JsonStringArray(seenAppAssemblies.Keys) + "}");
             }
+            // Top-20+ #21: comparison operands harvested from the target's own IL by
+            // instrumentor/Program.cs's CmpLogInstrumentor (--cmplog, hook mode only).
+            // Absent (404, handled by the fallthrough below) on a target built without
+            // --cmplog or in --inject-mode source -- the Go engine treats that as
+            // "nothing available", not an error.
+            if (path == "/shm/cmplog")
+                return WriteJson(context, CmpLogProbe.ToJson());
             context.Response.StatusCode = 404;
             return Task.CompletedTask;
         }
@@ -1402,6 +1424,94 @@ namespace UpsideFuzz.Coverage
                 }
                 catch { }
             }
+        }
+    }
+
+    // Top-20+ #21: runtime side of CmpLog/RedQueen via IL comparison instrumentation.
+    // instrumentor/Program.cs's CmpLogInstrumentor pass (--cmplog, hook mode only)
+    // rewrites the target's own IL so every String.Equals/op_Equality/StartsWith/
+    // EndsWith/Contains call and every integer-literal-vs-compare (ceq/beq/bne.un)
+    // site calls RecordString/RecordInt here with its operand(s) BEFORE the original
+    // comparison executes -- the instrumented program's behavior is unchanged, this
+    // is purely an observer. Bounded, deduped, thread-safe (concurrent requests hit
+    // instrumented code from many threads); served over GET /shm/cmplog for the Go
+    // engine to poll into its own mutation-candidate pool (void/go/cmplog.go).
+    public static class CmpLogProbe
+    {
+        private const int MAX_STRINGS = 512;
+        private const int MAX_INTS = 256;
+        private const int MAX_STRING_LEN = 256;
+
+        private static readonly ConcurrentQueue<string> stringQueue = new ConcurrentQueue<string>();
+        private static readonly ConcurrentDictionary<string, byte> stringSeen = new ConcurrentDictionary<string, byte>();
+        private static readonly ConcurrentQueue<long> intQueue = new ConcurrentQueue<long>();
+        private static readonly ConcurrentDictionary<long, byte> intSeen = new ConcurrentDictionary<long, byte>();
+
+        public static void RecordString(string a, string b)
+        {
+            RecordOne(a);
+            RecordOne(b);
+        }
+
+        private static void RecordOne(string v)
+        {
+            if (string.IsNullOrEmpty(v) || v.Length > MAX_STRING_LEN) return;
+            if (!stringSeen.TryAdd(v, 1)) return;
+            stringQueue.Enqueue(v);
+            while (stringQueue.Count > MAX_STRINGS && stringQueue.TryDequeue(out var old))
+                stringSeen.TryRemove(old, out _);
+        }
+
+        public static void RecordInt(long v)
+        {
+            if (!intSeen.TryAdd(v, 1)) return;
+            intQueue.Enqueue(v);
+            while (intQueue.Count > MAX_INTS && intQueue.TryDequeue(out var old))
+                intSeen.TryRemove(old, out _);
+        }
+
+        public static (int strings, int ints) Counts() => (stringQueue.Count, intQueue.Count);
+
+        // ConcurrentQueue enumeration is a weakly-consistent snapshot -- safe to read
+        // while RecordString/RecordInt run concurrently on other request threads;
+        // worst case a poll misses a value added mid-enumeration, which the next
+        // poll picks up (this is a best-effort dictionary source, not a correctness-
+        // critical coverage signal).
+        internal static string ToJson()
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"strings\":[");
+            bool first = true;
+            foreach (var s in stringQueue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append('"').Append(JsonEscape(s)).Append('"');
+            }
+            sb.Append("],\"ints\":[");
+            first = true;
+            foreach (var n in intQueue)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                sb.Append('"').Append(n).Append('"');
+            }
+            sb.Append("]}");
+            return sb.ToString();
+        }
+
+        private static string JsonEscape(string s)
+        {
+            var sb = new StringBuilder(s.Length);
+            foreach (var c in s)
+            {
+                if (c == '"' || c == '\\') { sb.Append('\\').Append(c); continue; }
+                if (c == '\n') { sb.Append("\\n"); continue; }
+                if (c == '\r') { sb.Append("\\r"); continue; }
+                if (c < 32) continue;
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
     }
 

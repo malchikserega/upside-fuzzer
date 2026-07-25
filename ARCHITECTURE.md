@@ -468,6 +468,88 @@ that doesn't match either shape yields an empty map, never an error; an unrelate
 4xx body (e.g. `{"count":5}`) is defensively excluded from being mistaken for a
 field→messages map.
 
+### CmpLog/RedQueen via IL Comparison Instrumentation (Top-20+ #21)
+
+CMPLOG-lite (above) mines values the server *tells* the fuzzer about, via 400
+bodies. This is different: it recovers values the server never tells anyone —
+constants baked directly into the target's own compiled comparison logic
+(`if (code == "SUPER_SECRET_2026")`), the class of "magic value" check that no
+OpenAPI spec, dictionary, or generic mutation could ever guess. It's the .NET
+analog of AFL++'s CmpLog/RedQueen.
+
+**Instrument time — `instrumentor/Program.cs::CmpLogInstrumentor`.** A second,
+independent Cecil pass (own `Mono.Cecil` package reference; unrelated to
+SharpFuzz's own `Fuzzer.Instrument` call, which is a self-contained black box this
+project doesn't get to hook), run after SharpFuzz's coverage rewrite succeeds,
+gated behind a new `--cmplog` CLI flag. It rewrites two comparison shapes so their
+operand(s) are recorded immediately *before* the original comparison executes —
+the target's own behavior is completely unchanged, this is purely an observer:
+
+1. **String comparisons** — calls to `String.Equals`/`op_Equality` (static 2-arg
+   and instance 1-arg overloads)/`StartsWith`/`EndsWith`/`Contains`, restricted to
+   the plain `(string[, string])` overloads (a `StringComparison`/`CultureInfo`
+   overload is skipped — this recorder only knows how to safely pop/replay exactly
+   two string-typed stack values). Both operands are popped into temp locals via
+   `stloc`/`stloc`, replayed once into `CmpLogProbe.RecordString(a, b)`, then
+   replayed again unchanged immediately before the untouched original call.
+2. **Integer literal-vs-compare sites** — an `ldc.i4`/`ldc.i8` immediately
+   followed (skipping any `Nop`) by `ceq`/`beq`/`beq.s`/`bne.un`/`bne.un.s`: `dup`
+   the constant, widen the duplicate to `int64` (`conv.i8` for the `i4` case),
+   call `CmpLogProbe.RecordInt(v)`, leaving the original value untouched on the
+   stack for the compare that follows.
+
+Both transforms only ever *insert* instructions — they never remove, reorder, or
+alter an existing one — so every existing branch target and exception-handler
+region stays valid without offset recalculation (Cecil resolves branches by
+`Instruction` object, not raw offset, until `AssemblyDefinition.Write()` runs). A
+defensive check skips any call/`ldc` site that is itself a `TryStart`/`TryEnd`/
+`HandlerStart`/`HandlerEnd`/`FilterStart` boundary instruction, so the pass can
+never straddle an exception region. Verified end-to-end with a local Cecil
+correctness harness (compile → instrument → run): 15/15 behavioral assertions
+pass unchanged post-instrumentation, including three cases inside a live
+try/catch/finally with an instrumented comparison throwing mid-`try` — the probe
+fires with the correct operand and the `finally` still runs exactly once.
+
+**Scope limits, stated plainly:** only the constant-*immediately-before*-the-compare
+shape is caught — `x == CONST` is captured, `CONST == x` generally is not (the
+`ldc` and the `ceq` aren't adjacent instructions in that IL shape), unless the
+compiler happens to reorder. General relational compares (`clt`/`cgt`/`ble`/`bge`)
+and switch-statement case values (both the sequential-`Equals`-chain and the
+hash-jump-table forms the C# compiler emits for larger `switch`) are not
+instrumented — safely intercepting those needs real stack-depth data-flow
+analysis, which this pass deliberately does not attempt. `--cmplog` is only ever
+passed in `--inject-mode hook` builds (`fuzz-prep-multi.py`): the recorder calls
+target `UpsideFuzz.Coverage.CmpLogProbe` by assembly name only (mirroring how the
+coverage probes already resolve `SharpFuzz.Common.Trace` at runtime — see
+`CoverageRuntime.Bootstrap`'s `AssemblyLoadContext.Default.Resolving` handler),
+which only resolves when `DOTNET_STARTUP_HOOKS` actually loads that assembly; a
+`--inject-mode source` build never does.
+
+**Runtime — `CmpLogProbe`, alongside `CoverageRuntime` in the generated coverage
+hook assembly.** Bounded (512 strings / 256 ints), deduped, thread-safe
+(`ConcurrentQueue`/`ConcurrentDictionary` — concurrent requests hit instrumented
+code from many threads), FIFO-evicted at capacity. Served over `GET /shm/cmplog`
+(alongside the existing `/shm/create`/`/shm/coverage`/`/shm/reset`/`/shm/health`
+control endpoints); counts also surface in `/shm/health` (`cmplog_strings`/
+`cmplog_ints`) for diagnostics. A target built without `--cmplog`, or running in
+`--inject-mode source`, simply 404s here — the engine treats that as "nothing
+available," not an error.
+
+**Engine — `void/go/cmplog.go`.** `Fuzzer.pollCmpLogIfDue` polls `/shm/cmplog`
+from `mainLoop`'s existing per-tick body, throttled independently to once every
+`-cmplog-interval` seconds (default 3s) since it's a network round trip, not a
+local check. Harvested values land in a single process-wide `CmpLogPool` (mirrors
+`coverage.go`'s package-level `countClass` — there is exactly one `Fuzzer` per
+process) that `mutateStringCategorized`/`mutateInt` (`mutation_engine.go`) sample
+from as an additional candidate source, blended in the same additive style as
+Top-20 #14's field-constraint boundaries: a probabilistic splice for strings
+(`mcat_cmplog` category, 15% chance ahead of the generic pool), a union member for
+ints (alongside the existing hardcoded/hint-derived candidates). Toggle with
+`-cmplog` (default `true`); it's a comparison-feedback source, not a per-field one
+— harvested values are spliced into *any* string/int field, not routed to the
+specific field whose comparison produced them (see `ARCHITECTURE_REVIEW.md`'s
+Top-20 §2 for that distinction).
+
 ### State-Reward Sequence Search (Top-20 #12)
 
 `sequence.go::sequenceStateSignature` computes a coarse workflow-*shape*
