@@ -10,7 +10,7 @@ Two directory shapes are handled:
      -- read directly, one row per directory.
 
 Usage:
-  build_results_table.py --raw-dir benchmarks/raw --out benchmarks/RESULTS_TABLE.md
+  build_results_table.py --raw-dir benchmarks/raw --out benchmarks/reports/RESULTS_TABLE.md
 """
 import argparse
 import glob

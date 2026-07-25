@@ -48,6 +48,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 | [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit: per-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and the prioritized roadmap (Top-20 improvements, with completed ones marked ✅). Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
 | [AI_CONTEXT.md](../AI_CONTEXT.md) | Terse, AI-agent-facing operational summary: component map, critical "do not revert" decisions, file-lookup table. Kept current — if you're an AI agent about to modify this repo, read this first. |
 | [void/README.md](../void/README.md) | The Go fuzzer's own CLI reference: every flag, startup output, mutation categories, epoch schedule, crash JSONL format, cross-compile instructions |
+| [ARTICLE.md](ARTICLE.md) | A full narrative technical write-up of the architecture and the engineering decisions behind it, with an honest accounting of what's novel, what's re-implementation of prior art, and what still doesn't work |
 
 ### Testing & CI
 
@@ -78,6 +79,10 @@ For a *current*, reproducible example of findings, see the "Example findings" se
 
 | Document | Description |
 |----------|-------------|
+| [benchmarks/BENCHMARK_PLAN.md](../benchmarks/BENCHMARK_PLAN.md) | The living benchmark design doc: data model, head-to-head vs. capability-only separation, shared external judge, Top-15 prerequisite tasks and their status |
+| [benchmarks/reports/RESULTS_REPORT.md](../benchmarks/reports/RESULTS_REPORT.md) | Consolidated, presentable results — RESTler-vs-UpsideFuzz head-to-head plus real Bitwarden/eShopOnWeb runs, with charts (`RESULTS_REPORT.html` in the same folder) |
+| [benchmarks/reports/RESULTS_TABLE.md](../benchmarks/reports/RESULTS_TABLE.md) | Auto-generated raw table, regenerate via `python3 benchmarks/harness/build_results_table.py` |
+| [benchmarks/docs/RESTLER_RUNBOOK.md](../benchmarks/docs/RESTLER_RUNBOOK.md) | How the RESTler baseline is actually run in this environment (`.NET 6` target, CLI quirks) |
 | [BENCHMARK_AGENT_INSTRUCTIONS.md](BENCHMARK_AGENT_INSTRUCTIONS.md) | Historical reproducibility playbook for 20-minute RESTler-vs-Void benchmarks across 4 targets. Self-labeled as a historical rerun playbook — RESTler appears here deliberately, as the baseline being compared against, not as a live dependency of this project. |
 | `arxiv_paper/` | Draft academic paper package (`paper.md`, `PLAN.md`, `SKETCH.md`). Separate audience/purpose from the rest of this index — not maintained in lockstep with the codebase. **Known gap**: `paper.md`'s methodology section still describes the retired RESTler-based grammar pipeline and needs a rewrite before submission. |
 

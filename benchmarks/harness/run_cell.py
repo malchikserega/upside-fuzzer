@@ -10,7 +10,7 @@ Sequence (§13 reset & warm-up contract, §15 harness capabilities):
   2. Start coverage_poller.py + resource_sampler.py in the background.
   3. Run the fuzzing tool (RESTler test/fuzz-lean/fuzz, or void) for the
      budget. UpsideFuzz gets -event-log/-run-id/-seed wired automatically;
-     RESTler is driven via benchmarks/RESTLER_RUNBOOK.md's validated
+     RESTler is driven via benchmarks/docs/RESTLER_RUNBOOK.md's validated
      invocation.
   4. Stop poller/sampler (SIGTERM, they flush and exit).
   5. Run shared_judge.py against whatever the tool produced.
