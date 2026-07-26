@@ -340,8 +340,8 @@ That's the whole step — `templates.export.json` and `dict.json` land directly 
 
 ### What `compile-grammar.sh` does
 
-RESTler has been retired (Top-20 #9/#10 — see `ARCHITECTURE_REVIEW.md`). The pipeline is
-now two first-party components, with **no Docker or external compiler involved**:
+RESTler has been retired (see `ARCHITECTURE_REVIEW.md`'s Grammar Generation section). The
+pipeline is now two first-party components, with **no Docker or external compiler involved**:
 
 1. **`grammarc/`** (Python, stdlib-only) parses the OpenAPI spec directly ($ref/allOf/oneOf/anyOf
    resolution, v2+v3 parameter/body shapes), infers producer/consumer id relationships by

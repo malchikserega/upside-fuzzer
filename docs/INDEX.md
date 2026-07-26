@@ -45,7 +45,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 | Document | For whom / what it covers |
 |----------|-------------|
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | The deep internals reference: instrumentation pipeline, SHM coverage protocol, grammar compilation (`grammarc/`+`analyzer/`), Void engine component map, CI. For anyone modifying the pipeline. |
-| [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit: per-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and the prioritized roadmap (Top-20 improvements, with completed ones marked ✅). Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
+| [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit reflecting **current state only** (resolved items are dropped, not tracked as a changelog — see git history for that): per-subsystem strengths/currently-open weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and a prioritized (P0/P1/P2) open-improvements backlog. Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
 | [AI_CONTEXT.md](../AI_CONTEXT.md) | Terse, AI-agent-facing operational summary: component map, critical "do not revert" decisions, file-lookup table. Kept current — if you're an AI agent about to modify this repo, read this first. |
 | [void/README.md](../void/README.md) | The Go fuzzer's own CLI reference: every flag, startup output, mutation categories, epoch schedule, crash JSONL format, cross-compile instructions |
 | [ARTICLE.md](ARTICLE.md) | A full narrative technical write-up of the architecture and the engineering decisions behind it, with an honest accounting of what's novel, what's re-implementation of prior art, and what still doesn't work |
@@ -61,7 +61,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 
 ## 4. Historical research artifacts (point-in-time, not living docs)
 
-These are dated findings from specific fuzzing campaigns, kept for record — **not** reference documentation, and their numbers are not guaranteed reproducible against the current pipeline (several predate the RESTler retirement described in `ARCHITECTURE_REVIEW.md` Top-20 #9/#10). Each now carries a banner noting its date and status.
+These are dated findings from specific fuzzing campaigns, kept for record — **not** reference documentation, and their numbers are not guaranteed reproducible against the current pipeline (several predate the RESTler retirement described in `ARCHITECTURE_REVIEW.md`'s Grammar Generation section). Each now carries a banner noting its date and status.
 
 | Document | Target | Date | Type |
 |----------|--------|------|------|

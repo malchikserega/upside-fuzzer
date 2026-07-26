@@ -381,8 +381,7 @@ only `PayloadKey` (JSON key `"payload_key"`) — a field-name mismatch that mean
 substituted a harvested value at render time, for the entire lifetime of the RESTler-based
 pipeline. `grammarc/emit_templates.py` emits `"payload_key"` directly, fixing this by
 construction — no Go-side changes were needed, since Go was always reading the correct field, it
-just never received it. See `ARCHITECTURE_REVIEW.md`'s Inconsistencies section, item 7, for the
-full writeup.
+just never received it.
 
 `void/export-templates.py` (the old grammar.py → JSON exporter) is retained only as a legacy
 fallback for grammar directories generated before this migration and not yet regenerated
@@ -584,8 +583,9 @@ Top-20 #14's field-constraint boundaries: a probabilistic splice for strings
 ints (alongside the existing hardcoded/hint-derived candidates). Toggle with
 `-cmplog` (default `true`); it's a comparison-feedback source, not a per-field one
 — harvested values are spliced into *any* string/int field, not routed to the
-specific field whose comparison produced them (see `ARCHITECTURE_REVIEW.md`'s
-Top-20 §2 for that distinction).
+specific field whose comparison produced them (routing values to the field whose
+comparison produced them needs a typed request-body model reaching mutation, an
+open item — see `ARCHITECTURE_REVIEW.md`'s Fuzzing Engine section).
 
 ### Constant/String Dictionary Extraction (Top-20+ #22)
 
@@ -654,9 +654,10 @@ intent rather than folded into one generic bucket:
 
 Conservative by design: silent (no finding) on any endpoint whose grammar declares no
 response schema at all — there's no ground truth to compare against, and this project
-already learned the cost of inventing findings from weak signal (see
-`ARCHITECTURE_REVIEW.md`'s Recorded Inconsistencies #11, the `ssrf_metadata_reflected`
-false positive). All three reason tags are in `sarif.go`'s `sarifStrongReasonTags`
+already learned the cost of inventing findings from weak signal the hard way (a real,
+previously-presented-as-genuine `ssrf_metadata_reflected` false positive on pure
+request-echo, found and fixed by stripping known payload strings before matching).
+All three reason tags are in `sarif.go`'s `sarifStrongReasonTags`
 allowlist from day one, so they get their own distinct SARIF rule IDs rather than
 collapsing into a generic classification.
 
@@ -1094,8 +1095,7 @@ confirmed empirically while building this fixture (0 SHM edges from real traffic
 the restructuring, real edge growth after).
 
 Building this fixture and script also surfaced and fixed three real, previously-unknown
-bugs elsewhere in the pipeline — see `ARCHITECTURE_REVIEW.md`'s Inconsistencies section,
-items 8–10, for the full writeups: a substring-vs-path-segment matching bug in
+bugs elsewhere in the pipeline: a substring-vs-path-segment matching bug in
 `analyzer/RoslynUtil.IsTestPath`, `analyzer/RouteAuthWalker` never scanning top-level-
 statement `Program.cs` files for minimal-API routes, and a bash-3.2-specific unbound-array
 crash in `compile-grammar.sh` when `--src` is omitted.
@@ -1128,13 +1128,12 @@ one fixture's shape. Added as a second, faster-feedback layer underneath it:
   local function to another assembly via `InternalsVisibleTo` — it compiles to a
   `private` member of the synthesized `Program` class), verified to change zero
   observable behavior by rerunning the `Bit.Core`/`Bit.CoreUtilities` compiled-fixture
-  check (`ARCHITECTURE_REVIEW.md`'s roadmap table, item #6) before and after the
-  refactor. Run with `dotnet test` from either directory (the main `instrumentor`/
-  `analyzer` projects still build and run exactly as before — `ProjectReference`,
-  not a fork).
+  namespace-matching check before and after the refactor. Run with `dotnet test` from
+  either directory (the main `instrumentor`/`analyzer` projects still build and run
+  exactly as before — `ProjectReference`, not a fork).
 
-Writing this test suite directly found two more real, previously-unknown bugs — see
-`ARCHITECTURE_REVIEW.md`'s Inconsistencies items 12–13: `IsTestPath` still missed
-`UnitTests`-shaped directories after item 8's earlier fix, and `grammarc/oas.py` never
-handled Swagger 2.0's `in: body` parameter convention at all (only OpenAPI 3.x's
-`requestBody` was handled — every v2 spec's request body was silently dropped).
+Writing this test suite directly found two more real, previously-unknown bugs:
+`IsTestPath` still missed `UnitTests`-shaped directories after an earlier fix only
+handling the bare `Tests`/`test` forms, and `grammarc/oas.py` never handled Swagger
+2.0's `in: body` parameter convention at all (only OpenAPI 3.x's `requestBody` was
+handled — every v2 spec's request body was silently dropped).
