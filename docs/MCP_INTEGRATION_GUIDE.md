@@ -4,7 +4,7 @@ Model Context Protocol (MCP) is an excellent way to provide an AI agent with acc
 
 In UpsideFuzz, the dictionary is loaded from `dict.json` — a flat `{fieldName: [values...]}` map — and the engine (`void/go/store.go::loadDict`/`candidatesForKey`) uses it to pick real-looking values for request fields it recognizes by name. By populating this dictionary with real data, the fuzzer's effectiveness (especially for GET, PUT, and DELETE requests) increases dramatically, as it stops hitting `404 Not Found` errors on IDs that don't exist.
 
-**Have the agent write to `dict.custom.json`, not `dict.json`.** `dict.json` is regenerated and fully overwritten by every `compile-grammar.sh` run, so an MCP-enriched `dict.json` survives exactly until someone next recompiles the grammar (e.g. because the target's API changed) — an easy, silent way to lose an agent's work. `dict.custom.json`, in the same `grammars/<target>/` directory, has the opposite lifecycle: written once as a starter file, never touched again by the tooling, and auto-merged into `dict.json` on every compile from then on. Same flat format, same directory, zero downside — see [INSTRUCTIONS.md §10](../INSTRUCTIONS.md#10-custom-dictionary-format) for the full mechanism. Everything below applies identically to `dict.custom.json`; just point the agent at that filename instead.
+**Have the agent write to `dict.custom.json`, not `dict.json`.** `dict.json` is regenerated and fully overwritten by every `compile-grammar.sh` run, so an MCP-enriched `dict.json` survives exactly until someone next recompiles the grammar (e.g. because the target's API changed) — an easy, silent way to lose an agent's work. `dict.custom.json`, in the same `grammars/<target>/` directory, has the opposite lifecycle: written once as a starter file, never touched again by the tooling, and auto-merged into `dict.json` on every compile from then on. Same flat format, same directory, zero downside — see [INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format) for the full mechanism. Everything below applies identically to `dict.custom.json`; just point the agent at that filename instead.
 
 Here is a step-by-step guide on how to set up this process.
 
@@ -37,7 +37,7 @@ Once the MCP server is connected, you can give the AI agent a task to gather dat
 
 ## Step 3: How to Populate `dict.custom.json`
 
-`dict.custom.json` is a **flat map**, identical in format to `dict.json` (the auto-generated file it gets merged into — see [INSTRUCTIONS.md §10](../INSTRUCTIONS.md#10-custom-dictionary-format)): each key is a request field/payload name, each value an array of candidate strings. `void/go/store.go::candidatesForKey` matches keys case-insensitively with canonical normalization, so `productId`, `ProductID`, and `product_id` all resolve to the same pool — you don't need multiple casings.
+`dict.custom.json` is a **flat map**, identical in format to `dict.json` (the auto-generated file it gets merged into — see [INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format)): each key is a request field/payload name, each value an array of candidate strings. `void/go/store.go::candidatesForKey` matches keys case-insensitively with canonical normalization, so `productId`, `ProductID`, and `product_id` all resolve to the same pool — you don't need multiple casings.
 
 **Example BEFORE enrichment** (the starter scaffold `compile-grammar.sh` writes the first time — its `_readme` key is safe to leave in place, the engine never looks up a field literally named `_readme`):
 ```json

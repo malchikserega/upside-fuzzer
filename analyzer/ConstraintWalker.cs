@@ -4,7 +4,7 @@
 // parsing. The key fix vs. that implementation: constraints are keyed by
 // (fully-qualified type name, property name), not a globally canonicalized property
 // name — so `[StringLength(50)] Name` on one DTO no longer leaks onto every other
-// `name`-shaped field in the app (ARCHITECTURE_REVIEW.md subsystem-3 weakness #2).
+// `name`-shaped field in the app (docs/ARCHITECTURE_REVIEW.md subsystem-3 weakness #2).
 
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 

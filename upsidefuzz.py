@@ -8,7 +8,7 @@ defaults, so the four-script-plus-Docker-incantations workflow becomes a few
 subcommands. This is a thin orchestration layer only: every subcommand shells
 out to the existing tool unchanged. Nothing about fuzz-prep-multi.py,
 compile-grammar.sh, verify-hook.sh, or void/go/ is modified or bypassed -- the
-manual, script-by-script workflow documented in INSTRUCTIONS.md/QUICKSTART_*.md
+manual, script-by-script workflow documented in docs/INSTRUCTIONS.md/QUICKSTART_*.md
 keeps working exactly as before, this is purely additive.
 
 Two ways to run it:

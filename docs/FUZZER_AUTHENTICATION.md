@@ -2,7 +2,7 @@
 
 This is the canonical way to pass authentication into Void. Use one auth identity file per target and pass it with `-auth-file` or `AUTH_FILE`.
 
-**→ [Back to README](../README.md) · [Full Runbook](../INSTRUCTIONS.md) · [Docs Index](INDEX.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Docs Index](INDEX.md)**
 
 Copyable example: [`docs/auth.identities.example.json`](auth.identities.example.json).
 
@@ -15,7 +15,7 @@ Copyable example: [`docs/auth.identities.example.json`](auth.identities.example.
   -skip-on-crash
 ```
 
-For noisy targets that return the same infrastructure 500 repeatedly, use `-skip-endpoint-on-500` instead of, or in addition to, `-skip-on-crash`. See the security profiles in [`INSTRUCTIONS.md`](../INSTRUCTIONS.md#security-campaign-profiles) and the full flag table in [`void/README.md`](../void/README.md#fuzzer-flags-full-reference).
+For noisy targets that return the same infrastructure 500 repeatedly, use `-skip-endpoint-on-500` instead of, or in addition to, `-skip-on-crash`. See the security profiles in [`INSTRUCTIONS.md`](INSTRUCTIONS.md#security-campaign-profiles) and the full flag table in [`void/README.md`](../void/README.md#fuzzer-flags-full-reference).
 
 ## Recommended Auth File
 
@@ -177,4 +177,4 @@ Some flags look duplicated because they operate at different scopes:
 
 ---
 
-**→ [Back to README](../README.md) · [Full Runbook](../INSTRUCTIONS.md) · [Go Fuzzer Reference](../void/README.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Go Fuzzer Reference](../void/README.md)**

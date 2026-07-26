@@ -2,7 +2,7 @@
 
 > Run the full coverage-guided fuzzing pipeline on **eShopOnWeb** from scratch on any machine.
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](FUZZER_AUTHENTICATION.md) · [Docs Index](INDEX.md)**
 
 ---
 
@@ -130,7 +130,7 @@ That's it — no manual `cp`, no separate `export-templates.py` step. Expect out
 Two things now happen automatically during the fuzz run below, no extra flags needed: fields
 with a real `[Range]`/`[StringLength]` constraint (like `UpdateCatalogItemRequest.Price`) get
 **boundary-aware mutation** (exact min-1/max+1 values, not just generic guesses — see
-`ARCHITECTURE_REVIEW.md` Top-20 #14), and any 400 validation-error response gets mined for
+`ARCHITECTURE_REVIEW.md`'s Fuzzing Engine section), and any 400 validation-error response gets mined for
 required field names/valid values, fed straight back into the fuzzer's runtime dictionary
 (Top-20 #11, "CMPLOG-lite").
 
@@ -349,4 +349,4 @@ despite the CLI and the target running as separate containers.
 
 ---
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](FUZZER_AUTHENTICATION.md)**

@@ -24,7 +24,7 @@ import (
 // Deliberately conservative: silent (no finding) on any endpoint whose grammar
 // declares no response schema at all -- there's no ground truth to compare against,
 // and inventing a finding from nothing would repeat this session's own SSRF
-// false-positive lesson (see ARCHITECTURE_REVIEW.md's Recorded Inconsistencies #11).
+// false-positive lesson (see docs/ARCHITECTURE_REVIEW.md's Recorded Inconsistencies #11).
 
 const (
 	schemaCheckMaxKeys  = 200

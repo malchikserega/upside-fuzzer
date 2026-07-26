@@ -2,7 +2,7 @@
 
 > Run the full coverage-guided fuzzing pipeline on **SimplCommerce** (a complex, modular e-commerce application) from scratch on any machine. This guide demonstrates how to inject custom authorization into the fuzzer.
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Docs Index](docs/INDEX.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](FUZZER_AUTHENTICATION.md) · [Docs Index](INDEX.md)**
 
 ---
 
@@ -64,7 +64,7 @@ RUN dotnet /instrumentor/instrumentor.dll out out
 
 ## Step 3: Sanitize Swagger
 
-SimplCommerce's automatically generated Swagger definition contains some redundant or invalid path parameters that a strict OpenAPI parser (including `grammarc/oas.py`, RESTler's first-party replacement — see `ARCHITECTURE_REVIEW.md` Top-20 #9) chokes on.
+SimplCommerce's automatically generated Swagger definition contains some redundant or invalid path parameters that a strict OpenAPI parser (including `grammarc/oas.py`, RESTler's first-party replacement — see `ARCHITECTURE_REVIEW.md`'s Grammar Generation section) chokes on.
 
 Start the instrumented stack, download the swagger, then run the provided patch helper:
 
@@ -92,7 +92,7 @@ RESTler is retired (Top-20 #9/#10) — compile the sanitized swagger file direct
 ```
 
 No extra flags needed for two things that run automatically during the fuzz run below:
-constrained fields get boundary-aware mutation (`ARCHITECTURE_REVIEW.md` Top-20 #14), and
+constrained fields get boundary-aware mutation (`ARCHITECTURE_REVIEW.md`'s Fuzzing Engine section), and
 400 validation-error responses get mined for required fields/valid values fed back into the
 runtime dictionary (Top-20 #11) — useful here given SimplCommerce's anti-forgery/Identity
 validation layer.
@@ -191,4 +191,4 @@ See [docs/CLI.md](docs/CLI.md) for the full subcommand reference.
 
 ---
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](docs/reports/SIMPLCOMMERCE_REPORT.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [SimplCommerce Report](reports/SIMPLCOMMERCE_REPORT.md)**

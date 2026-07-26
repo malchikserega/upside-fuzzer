@@ -4,7 +4,7 @@ A single orchestrator over the existing pipeline — `fuzz-prep-multi.py` → `d
 `verify-hook.sh` → `compile-grammar.sh` → `void` — so you don't have to remember four
 tools' worth of flags and manual `cd`s. It changes **nothing** about how any of those
 tools work: every subcommand just shells out to the real, unmodified tool. Running them
-directly, exactly as documented in [INSTRUCTIONS.md](../INSTRUCTIONS.md) and the
+directly, exactly as documented in [INSTRUCTIONS.md](INSTRUCTIONS.md) and the
 `QUICKSTART_*.md` files, keeps working — this is purely additive.
 
 Two ways to run it:
@@ -68,7 +68,7 @@ upsidefuzz instrument --src ./MyProject/src --out ./my-project-fuzz --main MyPro
 ```
 
 Same flags as `fuzz-prep-multi.py --help` (`--exclude-namespaces`, `--inject-mode
-hook|source`). See [INSTRUCTIONS.md §3](../INSTRUCTIONS.md#3-step-1-instrument-the-project).
+hook|source`). See [INSTRUCTIONS.md §3](INSTRUCTIONS.md#3-step-1-instrument-the-project).
 
 ### `build` / `up` / `down`
 
@@ -98,7 +98,7 @@ upsidefuzz verify --base http://localhost:8080 --probe /api/catalog-items
 
 Thin wrapper over `verify-hook.sh` — same `--up`/`--down`/`--dir`/`--probe`/`--base` flags,
 same 5-check output (SHM create, `/shm/health`, per-request attribution, real-traffic
-coverage growth, cumulative edges). See [ARCHITECTURE.md §5](../ARCHITECTURE.md).
+coverage growth, cumulative edges). See [ARCHITECTURE.md §5](ARCHITECTURE.md).
 
 ### `grammar`
 
@@ -200,7 +200,7 @@ steps kept as manual steps:
 | BTCPayServer | [QUICKSTART_BTCPAYSERVER.md § The same thing, via the upsidefuzz CLI](QUICKSTART_BTCPAYSERVER.md#the-same-thing-via-the-upsidefuzz-cli) — basic-auth swagger download stays manual |
 | SimplCommerce | [QUICKSTART_SIMPLCOMMERCE.md § The same thing, via the upsidefuzz CLI](QUICKSTART_SIMPLCOMMERCE.md#the-same-thing-via-the-upsidefuzz-cli) — swagger sanitize + cookie login stay manual |
 | Bitwarden (fresh) | [QUICKSTART_BITWARDEN.md § The same thing, via the upsidefuzz CLI](QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli) — multi-stage bring-up (mssql → migrator → api/identity) stays manual |
-| Bitwarden (already set up) | [BITWARDEN_FUZZ_RUNBOOK.md § 8](../BITWARDEN_FUZZ_RUNBOOK.md#8-the-same-thing-via-the-upsidefuzz-cli) |
+| Bitwarden (already set up) | [BITWARDEN_FUZZ_RUNBOOK.md § 8](BITWARDEN_FUZZ_RUNBOOK.md#8-the-same-thing-via-the-upsidefuzz-cli) |
 
 The common pattern across all of them: whatever step is genuinely target-specific (a login
 script, a swagger patch, a non-standard bring-up order) stays exactly as documented in the
@@ -216,7 +216,7 @@ individual subcommands together for anything more involved, exactly like the tab
 | Symptom | Cause / fix |
 |---|---|
 | `Could not find a void binary` | Native mode only: `cd void/go && go build -o void .`, or use `./upsidefuzz` instead |
-| `run failed: coverage instrumentation degraded: ...` | The fail-closed startup check (Top-20 #4) caught real instrumentation breakage — see [ARCHITECTURE.md](../ARCHITECTURE.md)'s "Self-verifying, fail-closed instrumentation" section, don't just pass `-allow-degraded-coverage` |
+| `run failed: coverage instrumentation degraded: ...` | The fail-closed startup check (Top-20 #4) caught real instrumentation breakage — see [ARCHITECTURE.md](ARCHITECTURE.md)'s "Self-verifying, fail-closed instrumentation" section, don't just pass `-allow-degraded-coverage` |
 | `Timed out waiting for http://...` during `up`/`run` | Check `(cd <out-dir> && docker compose logs)` — the container may be failing to start, or `--wait-timeout` may be too short for a target with DB migrations |
 | Docker-mode `grammar`/`run` writes files that "disappear" | Fixed 2026-07-24 — `compile-grammar.sh` used to resolve relative `--out`/`--swagger` paths against its own script location rather than your cwd, which only happened to be harmless when they were the same directory. `git pull` if you still see this. |
 | `docker: command not found` inside `./upsidefuzz` output | You're in native mode without Docker installed — either install Docker or don't use `build`/`up`/`down`/`fuzz --direct-shm` |

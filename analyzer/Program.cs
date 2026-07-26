@@ -1,7 +1,7 @@
 // UpsideFuzz Roslyn syntax-tree analyzer.
 // Replaces enhance-grammar.py::SourceExtractor's regex-based constraint extraction with
 // real Microsoft.CodeAnalysis.CSharp syntax parsing — scoped to syntax-tree analysis only
-// (no MSBuildWorkspace/NuGet-restore semantic model; see ARCHITECTURE_REVIEW.md #10).
+// (no MSBuildWorkspace/NuGet-restore semantic model; see docs/ARCHITECTURE_REVIEW.md #10).
 //
 // Usage:
 //   analyzer --src <source-dir> --out <roslyn-constraints.json> [--verbose]

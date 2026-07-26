@@ -1,5 +1,5 @@
 // Shared syntax-tree helpers used by every walker. Deliberately syntax-only —
-// no semantic model / symbol resolution (see ARCHITECTURE_REVIEW.md #10 scoping note):
+// no semantic model / symbol resolution (see docs/ARCHITECTURE_REVIEW.md #10 scoping note):
 // this trades cross-assembly type resolution for zero MSBuild/NuGet-restore fragility.
 
 using Microsoft.CodeAnalysis;

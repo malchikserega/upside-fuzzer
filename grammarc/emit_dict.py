@@ -83,7 +83,7 @@ _CUSTOM_DICT_SCAFFOLD: Dict[str, Any] = {
         "actually uses, admin usernames, etc. -- anything the spec can't tell the",
         "fuzzer but you know from working with this system.",
         "",
-        "Full docs: INSTRUCTIONS.md section 10, 'Custom Dictionary Format'.",
+        "Full docs: docs/INSTRUCTIONS.md section 10, 'Custom Dictionary Format'.",
     ],
     "exampleFieldName": [
         "REPLACE-ME -- not a real field in this target, delete this key once you've added your own",

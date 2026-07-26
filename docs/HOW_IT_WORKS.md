@@ -1,6 +1,6 @@
 # How UpsideFuzz Works (and why it exists)
 
-*A plain-language introduction. If you already know what coverage-guided fuzzing is and just want commands, go to [INSTRUCTIONS.md](../INSTRUCTIONS.md) or a [quickstart](../docs/INDEX.md). If you want implementation-level detail, go to [ARCHITECTURE.md](../ARCHITECTURE.md). This page is the bridge between "what is this tool" and those two.*
+*A plain-language introduction. If you already know what coverage-guided fuzzing is and just want commands, go to [INSTRUCTIONS.md](INSTRUCTIONS.md) or a [quickstart](INDEX.md). If you want implementation-level detail, go to [ARCHITECTURE.md](ARCHITECTURE.md). This page is the bridge between "what is this tool" and those two.*
 
 ---
 
@@ -53,7 +53,7 @@ Three things are happening simultaneously, and all three feed each other:
 2. **A typed grammar** tells the engine what a *valid* request even looks like for each endpoint — required fields, types, and (where source is available) the real length/range/pattern/enum constraints the server will actually enforce — so mutation starts from something the server accepts, then deliberately breaks it in targeted ways, rather than firing garbage that never gets past basic validation.
 3. **Vulnerability oracles** run continuously alongside ordinary fuzzing, replaying successful requests under different conditions to test specific security hypotheses (see below) — this is the part most other REST fuzzers don't have at all.
 
-For the literal step-by-step commands that produce this pipeline, see [INSTRUCTIONS.md](../INSTRUCTIONS.md). For per-file implementation detail, see [ARCHITECTURE.md](../ARCHITECTURE.md).
+For the literal step-by-step commands that produce this pipeline, see [INSTRUCTIONS.md](INSTRUCTIONS.md). For per-file implementation detail, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
@@ -141,7 +141,7 @@ Not every anomaly is a vulnerability, and UpsideFuzz doesn't pretend otherwise. 
 | `needs_review` | A 500 that couldn't be confidently attributed (including down-ranked malformed-input parse errors) |
 | `target_misconfiguration` | A dependency-injection/service-resolution failure from how the test image was built — excluded from the vulnerability count entirely |
 
-This distinction matters: a tool that reports every 500 as a "vulnerability" trains its users to stop trusting it. See `triage.go`/`oracle.go` if you want the exact rules, or [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) for a candid, no-marketing assessment of where this triage is strong and where it still has gaps.
+This distinction matters: a tool that reports every 500 as a "vulnerability" trains its users to stop trusting it. See `triage.go`/`oracle.go` if you want the exact rules, or [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) for a candid, no-marketing assessment of where this triage is strong and where it still has gaps.
 
 ---
 
@@ -156,6 +156,6 @@ Worth being upfront about, since overclaiming erodes trust fast in a security to
 ## Where to go next
 
 - **Run it against a real target**: pick a [quickstart](INDEX.md) (eShopOnWeb is the fastest way to see the whole pipeline work end to end).
-- **Understand every step in depth**: [ARCHITECTURE.md](../ARCHITECTURE.md).
-- **See the full command reference**: [INSTRUCTIONS.md](../INSTRUCTIONS.md), [void/README.md](../void/README.md).
-- **See what's strong, what's weak, and what's planned**: [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) — a genuinely candid engineering self-review, not a marketing page.
+- **Understand every step in depth**: [ARCHITECTURE.md](ARCHITECTURE.md).
+- **See the full command reference**: [INSTRUCTIONS.md](INSTRUCTIONS.md), [void/README.md](../void/README.md).
+- **See what's strong, what's weak, and what's planned**: [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) — a genuinely candid engineering self-review, not a marketing page.

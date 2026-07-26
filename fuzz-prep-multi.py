@@ -1104,7 +1104,7 @@ namespace UpsideFuzz.Coverage
         private static MemoryMappedFile mmf;
         private static MemoryMappedViewAccessor accessor;
 
-        // AFL-style hit-count buckets + bucketed virgin map (see coverage.go / ARCHITECTURE.md).
+        // AFL-style hit-count buckets + bucketed virgin map (see coverage.go / docs/ARCHITECTURE.md).
         private static readonly byte[] CountClass = BuildCountClass();
         private static byte[] seenBuckets;
         private static int totalClasses = 0;
@@ -1440,7 +1440,7 @@ namespace UpsideFuzz.Coverage
         }
 
         // Single-pass novelty merge against the shared bucketed virgin map
-        // (first-observer-wins) — see ARCHITECTURE.md section 5.
+        // (first-observer-wins) — see docs/ARCHITECTURE.md section 5.
         internal static int MergeAndCountNovel()
         {
             if (globalShmAddr == IntPtr.Zero || seenBuckets == null) return 0;

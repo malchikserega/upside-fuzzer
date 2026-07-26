@@ -42,7 +42,7 @@ Squidex is a modern headless CMS built on ASP.NET Core with MongoDB, heavily usi
 - Fuzzing Event-Sourced systems is difficult because state is built from a history of events rather than simple CRUD. This is a natural stress test for the Sequence Engine.
 - Rich producer/consumer chain opportunities: Schema creation → Content generation → Publishing.
 - MongoDB backend makes NoSQL injection payloads directly relevant.
-- The CQRS command structure maps well to `grammarc`'s producer/consumer dependency inference (see `ARCHITECTURE_REVIEW.md` Top-20 #9).
+- The CQRS command structure maps well to `grammarc`'s producer/consumer dependency inference (see `ARCHITECTURE_REVIEW.md`'s Grammar Generation section).
 
 ---
 

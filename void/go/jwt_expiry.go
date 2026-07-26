@@ -13,7 +13,7 @@ import (
 // void never verifies a JWT's signature -- it's a client of whatever auth scheme
 // the target uses, not a verifier -- but reading the unsigned `exp` claim out of
 // a token it was already handed costs nothing and closes a real, previously
-// disclosed trust gap (ARCHITECTURE_REVIEW.md's security-researcher section:
+// disclosed trust gap (docs/ARCHITECTURE_REVIEW.md's security-researcher section:
 // "pasting JWTs that expire mid-run ... no refresh at all once a token expires").
 // Best-effort throughout: any identity whose token isn't JWT-shaped (API keys,
 // cookies, opaque session tokens) or has no `exp` claim is silently skipped,

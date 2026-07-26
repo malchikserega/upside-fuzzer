@@ -3,7 +3,7 @@
 // minimal-API endpoint registration (`app.MapPost("route", [Authorize] (Dto req) => {...})`).
 // eShopOnWeb's PublicApi uses the latter exclusively (Ardalis.ApiEndpoints-style
 // `IEndpoint<...>` classes with an `AddRoute(IEndpointRouteBuilder)` method) — a pattern
-// ARCHITECTURE_REVIEW.md explicitly calls out as under-detected by naming-convention
+// docs/ARCHITECTURE_REVIEW.md explicitly calls out as under-detected by naming-convention
 // heuristics, so both styles are first-class here, not an afterthought.
 
 using Microsoft.CodeAnalysis;

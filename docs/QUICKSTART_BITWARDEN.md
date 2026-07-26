@@ -17,7 +17,7 @@
 
 > **Re-verified end-to-end from a completely fresh clone on 2026-07-23**: `git clone` → `fuzz-prep-multi.py` → `docker compose build --no-cache` → bring up → `verify-hook.sh` → `compile-grammar.sh` → fuzz, twice (once in each run mode below). Grammar output was byte-for-byte identical to prior runs (595 operations, 599 templates, 0 skipped). This pass also found and fixed two real fuzzer-engine bugs (a path-quoting leak and a malformed-auth-token leak on unauthenticated probes) — see `ARCHITECTURE_REVIEW.md`'s Inconsistencies section for the writeups. Every command below is exactly what was run, not aspirational.
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](FUZZER_AUTHENTICATION.md)**
 
 > **Already have a working `bitwarden_prep/` checkout?** Use [BITWARDEN_FUZZ_RUNBOOK.md](BITWARDEN_FUZZ_RUNBOOK.md) instead — it skips straight to bring-up/iterate/re-run and documents every gotcha found during setup. Come back to *this* guide for a fresh, from-scratch setup or if you're setting Bitwarden up for the first time.
 
@@ -363,7 +363,7 @@ print("Written: auth.identities.json")
 PY
 ```
 
-For a multi-user access-control campaign, run `get_apikey.py` for a second user, then manually add a second identity entry. See [`docs/FUZZER_AUTHENTICATION.md`](docs/FUZZER_AUTHENTICATION.md) for the full auth file schema.
+For a multi-user access-control campaign, run `get_apikey.py` for a second user, then manually add a second identity entry. See [`FUZZER_AUTHENTICATION.md`](FUZZER_AUTHENTICATION.md) for the full auth file schema.
 
 ---
 
@@ -462,7 +462,7 @@ the same grammar and hit the same `http://localhost:4000` API — the only diffe
 | Best for | Iterating on the fuzzer's own Go code (no image rebuild needed), quick ad-hoc runs, exactly what was used to validate this guide | Long unattended campaigns, CI, when you want the fuzzer's resource usage/network isolated in its own container |
 | Setup cost | Lower (just `go build`) | Higher (build the `void-fuzzer` image first) |
 
-Both modes accept the same CLI flags (see [void/README.md](void/README.md) for the full
+Both modes accept the same CLI flags (see [void/README.md](../void/README.md) for the full
 reference) — pick whichever fits your workflow. You don't need to run both.
 
 ### Mode A — Host mode (no image build, HTTP coverage)
@@ -707,4 +707,4 @@ command in Step 8 above if you specifically want that faster read path. See
 
 ---
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](docs/FUZZER_AUTHENTICATION.md) · [Architecture](ARCHITECTURE.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Authentication Guide](FUZZER_AUTHENTICATION.md) · [Architecture](ARCHITECTURE.md)**

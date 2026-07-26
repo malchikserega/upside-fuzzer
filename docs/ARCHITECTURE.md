@@ -2,7 +2,7 @@
 
 This document describes the internal design, components, and data flows of the **UpsideFuzz** platform — from source analysis through instrumentation, runtime synchronization, coverage feedback, and coverage-guided fuzzing.
 
-**→ [Back to README](README.md) · [Full Runbook](INSTRUCTIONS.md) · [Docs Index](docs/INDEX.md)**
+**→ [Back to README](../README.md) · [Full Runbook](INSTRUCTIONS.md) · [Docs Index](INDEX.md)**
 
 ---
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """grammarc -- first-party OpenAPI (+ optional Roslyn constraints) -> grammar compiler.
 
-Retires the RESTler dependency (ARCHITECTURE_REVIEW.md Top-20 #9): parses the OpenAPI
+Retires the RESTler dependency (docs/ARCHITECTURE_REVIEW.md Top-20 #9): parses the OpenAPI
 spec directly, optionally merges real per-type/property C# validation constraints from
 analyzer/'s roslyn-constraints.json (#10), infers producer/consumer relationships by
 path/name convention, synthesizes boundary values, and emits templates.export.json +
@@ -147,7 +147,7 @@ def compile_grammar(swagger_path: Path, out_dir: Path, roslyn_path: Path | None,
     if scaffolded:
         print(f"[grammarc] Created starter custom dictionary: {out_dir / CUSTOM_DICT_FILENAME}")
         print(f"[grammarc]   Add your own fuzzing values there -- it's merged automatically on every")
-        print(f"[grammarc]   future compile and never overwritten. See INSTRUCTIONS.md section 10.")
+        print(f"[grammarc]   future compile and never overwritten. See docs/INSTRUCTIONS.md section 10.")
     else:
         print(f"[grammarc] Custom dictionary merged: {out_dir / CUSTOM_DICT_FILENAME}")
     return 0

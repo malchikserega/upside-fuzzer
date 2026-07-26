@@ -98,7 +98,7 @@ func TestEnqueueSequenceFollowupsRewardsNewStateOnce(t *testing.T) {
 // TestMaybePersistSequenceDedupsByFinalShape verifies that two workflows with
 // the same final state signature (same step shapes, different concrete
 // payloads) are only persisted once (Top-20 #12, closing the "no dedup of
-// equivalent workflows" gap in ARCHITECTURE_REVIEW.md §5).
+// equivalent workflows" gap in docs/ARCHITECTURE_REVIEW.md §5).
 func TestMaybePersistSequenceDedupsByFinalShape(t *testing.T) {
 	f := &Fuzzer{persistedWorkflowSigs: map[string]struct{}{}}
 

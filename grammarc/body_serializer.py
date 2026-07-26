@@ -9,7 +9,7 @@ Design choices, all disclosed:
   - Objects -> `{"key":value,...}` interleaved static/value segments, joined by `,`.
   - Arrays -> a single representative element (matches today's non-exploding
     behavior; array structural fuzzing is an existing, separately-tracked limitation
-    per ARCHITECTURE_REVIEW.md subsystem-3 weakness #3, not a regression here).
+    per docs/ARCHITECTURE_REVIEW.md subsystem-3 weakness #3, not a regression here).
   - oneOf/anyOf/discriminator -> first resolvable variant (same known limitation as
     today's RESTler-based pipeline had).
   - Leaf fields with a constrained or dictionary-worthy value pool (enum, pattern,

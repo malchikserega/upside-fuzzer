@@ -37,7 +37,7 @@ public class CouponService
     //
     // The comparison lives in its own plain, non-async method deliberately: the
     // instrumentor always excludes compiler-generated async state-machine types
-    // (`<Method>d__N`, see instrumentor/Program.cs's `d__` check and ARCHITECTURE.md
+    // (`<Method>d__N`, see instrumentor/Program.cs's `d__` check and docs/ARCHITECTURE.md
     // section 3) from every IL pass, coverage probes and ConstantExtractor/CmpLog
     // alike, so a comparison written directly inside `async Task RedeemAsync(...)`
     // would be invisible to both mechanisms. Pulling it out into an ordinary method

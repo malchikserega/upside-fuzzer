@@ -13,7 +13,7 @@ Match strategy, in order:
    request schemas), via the analyzer's `endpoints[]` list and its per-endpoint
    `parameter_types`.
 
-This is the direct, mechanical fix for ARCHITECTURE_REVIEW.md subsystem-3 weakness #2
+This is the direct, mechanical fix for docs/ARCHITECTURE_REVIEW.md subsystem-3 weakness #2
 (the old regex extractor's global name-canonicalization collision): the lookup key here
 is always a specific (type, property), never a bare property name.
 

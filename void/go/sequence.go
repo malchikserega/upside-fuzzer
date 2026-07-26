@@ -68,7 +68,7 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	// Top-20 #12 -- state-reward sequence search: reward reaching a workflow
 	// SHAPE (ordered method+normpath+status-class triples) never seen before in
 	// this run, not just a new edge. This is deliberately coarse (no resource
-	// lifecycle/typed state graph -- see ARCHITECTURE_REVIEW.md §5) but it is
+	// lifecycle/typed state graph -- see docs/ARCHITECTURE_REVIEW.md §5) but it is
 	// enough to make the sequence engine's own search prioritize genuinely novel
 	// multi-step workflows over re-treading ones it has already explored, which
 	// plain edge-coverage reward can't distinguish (a 3rd identical GET after a
@@ -236,7 +236,7 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 	// Dedup by final workflow shape (Top-20 #12): many sequences reach the exact
 	// same (method,normpath,status-class) shape via different concrete IDs/values
 	// -- those are equivalent workflows for reporting purposes, so only the first
-	// one is persisted to disk. Addresses ARCHITECTURE_REVIEW.md §5 weakness #3
+	// one is persisted to disk. Addresses docs/ARCHITECTURE_REVIEW.md §5 weakness #3
 	// ("no dedup of equivalent workflows").
 	sig := sequenceStateSignature(state)
 	if _, dup := f.persistedWorkflowSigs[sig]; dup {

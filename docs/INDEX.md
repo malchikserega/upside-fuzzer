@@ -10,7 +10,7 @@ This is the central documentation index for the **UpsideFuzz** platform — a co
 |----------|-------------|
 | [README.md](../README.md) | 60-second overview: what this is, feature table, quick-start commands |
 | [**HOW_IT_WORKS.md**](HOW_IT_WORKS.md) | **Read this first if you're new.** Plain-language explanation of the problem this solves, how instrumentation/coverage/grammar/sequences/scheduling actually work under the hood, and — in depth — what the BOLA/mass-assignment/injection/differential-auth-bypass oracles actually catch and why crash-only fuzzers miss them entirely |
-| [INSTRUCTIONS.md](../INSTRUCTIONS.md) | The complete step-by-step runbook: prerequisites → instrument → grammar → fuzz → analyze → troubleshoot |
+| [INSTRUCTIONS.md](INSTRUCTIONS.md) | The complete step-by-step runbook: prerequisites → instrument → grammar → fuzz → analyze → troubleshoot |
 | [**CLI.md**](CLI.md) | The `upsidefuzz` single-command orchestrator (Top-20 #19) — one command instead of four scripts, plus a zero-install Docker mode (`./upsidefuzz`) that needs nothing but Docker locally |
 
 ---
@@ -25,7 +25,7 @@ Step-by-step guides for instrumenting and fuzzing specific real-world applicatio
 | **SimplCommerce** | Cookie + anti-forgery | [QUICKSTART_SIMPLCOMMERCE.md](QUICKSTART_SIMPLCOMMERCE.md) |
 | **BTCPayServer** | API key | [QUICKSTART_BTCPAYSERVER.md](QUICKSTART_BTCPAYSERVER.md) |
 | **Bitwarden** | JWT (identity service) | [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md) — fresh, from-scratch setup |
-| **Bitwarden** (already set up) | — | [BITWARDEN_FUZZ_RUNBOOK.md](../BITWARDEN_FUZZ_RUNBOOK.md) — iterating against an *existing* `bitwarden_prep/` checkout, plus every gotcha found during setup. Use the quickstart for a fresh start; use this once you already have a working instrumented copy and just want to re-run or troubleshoot. |
+| **Bitwarden** (already set up) | — | [BITWARDEN_FUZZ_RUNBOOK.md](BITWARDEN_FUZZ_RUNBOOK.md) — iterating against an *existing* `bitwarden_prep/` checkout, plus every gotcha found during setup. Use the quickstart for a fresh start; use this once you already have a working instrumented copy and just want to re-run or troubleshoot. |
 
 Which target to pick first → [README.md §Quickstarts](../README.md#quickstarts). Adding a new target entirely → [TARGET_CANDIDATES.md](TARGET_CANDIDATES.md).
 
@@ -36,7 +36,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 | [FUZZER_AUTHENTICATION.md](FUZZER_AUTHENTICATION.md) | Canonical auth file schema, multi-identity scheduling, access-control campaign setup — required reading if you want BOLA/broken-auth findings, which need ≥2 identities to compare |
 | [auth.identities.example.json](auth.identities.example.json) | Copyable example auth identity file |
 | [MCP_INTEGRATION_GUIDE.md](MCP_INTEGRATION_GUIDE.md) | Using an MCP-connected AI agent to enrich `dict.json` from live database data |
-| [INSTRUCTIONS.md §10](../INSTRUCTIONS.md#10-custom-dictionary-format) | The `dict.json` format itself (flat key→values map) and how it interacts with grammar-derived and mutation-derived boundary values |
+| [INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format) | The `dict.json` format itself (flat key→values map) and how it interacts with grammar-derived and mutation-derived boundary values |
 
 ---
 
@@ -44,9 +44,9 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 
 | Document | For whom / what it covers |
 |----------|-------------|
-| [ARCHITECTURE.md](../ARCHITECTURE.md) | The deep internals reference: instrumentation pipeline, SHM coverage protocol, grammar compilation (`grammarc/`+`analyzer/`), Void engine component map, CI. For anyone modifying the pipeline. |
-| [ARCHITECTURE_REVIEW.md](../ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit reflecting **current state only** (resolved items are dropped, not tracked as a changelog — see git history for that): per-subsystem strengths/currently-open weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and a prioritized (P0/P1/P2) open-improvements backlog. Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
-| [AI_CONTEXT.md](../AI_CONTEXT.md) | Terse, AI-agent-facing operational summary: component map, critical "do not revert" decisions, file-lookup table. Kept current — if you're an AI agent about to modify this repo, read this first. |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The deep internals reference: instrumentation pipeline, SHM coverage protocol, grammar compilation (`grammarc/`+`analyzer/`), Void engine component map, CI. For anyone modifying the pipeline. |
+| [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit reflecting **current state only** (resolved items are dropped, not tracked as a changelog — see git history for that): per-subsystem strengths/currently-open weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and a prioritized (P0/P1/P2) open-improvements backlog. Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
+| [AI_CONTEXT.md](AI_CONTEXT.md) | Terse, AI-agent-facing operational summary: component map, critical "do not revert" decisions, file-lookup table. Kept current — if you're an AI agent about to modify this repo, read this first. |
 | [void/README.md](../void/README.md) | The Go fuzzer's own CLI reference: every flag, startup output, mutation categories, epoch schedule, crash JSONL format, cross-compile instructions |
 | [ARTICLE.md](ARTICLE.md) | A full narrative technical write-up of the architecture and the engineering decisions behind it, with an honest accounting of what's novel, what's re-implementation of prior art, and what still doesn't work |
 
@@ -54,7 +54,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 
 | Document | Description |
 |----------|-------------|
-| `.github/workflows/e2e.yml` + `scripts/e2e-test.sh` | The project's regression gate: instrument → coverage → grammar → fuzz → detect against `fixtures/planted-bug-api/` (a minimal planted-bug sample app), asserting the planted bug is actually found — not just that every step exits zero. Run `./scripts/e2e-test.sh` locally before trusting a pipeline/engine change. Documented in [ARCHITECTURE.md §11](../ARCHITECTURE.md) and [INSTRUCTIONS.md §10a](../INSTRUCTIONS.md#10a-running-the-e2e-regression-check-locally). |
+| `.github/workflows/e2e.yml` + `scripts/e2e-test.sh` | The project's regression gate: instrument → coverage → grammar → fuzz → detect against `fixtures/planted-bug-api/` (a minimal planted-bug sample app), asserting the planted bug is actually found — not just that every step exits zero. Run `./scripts/e2e-test.sh` locally before trusting a pipeline/engine change. Documented in [ARCHITECTURE.md §11](ARCHITECTURE.md) and [INSTRUCTIONS.md §10a](INSTRUCTIONS.md#10a-running-the-e2e-regression-check-locally). |
 | `fixtures/planted-bug-api/README.md` | What the planted bug is and why it's shaped the way it is |
 
 ---

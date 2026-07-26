@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// sarif.go — SARIF 2.1.0 findings export (ARCHITECTURE_REVIEW.md §7 weakness #3,
+// sarif.go — SARIF 2.1.0 findings export (docs/ARCHITECTURE_REVIEW.md §7 weakness #3,
 // Top-20 §16). Opt-in (-sarif-file), so findings drop directly into GitHub code
 // scanning, DefectDojo, or any other SARIF-consuming security dashboard without a
 // custom parser for this project's own JSON report shape.
@@ -49,7 +49,7 @@ func sarifLevel(classification string) string {
 }
 
 // sarifSecuritySeverity renders severity_score (this project's own 0-9 heuristic
-// scale, already documented as "not CVSS" -- ARCHITECTURE_REVIEW.md §7 weakness #2)
+// scale, already documented as "not CVSS" -- docs/ARCHITECTURE_REVIEW.md §7 weakness #2)
 // onto SARIF's conventional 0.0-10.0 security-severity property string, the field
 // GitHub's UI reads to color-code and sort alerts.
 func sarifSecuritySeverity(score int) string {

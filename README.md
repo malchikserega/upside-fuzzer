@@ -170,11 +170,13 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   └── instrumentor.csproj
 │
 ├── requirements.txt            Python dependencies
-├── INSTRUCTIONS.md             Step-by-step runbook (new system → fuzzing)
-└── ARCHITECTURE.md             Platform internals, diagrams, design decisions
+├── docs/
+│   ├── INSTRUCTIONS.md         Step-by-step runbook (new system → fuzzing)
+│   └── ARCHITECTURE.md         Platform internals, diagrams, design decisions
+└── README.md                   this file
 ```
 
-> **`grammars/` may already exist in this workspace** during active research runs — it's a generated artifact; `compile-grammar.sh` regenerates it per target as needed. `restler_bin/`/`restler_input/`/`restler_output/` may also still be present from before the RESTler retirement (Top-20 #9) — they're inert now and can be deleted; nothing in the current pipeline reads or writes them.
+> **`grammars/` may already exist in this workspace** during active research runs — it's a generated artifact; `compile-grammar.sh` regenerates it per target as needed. `restler_bin/`/`restler_input/`/`restler_output/` may also still be present from before the RESTler retirement — they're inert now and can be deleted; nothing in the current pipeline reads or writes them.
 
 ---
 
@@ -240,7 +242,7 @@ One command, no Docker, no RESTler — writes `templates.export.json` + `dict.js
 **Adding your own fuzzing values?** You don't need `--dict` for that (it's a separate, one-off
 mechanism) — the first compile also creates `<out>/dict.custom.json`, a starter file that's
 merged into `dict.json` on every future run and never overwritten. Edit that file directly; see
-[INSTRUCTIONS.md §10](INSTRUCTIONS.md#10-custom-dictionary-format) for the full workflow.
+[INSTRUCTIONS.md §10](docs/INSTRUCTIONS.md#10-custom-dictionary-format) for the full workflow.
 
 ### 5. Run the fuzzer
 
@@ -270,7 +272,7 @@ docker compose --profile fuzz-go run --rm void \
 > **Getting `AUTH_TOKEN`/identity tokens is manual** — Void doesn't perform an OAuth2/OIDC login
 > flow per identity today. Single-identity mode has one fallback (`AUTH_URL`/`AUTH_BODY`/
 > `AUTH_TOKEN_FIELD` — Void POSTs your login request itself instead of you exporting a token;
-> see [INSTRUCTIONS.md](INSTRUCTIONS.md#authentication-jwt-api-keys-custom-headers-and-cookies)),
+> see [INSTRUCTIONS.md](docs/INSTRUCTIONS.md#authentication-jwt-api-keys-custom-headers-and-cookies)),
 > but `-auth-file` identities must each carry a pre-obtained token and are **not** refreshed
 > once they expire mid-run. On a long scan, re-generate `auth.identities.json` periodically or
 > expect stale-token 401s late in the run.
@@ -374,9 +376,9 @@ Access-control findings additionally carry an `access_control: true` field with 
 | Document | Description |
 |----------|-------------|
 | **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** | Start here if you're new: the problem this solves, why grey-box + oracles beat black-box fuzzing, plain-language explainers of instrumentation/grammar/sequences/scheduling, and the BOLA/mass-assignment/injection/differential-auth-bypass oracles |
-| **[INSTRUCTIONS.md](INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
-| **[ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |
+| **[INSTRUCTIONS.md](docs/INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
+| **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
+| **[ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |
 | **[docs/FUZZER_AUTHENTICATION.md](docs/FUZZER_AUTHENTICATION.md)** | Canonical JWT/API-key/cookie auth file schema and multi-identity access-control fuzzing guidance |
 | **[void/README.md](void/README.md)** | Go fuzzer: full CLI reference, startup output guide, build for any platform |
 | **[docs/TARGET_CANDIDATES.md](docs/TARGET_CANDIDATES.md)** | Implemented targets and future fuzzing candidates |
