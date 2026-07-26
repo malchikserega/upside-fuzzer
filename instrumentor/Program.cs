@@ -652,11 +652,37 @@ internal static class InstrumentationFilter
         string fullName, bool instrumentAll, IReadOnlyList<string> allowedNamespaces, IReadOnlyList<string> frameworkPrefixes)
     {
         // ── Always skip compiler-generated types ──
+        //
+        // `d__` (async/iterator state machines, e.g. `CouponService/<RedeemAsync>d__3`)
+        // was removed from this bucket on 2026-07-26: it was blanket-excluding the ONE
+        // place virtually all real business logic in a modern ASP.NET Core app actually
+        // lives (every `async Task` method's real body is compiled into its own `d__`
+        // nested type; the "outer" method the enclosing class exposes is just a thin
+        // state-machine-builder stub). That made every downstream mechanism this
+        // instrumentor exists to provide -- coverage probes, CmpLog, ConstantExtractor --
+        // silently blind to a comparison, branch, or literal written directly inside an
+        // `async Task Foo()`, discovered concretely while building demo_app/ (a hardcoded
+        // backdoor string and a nested numeric/string gate were both invisible until
+        // manually factored out into non-async helper methods -- see demo_app/README.md's
+        // "coverage-guided fuzzing" writeups for #20/#21).
+        //
+        // This is safe to remove: the ORIGINAL reason a similar-looking blanket
+        // exclusion exists (the `+<>c`/`/<>c` compiler lambda-cache check in the SkipInfra
+        // bucket just below) is about static-initializer TIMING -- a `<>c` class's cached
+        // delegate fields are populated in its own `.cctor`, which can run before Main
+        // even starts (causing the documented Bitwarden `AccessViolationException`, since
+        // coverage probes fired before the SHM bitmap was bound). A `d__` state machine's
+        // `MoveNext()` only ever runs when its async operation is actually awaited during
+        // normal request handling, well after startup -- there is no static-init-timing
+        // risk here, and the `+<>c`/`/<>c` check remains fully in place below for the
+        // timing-sensitive case it actually addresses (including a `Program`/`Startup`'s
+        // OWN async state machines, e.g. `Program/<Main>d__0`, which are independently
+        // caught by the `Program`/`Startup` prefix checks in SkipInfra regardless of the
+        // `d__` middle segment -- see InstrumentationFilterTests.Decide_AlwaysSkipsInfraTypes).
         if (fullName.Contains("<PrivateImplementationDetails>") ||
             fullName.Contains("<Module>") ||
             fullName.Contains("<<") ||
             fullName.Contains("c__DisplayClass") ||
-            fullName.Contains("d__") ||
             fullName.Contains(".g."))
         {
             return InstrumentDecision.SkipGenerated;

@@ -5,6 +5,16 @@ name: E2E (planted-bug regression gate)
 # stage runs without error. This is the first CI this project has ever had; it protects
 # grammarc/ + analyzer/ (Top-20 #9/#10) and the constraint-aware mutation engine
 # (Top-20 #14), none of which had any automated coverage before scripts/e2e-test.sh.
+#
+# `unit-tests` (added 2026-07-26) closes a real gap discovered building demo_app/: every
+# language's test suite (Go: void/go/*_test.go, C#: instrumentor.Tests + analyzer.Tests,
+# Python: grammarc/test_*.py + test_fuzz_prep_multi.py) already existed and passed
+# locally, but NONE of them were ever actually run by CI -- only this E2E script was.
+# fuzz-prep-multi.py specifically (~2.8k LOC, zero tests before this) is where 3 real
+# bugs were found by hand in one session; unit-tests now gates it going forward instead
+# of relying on someone noticing a broken Dockerfile at `docker build` time again.
+# `e2e` depends on it so a basic regression fails in ~1-2 minutes, not after a 20-minute
+# Docker build.
 
 on:
   push:
@@ -13,7 +23,49 @@ on:
   workflow_dispatch:
 
 jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Go engine unit tests (void/go)
+        working-directory: void/go
+        run: go test ./...
+
+      - name: C# instrumentor unit tests
+        run: dotnet test instrumentor.Tests/instrumentor.Tests.csproj
+
+      - name: C# analyzer unit tests
+        run: dotnet test analyzer.Tests/analyzer.Tests.csproj
+
+      - name: Python grammarc unit tests
+        run: |
+          python3 -m unittest \
+            grammarc.test_oas grammarc.test_boundary grammarc.test_body_serializer \
+            grammarc.test_dependencies grammarc.test_emit_dict grammarc.test_multipart \
+            grammarc.test_response_schemas grammarc.test_roslyn_merge -v
+
+      - name: Python fuzz-prep-multi.py unit tests
+        run: python3 -m unittest test_fuzz_prep_multi -v
+
+      - name: compile-grammar.sh CLI regression tests
+        run: ./scripts/test-compile-grammar-cli.sh
+
   e2e:
+    needs: unit-tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -26,6 +26,11 @@ type Fuzzer struct {
 	identities     []AuthIdentity
 	identityOrder  []string
 	identityCursor int
+	// jwtExpiryWarned tracks which identities have already had a mid-run token-expiry
+	// event emitted, so checkTokenExpiryDuringRun warns once per identity instead of
+	// spamming a warning every time it's called after expiry.
+	jwtExpiryWarned    map[string]bool
+	lastJWTExpiryCheck time.Time
 
 	client   *http.Client
 	coverage CoverageReader
@@ -414,6 +419,9 @@ func (f *Fuzzer) Run() error {
 	f.initAuthIdentities()
 	fmt.Printf("Identities loaded: %d (mode=%s guest=%v auth_file=%v)\n",
 		len(f.identities), f.cfg.IdentitySampleMode, f.cfg.IdentityIncludeGuest, strings.TrimSpace(f.cfg.AuthFile) != "")
+	for _, w := range checkIdentityTokenExpiry(f.identities, f.cfg.TimeBudgetMinutes) {
+		fmt.Printf("WARNING: %s\n", w)
+	}
 
 	if err := f.coverage.Init(); err != nil {
 		return fmt.Errorf("coverage init failed: %w", err)

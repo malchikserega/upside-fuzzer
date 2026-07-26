@@ -350,10 +350,11 @@ sitting in the compiled IL** of this one comparison:
 
 Neither mechanism exists in a fuzzer with no access to the target's own compiled
 binary — this is a capability genuinely unique to grey-box, coverage-instrumented
-fuzzing. The comparison itself is deliberately factored into `IsBackdoorCode`, a
-plain non-`async` method, rather than written inline inside `async Task
-RedeemAsync(...)` — see "Three real bugs this demo exposed in the fuzzer itself" below
-for why that placement matters, not just style.
+fuzzing. The comparison is factored into `IsBackdoorCode`, a plain non-`async`
+method, rather than written inline inside `async Task RedeemAsync(...)` — originally
+required for ConstantExtractor/CmpLog to see it at all (async method bodies used to
+be invisible to both), now just a legible-code habit since that limitation was fixed
+at the source — see "Three real bugs this demo exposed in the fuzzer itself" below.
 
 ### #21 — the nested range gate
 
@@ -382,7 +383,8 @@ full path incrementally — classic AFL-style greybox exploration, demonstrated
 concretely. Once inside the `verificationLevel` band, Top-20 #14's boundary-aware
 integer mutation (`{min-1, min, min+1, max-1, max, max+1}` candidates) finds the one
 crashing value fast. Like #20, the gate is factored into a plain non-`async` method
-(`PassesUnlockGate`) for the coverage probes to actually see it branch by branch.
+(`PassesUnlockGate`) — originally required for the coverage probes to see it branch
+by branch, now just a style choice since that limitation was fixed at the source.
 
 ### #16 — the stateful sequence-gated crash
 
@@ -423,23 +425,28 @@ and all worth knowing about since none are specific to TeamFlow:
    its own `Dockerfile`/`docker-compose.yml` (see Bring-up above), so its own
    pipeline run actually exercises bug #3 below instead of this one — this fix still
    matters for any other target without a pre-existing Dockerfile.
-2. **Async method bodies invisible to CmpLog/ConstantExtractor.** The instrumentor
-   has always excluded C#'s compiler-generated `async`/`await` state-machine types
-   (`<Method>d__N`) from every IL pass — coverage probes, CmpLog, and
-   ConstantExtractor alike (`instrumentor/Program.cs`'s `d__` check,
-   `ARCHITECTURE.md` §3) — a deliberate, documented tradeoff to avoid an
-   `AccessViolationException` class of startup crash. The practical effect: a literal
-   string comparison or a nested `if` chain written directly inside an `async Task`
-   method (the idiomatic way to write almost anything in modern ASP.NET Core) is as
-   invisible to the fuzzer as it would be to a black-box one — the exact opposite of
-   this demo's premise. `CouponService.IsBackdoorCode` and
-   `TaskLifecycleService.PassesUnlockGate` are written as small, ordinary
-   (non-`async`) methods on their classes specifically because of this — pulling the
-   decision logic out of the `async` wrapper is what makes bugs #20/#21 genuinely
-   discoverable by ConstantExtractor/CmpLog/per-branch coverage reward rather than
-   only in theory. Worth remembering if you write new planted bugs here, or fuzz any
-   other target: a hidden constant or narrow branch buried directly inside `async
-   Task Foo()` gets no benefit from this fuzzer's coverage-guided machinery today.
+2. **Async method bodies invisible to CmpLog/ConstantExtractor — fixed 2026-07-26.**
+   The instrumentor used to unconditionally exclude C#'s compiler-generated
+   `async`/`await` state-machine types (`<Method>d__N`) from every IL pass —
+   coverage probes, CmpLog, and ConstantExtractor alike. The practical effect: a
+   literal string comparison or a nested `if` chain written directly inside an
+   `async Task` method (the idiomatic way to write almost anything in modern
+   ASP.NET Core) was as invisible to the fuzzer as it would be to a black-box one —
+   the exact opposite of this demo's premise. **This is now fixed at the source**
+   (`instrumentor/Program.cs::InstrumentationFilter.Decide`, see its own comment and
+   `ARCHITECTURE.md` §3): async state machines are instrumented like any other
+   nested type, verified both by a dedicated fixture (an inline async backdoor
+   string, no workaround needed, correctly extracted) and against this app itself
+   (rebuilding demo_app's instrumented image after the fix: Infrastructure's
+   instrumented-type count went from 19 to 32, CmpLog comparison sites from 1 to 9,
+   and the same 3-request warm-up probe that used to produce 18 coverage edges now
+   produces 206, with zero functional regressions). `CouponService.IsBackdoorCode`
+   and `TaskLifecycleService.PassesUnlockGate` are still written as small, ordinary
+   (non-`async`) methods — that remains good practice (isolating pure decision
+   logic is legible regardless of instrumentation), but it's no longer *required*
+   for ConstantExtractor/CmpLog/per-branch coverage reward to see them; a
+   newly-planted bug written directly inline inside an `async Task Foo()` would now
+   be found just as well.
 3. **`_detect_last_stage` misidentified the runtime stage whenever it was unnamed
    ("adapt an existing Dockerfile" path).** This is the path demo_app's own
    `Dockerfile` actually exercises, once it had one. `_detect_last_stage` was meant

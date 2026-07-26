@@ -190,6 +190,7 @@ func sortEndpointsForUI(eps []*EndpointStats, mode string) {
 }
 
 func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
+	f.checkTokenExpiryDuringRun()
 	if f.cfg.WebUI {
 		now := time.Now()
 		if f.lastUIRender.IsZero() || now.Sub(f.lastUIRender) >= 200*time.Millisecond {

@@ -86,6 +86,31 @@ This means a selected `guest` identity stays anonymous even if `AUTH_TOKEN` is a
 
 When `-auth-file` or `AUTH_IDENTITIES_JSON` is configured without an explicit login flow (`AUTH_URL` or `AUTH_BODY`), Void does not probe the legacy default `/api/authenticate` endpoint before the run. If you want an additional runtime-login `default` identity, set `AUTH_URL`/`AUTH_BODY` as usual.
 
+## JWT Expiry Warnings (added 2026-07-26)
+
+Void has no auto-login/session-refresh mechanism for `-auth-file` identities — a
+long-standing, still-open gap (a token that expires mid-run just starts silently
+producing 401s for that identity, with nothing to tell you why). What it *does* now
+do is read the unsigned `exp` claim out of any JWT-shaped `jwt`/`token` value at
+identity-load time (never verifying the signature — it's a client of whatever auth
+scheme the target uses, not a verifier) and:
+
+- **At startup**, print one `WARNING:` line per identity whose token is already
+  expired, or will expire before the configured `-time-budget` finishes, e.g.:
+  ```
+  WARNING: identity "alice-expired": JWT already expired 1h0m8s ago (at 2026-07-26T15:44:44-04:00) -- requests will get 401s all run
+  WARNING: identity "bob-expiring-soon": JWT expires in 1m22s (at 2026-07-26T16:46:14-04:00), before this 2-minute run finishes -- requests will start getting 401s partway through
+  ```
+- **During the run**, emit a one-time `JWT-EXPIRED` event into the event log the
+  moment an identity's token — still valid at startup — actually crosses its
+  expiry, so a sudden wave of 401s for one identity partway through a long run has
+  an obvious, timestamped explanation instead of looking like a target regression.
+
+Non-JWT tokens (API keys, cookies, opaque session tokens) have no `exp` claim to
+read and are silently skipped — this is purely additive, best-effort awareness, not
+a new requirement on identity shape. See `void/go/jwt_expiry.go` and its test file
+for the exact logic.
+
 ## Single Identity Shortcuts
 
 For quick one-user fuzzing, these environment variables still work:

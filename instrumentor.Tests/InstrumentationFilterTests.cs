@@ -15,12 +15,38 @@ public class InstrumentationFilterTests
     [InlineData("MyApp.<PrivateImplementationDetails>")]
     [InlineData("MyApp.<Module>")]
     [InlineData("MyApp.Foo+<>c__DisplayClass1_0")]
-    [InlineData("MyApp.Foo+<Bar>d__2")]
     [InlineData("MyApp.Startup.g.SomeGenerated")]
     public void Decide_AlwaysSkipsGeneratedTypes(string fullName)
     {
         var decision = InstrumentationFilter.Decide(fullName, instrumentAll: true, allowedNamespaces: Array.Empty<string>(), frameworkPrefixes: FrameworkPrefixes);
         Assert.Equal(InstrumentDecision.SkipGenerated, decision);
+    }
+
+    // `d__` (async/iterator state-machine) types are deliberately NOT in the
+    // always-skip-generated bucket above (removed 2026-07-26) -- see the long comment
+    // on InstrumentationFilter.Decide. A business-logic type's own `async Task` state
+    // machine must be instrumented exactly like the rest of that type, since that's
+    // where almost all of a real `async` method's actual IL (branches, comparisons,
+    // string literals) lives -- the "outer" method is just a thin builder stub.
+    [Theory]
+    [InlineData("MyApp.Business.OrderService+<PlaceOrderAsync>d__3")]
+    [InlineData("MyApp.Business.OrderService/<PlaceOrderAsync>d__3")] // Cecil's slash-variant nesting notation
+    public void Decide_AsyncStateMachineOfBusinessType_IsInstrumented(string fullName)
+    {
+        var decision = InstrumentationFilter.Decide(fullName, instrumentAll: true, allowedNamespaces: Array.Empty<string>(), frameworkPrefixes: FrameworkPrefixes);
+        Assert.Equal(InstrumentDecision.Instrument, decision);
+    }
+
+    // A framework type's own state machine (e.g. something inside EF Core) must still
+    // be correctly attributed to SkipFramework via the ordinary prefix check -- the
+    // `d__` segment in the middle of the name must not defeat that.
+    [Fact]
+    public void Decide_AsyncStateMachineOfFrameworkType_IsSkippedAsFramework()
+    {
+        var decision = InstrumentationFilter.Decide(
+            "Microsoft.EntityFrameworkCore.DbContext+<SaveChangesAsync>d__142",
+            instrumentAll: true, allowedNamespaces: Array.Empty<string>(), frameworkPrefixes: FrameworkPrefixes);
+        Assert.Equal(InstrumentDecision.SkipFramework, decision);
     }
 
     [Theory]
@@ -33,6 +59,22 @@ public class InstrumentationFilterTests
     [InlineData("MyApp.DesignTimeDbContextFactory")]
     [InlineData("MyApp.CoverageExtensions")]
     public void Decide_AlwaysSkipsInfraTypes(string fullName)
+    {
+        var decision = InstrumentationFilter.Decide(fullName, instrumentAll: true, allowedNamespaces: Array.Empty<string>(), frameworkPrefixes: FrameworkPrefixes);
+        Assert.Equal(InstrumentDecision.SkipInfra, decision);
+    }
+
+    // Regression guard for the original Bitwarden AccessViolationException class this
+    // exclusion bucket exists to prevent (Bit.Api.Program+<>c..cctor, a static-init-timing
+    // issue): a top-level-statements Program's OWN async state machine must still be
+    // caught by the Program/Startup prefix checks even though `d__` alone no longer
+    // triggers SkipGenerated -- proving removing the blanket `d__` check did not reopen
+    // that crash class.
+    [Theory]
+    [InlineData("Program+<Main>d__0")]
+    [InlineData("Program/<Main>d__0")]
+    [InlineData("MyApp.Startup+<ConfigureAsync>d__5")]
+    public void Decide_AsyncStateMachineOfEntryPointType_StillSkippedAsInfra(string fullName)
     {
         var decision = InstrumentationFilter.Decide(fullName, instrumentAll: true, allowedNamespaces: Array.Empty<string>(), frameworkPrefixes: FrameworkPrefixes);
         Assert.Equal(InstrumentDecision.SkipInfra, decision);
