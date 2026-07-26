@@ -62,7 +62,7 @@ Three processes, joined by files on disk and an HTTP/shared-memory contract:
 ```
   .NET solution (source)
         │
-        │  fuzz-prep-multi.py         analyzer/ (Roslyn)      grammarc/ (OpenAPI→grammar)
+        │  fuzz-prep-multi.py         dotnet/analyzer/ (Roslyn)      grammarc/ (OpenAPI→grammar)
         │  • detect projects/Docker    • per-property           • typed request model
         │  • generate instrumentor      constraints             • boundary synthesis
         │  • generate coverage hook     [Authorize]/routes       • producer/consumer deps
@@ -79,7 +79,7 @@ Three processes, joined by files on disk and an HTTP/shared-memory contract:
                                                                   • crash cluster + triage + PoC
 ```
 
-The prep tool (`fuzz-prep-multi.py`) is the .NET-facing half: it analyzes a solution, generates the instrumentor and the coverage hook assembly, and adapts the Dockerfile. `grammarc/` and `analyzer/` build the request grammar. `void/` (Go) is the actual fuzzer. The three halves communicate through explicit, boring artifacts: a shared-memory bitmap, a set of `/shm/*` HTTP endpoints, a `roslyn-constraints.json`, and a `templates.export.json`. That boundary is deliberately dumb so each half can be rewritten independently — the grammar path was in fact rewritten from RESTler to a first-party compiler without the engine noticing.
+The prep tool (`fuzz-prep-multi.py`) is the .NET-facing half: it analyzes a solution, generates the instrumentor and the coverage hook assembly, and adapts the Dockerfile. `grammarc/` and `dotnet/analyzer/` build the request grammar. `void/` (Go) is the actual fuzzer. The three halves communicate through explicit, boring artifacts: a shared-memory bitmap, a set of `/shm/*` HTTP endpoints, a `roslyn-constraints.json`, and a `templates.export.json`. That boundary is deliberately dumb so each half can be rewritten independently — the grammar path was in fact rewritten from RESTler to a first-party compiler without the engine noticing.
 
 ---
 
@@ -91,7 +91,7 @@ Coverage feedback needs per-branch instrumentation of the target's own code. For
 
 IL rewriting wins here because it operates on the *published* DLLs — it does not need the source to build, it works uniformly across a multi-project solution, and it composes with Docker: rewrite happens as a build stage over the publish output.
 
-The instrumentor (`instrumentor/Program.cs`) is a thin CLI over `SharpFuzz.Fuzzer.Instrument` with a type filter. The filter is where the target-specific pain lives. Two exclusions matter and are not obvious:
+The instrumentor (`dotnet/instrumentor/Program.cs`) is a thin CLI over `SharpFuzz.Fuzzer.Instrument` with a type filter. The filter is where the target-specific pain lives. Two exclusions matter and are not obvious:
 
 ```csharp
 // Entry-point types AND their compiler-generated closures fire coverage probes
@@ -191,13 +191,13 @@ In non-Development mode ASP.NET's exception handler starts the response and clea
 
 The point of static analysis here is narrow and practical: learn what the validation layer wants so the fuzzer can get past it. The original implementation regex-scraped C# for `[StringLength]`/`[Range]` and attributed constraints by field name *globally* — so a `Name` with `[StringLength(50)]` in one DTO constrained every `name` field in the app. That is wrong, and it is the kind of wrong that a proper parser fixes for free.
 
-The `analyzer/` project is a real Roslyn syntax-tree analyzer (`Microsoft.CodeAnalysis.CSharp`). It is deliberately scoped to syntax trees, *not* a full semantic model — there is no `MSBuildWorkspace`/NuGet restore, because requiring the target to restore-and-build inside the analyzer is exactly the fragility we are trying to avoid. It extracts, per type and per property:
+The `dotnet/analyzer/` project is a real Roslyn syntax-tree analyzer (`Microsoft.CodeAnalysis.CSharp`). It is deliberately scoped to syntax trees, *not* a full semantic model — there is no `MSBuildWorkspace`/NuGet restore, because requiring the target to restore-and-build inside the analyzer is exactly the fragility we are trying to avoid. It extracts, per type and per property:
 
 - Data-annotation constraints (`min/max length`, `range`, `pattern`, `required`, `email`, `url`), enum values (both named and numeric), and `partial` class merges.
 - FluentValidation rule chains (`FluentValidationWalker`), including a flag for conditional (`When`/`Unless`) rules.
 - Route and authorization metadata (`RouteAuthWalker`) in *both* controller style (`[Route]`/`[HttpGet]` on class + method) and minimal-API/`IEndpoint` style (`app.MapPost("route", [Authorize] ...)`). The latter matters because eShopOnWeb's PublicApi uses it exclusively, and naming-convention heuristics miss it entirely.
 
-The design decision I find most tasteful is the **`unmodeled_validation` list** in the output (`analyzer/Models.cs`). When the walker sees a validation construct it cannot faithfully model — a custom `ValidationAttribute`, an `IValidatableObject.Validate`, a non-literal enum — it records a note rather than silently dropping it or guessing. The grammar consumer can then decide to fuzz that field harder, and the human reading the output knows exactly where the constraint model is blind. Honest instrumentation of your own blind spots is rare and worth copying.
+The design decision I find most tasteful is the **`unmodeled_validation` list** in the output (`dotnet/analyzer/Models.cs`). When the walker sees a validation construct it cannot faithfully model — a custom `ValidationAttribute`, an `IValidatableObject.Validate`, a non-literal enum — it records a note rather than silently dropping it or guessing. The grammar consumer can then decide to fuzz that field harder, and the human reading the output knows exactly where the constraint model is blind. Honest instrumentation of your own blind spots is rare and worth copying.
 
 A property constraint crosses the C#→Python boundary as flat JSON:
 

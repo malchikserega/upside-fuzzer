@@ -3,7 +3,7 @@
 
 Retires the RESTler dependency (docs/ARCHITECTURE_REVIEW.md Top-20 #9): parses the OpenAPI
 spec directly, optionally merges real per-type/property C# validation constraints from
-analyzer/'s roslyn-constraints.json (#10), infers producer/consumer relationships by
+dotnet/analyzer/'s roslyn-constraints.json (#10), infers producer/consumer relationships by
 path/name convention, synthesizes boundary values, and emits templates.export.json +
 dict.json directly -- collapsing the old compile -> cp -> export-templates.py dance
 into one command, with zero Docker/RESTler involved.
@@ -157,7 +157,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="First-party OpenAPI -> grammar compiler (retires RESTler)")
     ap.add_argument("--swagger", required=True, help="Path to OpenAPI/Swagger JSON")
     ap.add_argument("--out", required=True, help="Output directory (templates.export.json + dict.json written here)")
-    ap.add_argument("--roslyn", help="Path to analyzer/'s roslyn-constraints.json (optional)")
+    ap.add_argument("--roslyn", help="Path to dotnet/analyzer/'s roslyn-constraints.json (optional)")
     ap.add_argument("--dict", dest="external_dict", help="Additional dictionary JSON to merge (optional)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()

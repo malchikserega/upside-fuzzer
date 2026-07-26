@@ -50,7 +50,7 @@ graph TD
        │
   compile-grammar.sh swagger.json [--dict dict.json] [--src ./src]
        │                             ← parses OpenAPI directly (grammarc/), optionally
-       │                               runs analyzer/ (real Roslyn syntax-tree analysis)
+       │                               runs dotnet/analyzer/ (real Roslyn syntax-tree analysis)
        │                               over --src for type-scoped C# constraints;
        │                               no RESTler, no Docker for this step
   templates.export.json + dict.json
@@ -88,7 +88,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ![Fuzzing Pipeline Animation](pipeline-animation/pipeline.gif)
 
-1. **Semantic Source Extraction (SSE)**: `analyzer/` — a real `Microsoft.CodeAnalysis.CSharp` syntax-tree analyzer, not regex — parses the target's `.cs` files to extract validation rules (`[StringLength]`, `[Range]`, FluentValidation chains, enum values, `[Authorize]`/route metadata) scoped by actual type+property, then `grammarc/` merges them into a first-party OpenAPI-derived grammar (no RESTler).
+1. **Semantic Source Extraction (SSE)**: `dotnet/analyzer/` — a real `Microsoft.CodeAnalysis.CSharp` syntax-tree analyzer, not regex — parses the target's `.cs` files to extract validation rules (`[StringLength]`, `[Range]`, FluentValidation chains, enum values, `[Authorize]`/route metadata) scoped by actual type+property, then `grammarc/` merges them into a first-party OpenAPI-derived grammar (no RESTler).
 2. **IL Rewriting**: The `fuzz-prep-multi.py` script injects a `SharpFuzz` coverage hook into every basic block of the compiled .NET target.
 3. **Direct SHM or HTTP Coverage**: The Go engine reads execution paths in real-time either directly from an mmap'd shared memory bitmap, or via a lightning-fast HTTP endpoint injected into the target's pipeline.
 4. **Stateful Sequence Fanout**: When a `POST` creates a resource (e.g., `invoiceId`), the sequence engine tracks it and fans out subsequent `GET` / `PUT` / `DELETE` requests using that exact identifier.
@@ -99,7 +99,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 |----------|-------------|
 | **Instrumentation** | Multi-project .NET solution support — instruments all business-logic DLLs, skips tests/migrations/generated code. **Zero-edit by default** (`--inject-mode hook`): `DOTNET_STARTUP_HOOKS` + an ASP.NET hosting-startup assembly link coverage at load time (incl. lazily-loaded modules) without touching the target's `Program.cs`/`Startup.cs`/`.csproj`. Legacy source-editing available via `--inject-mode source`. **Self-verifying, fail-closed**: the fuzzer sends a real warm-up probe at startup and refuses to run (unless `-allow-degraded-coverage`) if the coverage bitmap doesn't actually move — no more silently fuzzing blind for a whole time budget |
 | **Coverage** | SHM bitmap shared across all DLLs via reflection — file-backed mmap, zero HTTP overhead in Docker sidecar mode. **Auto-sized from real instrumented-type count** (~64KB–8MB, not a fixed 256KB) captured at build time. **AFL-style hit-count buckets** (loop-depth aware) with a bucketed virgin map; per-request novelty attributed via a single-scan, first-observer-wins `X-Coverage-Delta` (no concurrency smearing, no double bitmap scan); the periodic bitmap reset now requires both high saturation **and** stagnation, so it never discards progress mid-run |
-| **Grammar** | First-party OpenAPI 2/3 → typed grammar compiler (`grammarc/`, no RESTler, no Docker for this step). Optional `analyzer/` Roslyn syntax-tree pass (not regex) extracts type/property-scoped `[Range]`/`[StringLength]`/FluentValidation/`[Authorize]` constraints, merged with precedence over OpenAPI-derived ones. Producer/consumer id inference, boundary-value synthesis, multipart |
+| **Grammar** | First-party OpenAPI 2/3 → typed grammar compiler (`grammarc/`, no RESTler, no Docker for this step). Optional `dotnet/analyzer/` Roslyn syntax-tree pass (not regex) extracts type/property-scoped `[Range]`/`[StringLength]`/FluentValidation/`[Authorize]` constraints, merged with precedence over OpenAPI-derived ones. Producer/consumer id inference, boundary-value synthesis, multipart |
 | **Fuzzing** | Go engine: Baseline → Deterministic → Havoc → Splicing epochs, MOpt-style weighted mutation categories (incl. .NET `$type` deserialization gadgets). **Constraint-aware boundary mutation**: fields with a declared OpenAPI/Roslyn min/max/length/enum get exact boundary values blended into mutation (verified ~7x more hits on a known bug class in the same time budget). **CMPLOG-lite**: mines ASP.NET's 400-body validation errors for required field names/enum values, feeding them back into the runtime dictionary. **CmpLog/RedQueen via IL comparison instrumentation** (`--cmplog`, hook mode): a second Cecil pass records the literal operands of the target's own `String.Equals`/`StartsWith`/`Contains`/`==` and integer-compare checks straight out of its IL, feeding recovered "magic values" no spec could predict back into mutation. **Constant/string dictionary extraction**: a read-only Cecil pass (unconditional, always on) harvests string/int literals straight out of the target's own compiled IL at instrument time — the .NET analog of AFL's `-x` auto-dictionary |
 | **Sequences** | Producer→consumer chains (POST→GET→PUT→DELETE), runtime value extraction, configurable fanout. **State-reward search**: reaching a never-seen workflow shape (not just a new coverage edge) earns extra energy + search budget, and equivalent workflows are deduped in the on-disk report |
 | **Bug finding** | Crash triage, repro verification, payload minimization, PoC generation, race condition probing, multi-identity auth |
@@ -114,26 +114,44 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 
 ```
 .
-├── fuzz-prep-multi.py          Instrument a .NET project for fuzzing
-├── compile-grammar.sh          One-command grammar compile (grammarc/ + analyzer/, no Docker)
+├── fuzz-prep-multi.py          Entry point (thin wrapper -> fuzzprep.cli.main()); instruments
+│                               a .NET project for fuzzing
+├── fuzzprep/                   The actual implementation, one file per responsibility
+│   ├── models.py               Shared dataclasses (ProjectInfo, MultiAnalysisResult)
+│   ├── analysis.py             MultiProjectAnalyzer: scans the solution, classifies
+│   │                           business-logic files
+│   ├── detect.py                Pure regex helpers over Dockerfile/C# source text
+│   │                           (build/runtime stage detection, publish dir, etc.)
+│   ├── docker_gen.py            Dockerfile + docker-compose generation/adaptation
+│   ├── instrumentor_gen.py      Instrumentor source copy + zero-edit coverage-hook assembly
+│   ├── coverage_helper_gen.py   Legacy --inject-mode source support
+│   └── cli.py                  Argument parsing and orchestration (main())
+├── compile-grammar.sh          One-command grammar compile (grammarc/ + dotnet/analyzer/, no Docker)
 │
 ├── grammarc/                   First-party OpenAPI → typed grammar compiler (Python, stdlib-only)
 │   ├── oas.py                  OpenAPI 2/3 parser ($ref/allOf/oneOf/anyOf resolution)
 │   ├── body_serializer.py      Schema → request-body segment serializer
 │   ├── dependencies.py         Producer/consumer id inference (path/name convention)
-│   ├── roslyn_merge.py         Merges analyzer/'s type-scoped constraints over OpenAPI's
+│   ├── roslyn_merge.py         Merges the analyzer's type-scoped constraints over OpenAPI's
 │   ├── boundary.py             Boundary-value synthesis (min-1/max+1, canned formats, etc.)
 │   ├── multipart.py            Multipart/form-data template synthesis
 │   ├── emit_templates.py       Writes templates.export.json (Go engine contract)
 │   ├── emit_dict.py            Writes dict.json (Go engine contract); scaffolds + merges dict.custom.json
 │   └── cli.py                  Orchestration entry point (python3 -m grammarc.cli)
 │
-├── analyzer/                   Roslyn syntax-tree analyzer (C# tool, Microsoft.CodeAnalysis.CSharp)
-│   ├── Program.cs
-│   ├── ConstraintWalker.cs      DataAnnotations, type/property-scoped
-│   ├── FluentValidationWalker.cs
-│   ├── RouteAuthWalker.cs      [Authorize]/route metadata (controller + minimal-API styles)
-│   └── analyzer.csproj
+├── dotnet/                     The two C# build-time tools, each with its own xUnit test project
+│   ├── analyzer/                Roslyn syntax-tree analyzer (Microsoft.CodeAnalysis.CSharp)
+│   │   ├── Program.cs
+│   │   ├── ConstraintWalker.cs   DataAnnotations, type/property-scoped
+│   │   ├── FluentValidationWalker.cs
+│   │   ├── RouteAuthWalker.cs   [Authorize]/route metadata (controller + minimal-API styles)
+│   │   └── analyzer.csproj
+│   ├── analyzer.Tests/
+│   ├── instrumentor/             SharpFuzz/Cecil IL instrumentor
+│   │   ├── Program.cs
+│   │   ├── instrument.sh
+│   │   └── instrumentor.csproj
+│   └── instrumentor.Tests/
 │
 ├── void/
 │   ├── go/
@@ -155,6 +173,7 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── minimize.go         Crash minimization and repro verification
 │   │   ├── identity.go         Auth identities, multi-identity scheduling, race probing
 │   │   ├── auth.go             JWT/header/cookie auth state and login fallback
+│   │   ├── jwt_expiry.go       JWT expiry warnings for -auth-file identities
 │   │   ├── ui.go               Live terminal dashboard
 │   │   ├── utils.go            HTTP and string utility functions
 │   │   └── types.go            Core data structures
@@ -164,12 +183,13 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │                           directly and never touches this script)
 │   └── Dockerfile.go           Docker image for Go sidecar
 │
-├── instrumentor/               SharpFuzz instrumentor (C# tool)
-│   ├── Program.cs
-│   ├── instrument.sh
-│   └── instrumentor.csproj
+├── demo_app/                   In-repo flagship demo target (TeamFlow) -- 26 endpoints,
+│                               24 planted vulnerabilities, no external clone required
+├── fixtures/planted-bug-api/   Minimal fixture used by the E2E CI regression gate
+├── scripts/                    e2e-test.sh (CI gate) + test-compile-grammar-cli.sh
 │
 ├── requirements.txt            Python dependencies
+├── test_fuzz_prep_multi.py     Unit tests for fuzzprep/detect.py
 ├── docs/
 │   ├── INSTRUCTIONS.md         Step-by-step runbook (new system → fuzzing)
 │   └── ARCHITECTURE.md         Platform internals, diagrams, design decisions

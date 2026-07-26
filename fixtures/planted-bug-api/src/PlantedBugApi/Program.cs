@@ -17,11 +17,11 @@ record Item(int Id, string Name, decimal Price);
 record CreateItemRequest(string Name, decimal Price);
 
 // Handlers live on a named, non-lambda class deliberately: SharpFuzz instrumentation
-// (instrumentor/Program.cs::ShouldInstrument) blanket-excludes any type whose name
+// (dotnet/instrumentor/Program.cs::ShouldInstrument) blanket-excludes any type whose name
 // contains "+<>c" (compiler-generated lambda/closure classes) and the synthesized
 // top-level-statements "Program" class itself -- a rule that exists to stop
 // static-initializer code from firing before the coverage SHM pointer is bound (a real,
-// previously-hit production crash, see instrumentor/Program.cs's own comment). That
+// previously-hit production crash, see dotnet/instrumentor/Program.cs's own comment). That
 // rule has a real side effect for minimal APIs: it also excludes lambda bodies passed
 // directly to app.MapGet/MapPost, since those compile onto exactly those closure/
 // Program-nested types -- verified directly against this fixture (0 SHM edges after

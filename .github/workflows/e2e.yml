@@ -3,7 +3,7 @@ name: E2E (planted-bug regression gate)
 # Top-20 #7: proves the whole pipeline -- instrument -> coverage -> grammar -> fuzz ->
 # detect -- still works end to end against fixtures/planted-bug-api/, not just that each
 # stage runs without error. This is the first CI this project has ever had; it protects
-# grammarc/ + analyzer/ (Top-20 #9/#10) and the constraint-aware mutation engine
+# grammarc/ + dotnet/analyzer/ (Top-20 #9/#10) and the constraint-aware mutation engine
 # (Top-20 #14), none of which had any automated coverage before scripts/e2e-test.sh.
 #
 # `unit-tests` (added 2026-07-26) closes a real gap discovered building demo_app/: every

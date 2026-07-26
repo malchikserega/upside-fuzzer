@@ -84,7 +84,7 @@ The checked-in helper rewrites the downloaded swagger into `simplcommerce_prep/s
 ## Step 4: Compile the Grammar
 
 RESTler is retired (Top-20 #9/#10) — compile the sanitized swagger file directly with
-`grammarc/` + `analyzer/` (one command, no Docker), writing `templates.export.json` +
+`grammarc/` + `dotnet/analyzer/` (one command, no Docker), writing `templates.export.json` +
 `dict.json` straight to `grammars/simplcommerce/`:
 
 ```bash

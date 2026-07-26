@@ -44,7 +44,7 @@ Which target to pick first → [README.md §Quickstarts](../README.md#quickstart
 
 | Document | For whom / what it covers |
 |----------|-------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The deep internals reference: instrumentation pipeline, SHM coverage protocol, grammar compilation (`grammarc/`+`analyzer/`), Void engine component map, CI. For anyone modifying the pipeline. |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The deep internals reference: instrumentation pipeline, SHM coverage protocol, grammar compilation (`grammarc/`+`dotnet/analyzer/`), Void engine component map, CI. For anyone modifying the pipeline. |
 | [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) | A candid, no-marketing engineering audit reflecting **current state only** (resolved items are dropped, not tracked as a changelog — see git history for that): per-subsystem strengths/currently-open weaknesses, comparison to RESTler/EvoMaster/Schemathesis/DeepREST, and a prioritized (P0/P1/P2) open-improvements backlog. Read this to understand what's genuinely strong, what's a known gap, and what's planned next. |
 | [AI_CONTEXT.md](AI_CONTEXT.md) | Terse, AI-agent-facing operational summary: component map, critical "do not revert" decisions, file-lookup table. Kept current — if you're an AI agent about to modify this repo, read this first. |
 | [void/README.md](../void/README.md) | The Go fuzzer's own CLI reference: every flag, startup output, mutation categories, epoch schedule, crash JSONL format, cross-compile instructions |

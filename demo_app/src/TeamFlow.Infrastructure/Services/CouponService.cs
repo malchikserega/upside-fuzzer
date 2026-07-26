@@ -26,10 +26,10 @@ public class CouponService
     // has effectively zero probability of ever generating it by chance (26^19-ish
     // search space for letters alone). It only becomes discoverable because it is a
     // literal string constant sitting in the compiled IL of this exact comparison:
-    //   - instrumentor/Program.cs::ConstantExtractor harvests it directly out of the
+    //   - dotnet/instrumentor/Program.cs::ConstantExtractor harvests it directly out of the
     //     IL at instrument time -- no execution required at all -- and feeds it back
     //     into void/go/mutation_engine.go's mutateStringCategorized candidate pool.
-    //   - CmpLog (instrumentor/Program.cs::CmpLogInstrumentor) would also recover it
+    //   - CmpLog (dotnet/instrumentor/Program.cs::CmpLogInstrumentor) would also recover it
     //     live, the first time *any* string gets compared against it, by recording
     //     the actual operand of the String.Equals/op_Equality call.
     // Either mechanism turns an unguessable secret into a few-KB dictionary entry;
@@ -37,7 +37,7 @@ public class CouponService
     //
     // The comparison lives in its own plain, non-async method deliberately: the
     // instrumentor always excludes compiler-generated async state-machine types
-    // (`<Method>d__N`, see instrumentor/Program.cs's `d__` check and docs/ARCHITECTURE.md
+    // (`<Method>d__N`, see dotnet/instrumentor/Program.cs's `d__` check and docs/ARCHITECTURE.md
     // section 3) from every IL pass, coverage probes and ConstantExtractor/CmpLog
     // alike, so a comparison written directly inside `async Task RedeemAsync(...)`
     // would be invisible to both mechanisms. Pulling it out into an ordinary method

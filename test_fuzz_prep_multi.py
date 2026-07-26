@@ -1,18 +1,16 @@
-"""Tests for the pure Dockerfile-parsing helpers in fuzz-prep-multi.py.
+"""Tests for the pure regex-detection helpers in fuzzprep/detect.py.
 
-This file is the single biggest, most fragile piece of first-party Python in the
-repo (~2.8k LOC) and, until this file, had zero automated test coverage -- three
-real, previously-unknown bugs were found by hand while building demo_app/ against
-it in one session: non-main-project DLLs shipped uninstrumented, _detect_last_stage
-misidentifying the runtime stage on an unnamed final FROM (reproduced concretely on
-demo_app/Dockerfile, btcpayserver/Dockerfile, and simplcommerce/Dockerfile -- all
-three already in this repo's own fixture set), and a stale `dockerfile: Dockerfile`
-reference in the generated void-sidecar template. These tests lock in the fixes and
+This module (and the rest of the fuzzprep/ package it lives in, split out of
+what used to be one ~2.8k-line fuzz-prep-multi.py) is the single most fragile
+piece of first-party Python in the repo and, until this file, had zero
+automated test coverage -- three real, previously-unknown bugs were found by
+hand while building demo_app/ against it in one session: non-main-project
+DLLs shipped uninstrumented, _detect_last_stage misidentifying the runtime
+stage on an unnamed final FROM (reproduced concretely on demo_app/Dockerfile,
+btcpayserver/Dockerfile, and simplcommerce/Dockerfile -- all three already in
+this repo's own fixture set), and a stale `dockerfile: Dockerfile` reference
+in the generated void-sidecar template. These tests lock in the fixes and
 guard the exact real-world Dockerfile shapes that exposed them.
-
-fuzz-prep-multi.py has a hyphen in its filename, so it can't be `import`ed as an
-ordinary module -- loaded here via importlib from its file path instead. It has an
-`if __name__ == "__main__":` guard, so importing it performs no side effects.
 
 Run with: python3 -m unittest test_fuzz_prep_multi -v
 Stdlib-only, matching the rest of this repo's Python test suites (grammarc/test_*.py).
@@ -20,21 +18,17 @@ Stdlib-only, matching the rest of this repo's Python test suites (grammarc/test_
 
 from __future__ import annotations
 
-import importlib.util
+import re
 import unittest
-from pathlib import Path
 
-_MODULE_PATH = Path(__file__).resolve().parent / "fuzz-prep-multi.py"
-_spec = importlib.util.spec_from_file_location("fuzz_prep_multi", _MODULE_PATH)
-fuzz_prep_multi = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(fuzz_prep_multi)
-
-_detect_last_stage = fuzz_prep_multi._detect_last_stage
-_detect_source_stage = fuzz_prep_multi._detect_source_stage
-_detect_publish_dir = fuzz_prep_multi._detect_publish_dir
-_strip_publish_single_file = fuzz_prep_multi._strip_publish_single_file
-_detect_builder_name = fuzz_prep_multi._detect_builder_name
-_detect_app_name = fuzz_prep_multi._detect_app_name
+from fuzzprep.detect import (
+    _detect_last_stage,
+    _detect_source_stage,
+    _detect_publish_dir,
+    _strip_publish_single_file,
+    _detect_builder_name,
+    _detect_app_name,
+)
 
 
 class DetectLastStageTests(unittest.TestCase):
@@ -73,9 +67,9 @@ class DetectLastStageTests(unittest.TestCase):
         # lose the name (checked indirectly: if the regex mishandled the flag, this
         # whole findall would have produced a garbage capture instead of "builder").
         self.assertIsNone(_detect_last_stage(content))
-        m = fuzz_prep_multi.re.findall(
+        m = re.findall(
             r'^FROM\s+(?:--\S+\s+)*\S+(?:\s+AS\s+(\S+))?', content,
-            fuzz_prep_multi.re.IGNORECASE | fuzz_prep_multi.re.MULTILINE,
+            re.IGNORECASE | re.MULTILINE,
         )
         self.assertEqual(m, ["builder", ""])
 

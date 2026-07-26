@@ -34,13 +34,13 @@ UpsideFuzz rewrites the target .NET application's compiled IL (via [SharpFuzz](h
                                         │  HTTP requests             │   │
                                         │◀───────────────────────────┘   │
                                         │                                 │
- ┌──────────────┐              ┌───────▼────────┐              ┌────────▼───────┐
- │ analyzer/     │──constraints▶│                │◀─────grammar─│ grammarc/       │
- │ (Roslyn: real  │              │  Void engine   │              │ (OpenAPI parser,│
- │  per-field     │              │  (Go)          │              │  no RESTler)    │
- │  validation    │              └───────┬────────┘              └─────────────────┘
- │  rules)        │                      │
- └──────────────┘                      ▼
+ ┌──────────────────┐          ┌───────▼────────┐              ┌────────▼───────┐
+ │ dotnet/analyzer/  │─constraints▶│                │◀─────grammar─│ grammarc/       │
+ │ (Roslyn: real     │          │  Void engine   │              │ (OpenAPI parser,│
+ │  per-field        │          │  (Go)          │              │  no RESTler)    │
+ │  validation       │          └───────┬────────┘              └─────────────────┘
+ │  rules)           │                  │
+ └──────────────────┘                  ▼
                                  findings: crashes, BOLA,
                                  mass-assignment, injection,
                                  differential auth-bypass —

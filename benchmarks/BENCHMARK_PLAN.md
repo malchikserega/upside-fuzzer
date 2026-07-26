@@ -31,7 +31,7 @@ Evidence base for every design decision below.
 - Config surface (`main.go`): ~90 flags incl. `-time-budget`, `-concurrency`, `-direct-shm`, `-auth-file`, `-sequence-prob`, `-profile {fast,deep,security}`, `-access-probe` + per-oracle toggles, `-injection-oracle`, `-race-mode`, `-crash-triage`, `-repro-runs`, `-adaptive-content-type`, `-auto-antiforgery`. **No `-seed` flag exists** (RNG is `math/rand` default-seeded → runs are not reproducible).
 
 **Grammar / prep.**
-- `fuzz-prep-multi.py` (instrument, `--inject-mode hook|source`), `analyzer/` (Roslyn constraints), `grammarc/` (first-party OpenAPI→grammar; RESTler retired for *my* grammar), `compile-grammar.sh` (still wraps the RESTler compiler for the RESTler configuration), `sanitize-swagger-for-restler.sh`.
+- `fuzz-prep-multi.py` (instrument, `--inject-mode hook|source`), `dotnet/analyzer/` (Roslyn constraints), `grammarc/` (first-party OpenAPI→grammar; RESTler retired for *my* grammar), `compile-grammar.sh` (still wraps the RESTler compiler for the RESTler configuration), `sanitize-swagger-for-restler.sh`.
 - Orchestration: `upsidefuzz.py` (subcommands), `verify-hook.sh`, `scripts/e2e-test.sh`, `.github/workflows/e2e.yml`.
 
 **RESTler.** `restler_bin/` (compiler + engine) present; `restler_input/`, `restler_output/`. RESTler is already used to compile grammars; running it as a *fuzzer* (Test / Fuzz-lean / Fuzz modes) is the comparison baseline.

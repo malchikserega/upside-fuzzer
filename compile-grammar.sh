@@ -28,7 +28,7 @@ compile-grammar.sh — Generate a fuzzing grammar from an OpenAPI/Swagger spec.
 
 First-party pipeline (RESTler retired — no Docker, no external compiler):
   1. Parses the OpenAPI/Swagger spec directly (grammarc/oas.py)
-  2. If --src is given, runs analyzer/ (a real Microsoft.CodeAnalysis.CSharp
+  2. If --src is given, runs dotnet/analyzer/ (a real Microsoft.CodeAnalysis.CSharp
      syntax-tree analyzer) over the source tree to extract type/property-scoped
      C# validation constraints ([StringLength]/[Range]/FluentValidation/etc.),
      [Authorize]/route metadata — replacing the old regex-based SourceExtractor.

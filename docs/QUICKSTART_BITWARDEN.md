@@ -407,7 +407,7 @@ The script creates:
 ## Step 7: Compile the Grammar
 
 RESTler is retired — grammar compilation is now one first-party command (`grammarc/` +
-`analyzer/`), no Docker involved. The sanitize step below is **still needed**: it's not
+`dotnet/analyzer/`), no Docker involved. The sanitize step below is **still needed**: it's not
 a RESTler-specific workaround, it's because `grammarc/oas.py` doesn't yet decompose
 `style: deepObject`/object-shaped query parameters into multiple keys (a disclosed,
 open gap — see `ARCHITECTURE_REVIEW.md`) — Bitwarden's spec uses this shape in several
@@ -424,7 +424,7 @@ cd bitwarden_prep
 python3 ../examples/bitwarden/sanitize_swagger.py internal_swagger.json
 cd ..
 
-# Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis) — one
+# Compile grammar (grammarc/ OpenAPI parser + dotnet/analyzer/ Roslyn syntax-tree analysis) — one
 # command, writes templates.export.json + dict.json directly to grammars/bitwarden/
 ./compile-grammar.sh bitwarden_prep/internal_swagger.json --src ./bitwarden_src --out grammars/bitwarden
 ```

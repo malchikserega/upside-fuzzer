@@ -117,7 +117,7 @@ cd ..  # back to upside-fuzzer root
 # Download swagger from the running app
 curl -s http://localhost:5200/swagger/v1/swagger.json -o swagger-eshop.json
 
-# Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis of ./esh)
+# Compile grammar (grammarc/ OpenAPI parser + dotnet/analyzer/ Roslyn syntax-tree analysis of ./esh)
 ./compile-grammar.sh swagger-eshop.json --src ./esh --out grammars/eshop
 ```
 

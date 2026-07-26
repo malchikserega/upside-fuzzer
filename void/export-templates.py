@@ -3,7 +3,7 @@
 export-templates.py  —  DEPRECATED legacy fallback, not the primary path.
 
 RESTler has been retired (ARCHITECTURE_REVIEW.md Top-20 #9/#10). The current
-`compile-grammar.sh` (grammarc/ + analyzer/) writes `templates.export.json` directly —
+`compile-grammar.sh` (grammarc/ + dotnet/analyzer/) writes `templates.export.json` directly —
 it never produces or touches a `grammar.py` file, and never invokes this script.
 
 This script is kept ONLY so grammar directories generated *before* the migration (which

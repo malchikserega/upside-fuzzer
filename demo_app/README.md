@@ -60,13 +60,13 @@ for BOLA probes to actually have something to steal.
 **Instrumentation-compatibility choices**, applied deliberately from lessons learned
 building and fuzzing real targets this project has already been run against:
 - **Controller-based MVC, not minimal-API lambdas.** Every action is a named method
-  on a named class, so `instrumentor/Program.cs::ShouldInstrument`'s `+<>c`-closure
+  on a named class, so `dotnet/instrumentor/Program.cs::ShouldInstrument`'s `+<>c`-closure
   exclusion (needed to prevent a real `AccessViolationException` static-init crash
   class found on Bitwarden) never silently zeroes out coverage.
 - **Nested under `src/TeamFlow.Api/`**, not flat at `demo_app/` root — avoids the
   `CS8802` top-level-statements collision documented in
   `fixtures/planted-bug-api/README.md`.
-- **`net8.0`** everywhere, matching `instrumentor.csproj`'s own TFM.
+- **`net8.0`** everywhere, matching `dotnet/instrumentor/instrumentor.csproj`'s own TFM.
 - Response DTOs are strongly typed (`ActionResult<T>` / `[ProducesResponseType]`) so
   Swashbuckle infers `response_schemas` automatically — except deliberately on one
   endpoint (`GET /api/users/me`), where the declared and actual shapes diverge on
@@ -145,7 +145,7 @@ Sanity-check instrumentation actually took (not just that the container started)
 curl http://localhost:5299/swagger/v1/swagger.json -o /tmp/teamflow-swagger.json
 cd /path/to/upside-fuzzer
 ./compile-grammar.sh /tmp/teamflow-swagger.json --out grammars/teamflow \
-  --src demo_app   # --src pulls in the Roslyn constraint extraction (analyzer/)
+  --src demo_app   # --src pulls in the Roslyn constraint extraction (dotnet/analyzer/)
                    # for #14's demo endpoint; compile-grammar.sh has no --main flag
                    # (that's a fuzz-prep-multi.py-only flag -- don't mix them up)
 ```
@@ -419,10 +419,10 @@ private static bool IsBackdoorCode(string code) => code == InternalQaBypassCode;
 A random fuzzer mutating the `code` field has ~0 probability of ever generating this
 exact 19-character string. It's only discoverable because it's a **literal constant
 sitting in the compiled IL** of this one comparison:
-- `instrumentor/Program.cs::ConstantExtractor` (Top-20+ #22) reads it directly out of
+- `dotnet/instrumentor/Program.cs::ConstantExtractor` (Top-20+ #22) reads it directly out of
   the IL at instrument time — no execution required at all — and feeds it into
   `void/go/mutation_engine.go`'s `mutateStringCategorized` candidate pool.
-- CmpLog (Top-20+ #21, `instrumentor/Program.cs::CmpLogInstrumentor`) would also
+- CmpLog (Top-20+ #21, `dotnet/instrumentor/Program.cs::CmpLogInstrumentor`) would also
   recover it live, the first time *any* string gets compared against it, by recording
   the real operand of the `String.Equals`/`op_Equality` call.
 
@@ -482,7 +482,7 @@ is what builds and keeps exploring exactly this 2-3 step chain.
 ## Three real bugs this demo exposed in the fuzzer itself
 
 Building this demo against the actual pipeline (not just reading the code) surfaced
-three genuine bugs in `fuzz-prep-multi.py`/`instrumentor/Program.cs` — all now fixed,
+three genuine bugs in `fuzz-prep-multi.py`/`dotnet/instrumentor/Program.cs` — all now fixed,
 and all worth knowing about since none are specific to TeamFlow:
 
 1. **Non-main projects shipped uninstrumented ("generate from scratch" Dockerfile
@@ -511,7 +511,7 @@ and all worth knowing about since none are specific to TeamFlow:
    `async Task` method (the idiomatic way to write almost anything in modern
    ASP.NET Core) was as invisible to the fuzzer as it would be to a black-box one —
    the exact opposite of this demo's premise. **This is now fixed at the source**
-   (`instrumentor/Program.cs::InstrumentationFilter.Decide`, see its own comment and
+   (`dotnet/instrumentor/Program.cs::InstrumentationFilter.Decide`, see its own comment and
    `ARCHITECTURE.md` §3): async state machines are instrumented like any other
    nested type, verified both by a dedicated fixture (an inline async backdoor
    string, no workaround needed, correctly extracted) and against this app itself

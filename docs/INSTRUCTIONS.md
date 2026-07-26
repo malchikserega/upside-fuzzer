@@ -45,7 +45,7 @@ Install the following on any new system before running UpsideFuzz:
 |------|---------|---------|
 | **Docker** + **Docker Compose v2** | Docker 24+, Compose 2.x | Build & run instrumented containers (not needed for grammar compilation itself) |
 | **Python** | 3.9+ | Run `fuzz-prep-multi.py` and `grammarc/` (stdlib-only, no `pip install` needed) |
-| **.NET SDK** | 8+ | `analyzer/` — the Roslyn syntax-tree analyzer `compile-grammar.sh` runs when `--src` is given |
+| **.NET SDK** | 8+ | `dotnet/analyzer/` — the Roslyn syntax-tree analyzer `compile-grammar.sh` runs when `--src` is given |
 | **Go** (optional) | 1.22+ | Only if you build the Go fuzzer binary locally |
 | **sqlpackage** (optional) | Microsoft build | Import `.bacpac` into SQL Server from the host for targets that require manual SQL Server restores |
 
@@ -115,7 +115,7 @@ dotnet --version        # 8.0+
 └────────────────────────────┬────────────────────────────────────────────┘
                              │
               compile-grammar.sh swagger.json --src <src>
-              (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree
+              (grammarc/ OpenAPI parser + dotnet/analyzer/ Roslyn syntax-tree
                analysis — first-party, no RESTler, no Docker for this step)
                              │
                              ▼
@@ -347,7 +347,7 @@ pipeline is now two first-party components, with **no Docker or external compile
    resolution, v2+v3 parameter/body shapes), infers producer/consumer id relationships by
    path/name convention, synthesizes boundary values, and serializes request bodies straight
    to segments.
-2. **`analyzer/`** (C#, real `Microsoft.CodeAnalysis.CSharp` syntax-tree parsing — not regex),
+2. **`dotnet/analyzer/`** (C#, real `Microsoft.CodeAnalysis.CSharp` syntax-tree parsing — not regex),
    run automatically when `--src` is given, extracts **type/property-scoped** constraints:
    `[Required]`, `[Range]`, `[StringLength]`, `[RegularExpression]`, FluentValidation chains,
    enum declarations, `[Authorize]`/route metadata. Scoped by `(fully-qualified type, property)`
@@ -807,7 +807,7 @@ so either format works as `--dict` input.
 
 ## 10a. Running the E2E regression check locally
 
-Before trusting a change to `grammarc/`, `analyzer/`, or the mutation engine, run the
+Before trusting a change to `grammarc/`, `dotnet/analyzer/`, or the mutation engine, run the
 same check CI runs (`.github/workflows/e2e.yml`) against the bundled planted-bug fixture
 (`fixtures/planted-bug-api/`, see its own README.md for what's planted and why):
 

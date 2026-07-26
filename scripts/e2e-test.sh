@@ -8,7 +8,7 @@
 #
 # Target: fixtures/planted-bug-api/ -- a minimal, DB-free ASP.NET Core app with one
 # deliberate, deterministic bug (see fixtures/planted-bug-api/README.md). This is the
-# regression safety net for grammarc/ + analyzer/ (Top-20 #9/#10) and the
+# regression safety net for grammarc/ + dotnet/analyzer/ (Top-20 #9/#10) and the
 # constraint-aware mutation engine (Top-20 #14), none of which had any automated test
 # coverage before this script existed.
 #

@@ -16,7 +16,7 @@ public class TaskDto
 // Vulnerability #11 is intentionally clean -- this DTO exists purely to give
 // grammarc's Top-20 #14 constraint-aware boundary mutation (min/max/length) real
 // declared bounds to fuzz against: [Range]/[StringLength] round-trip through
-// analyzer/'s Roslyn constraint extraction into templates.export.json's per-segment
+// dotnet/analyzer/'s Roslyn constraint extraction into templates.export.json's per-segment
 // min_length/max_length/minimum/maximum fields.
 public class CreateTaskRequest
 {

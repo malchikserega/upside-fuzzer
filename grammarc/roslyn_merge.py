@@ -1,4 +1,4 @@
-"""Merges analyzer/'s roslyn-constraints.json (real, type/property-scoped C# validation
+"""Merges dotnet/analyzer/'s roslyn-constraints.json (real, type/property-scoped C# validation
 constraints) into the OAS-derived FieldHints, with Roslyn winning per-field when a
 scoped match exists.
 

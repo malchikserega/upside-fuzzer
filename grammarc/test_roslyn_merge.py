@@ -1,4 +1,4 @@
-"""Tests for roslyn_merge.py -- merging analyzer/'s real, type/property-scoped C#
+"""Tests for roslyn_merge.py -- merging dotnet/analyzer/'s real, type/property-scoped C#
 validation constraints into OAS-derived FieldHints, with Roslyn winning per-field.
 
 Run with: python3 -m unittest grammarc.test_roslyn_merge -v

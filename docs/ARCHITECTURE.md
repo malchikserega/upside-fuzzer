@@ -14,7 +14,7 @@ The platform automates transforming a standard .NET solution into a feedback-dri
 2. **Preparation** — Adapting Docker configs, injecting coverage infrastructure
 3. **Instrumentation** — Injecting SharpFuzz coverage probes into target DLLs during Docker build
 4. **Synchronization** — Linking all instrumented DLLs to a single shared memory bitmap at runtime
-5. **Grammar Generation** — Compiling an OpenAPI spec directly into typed request templates (`grammarc/`, first-party, no RESTler), optionally enriched with real Roslyn syntax-tree analysis of the C# source (`analyzer/`)
+5. **Grammar Generation** — Compiling an OpenAPI spec directly into typed request templates (`grammarc/`, first-party, no RESTler), optionally enriched with real Roslyn syntax-tree analysis of the C# source (`dotnet/analyzer/`)
 6. **Fuzzing** — Sending mutated inputs with epoch-based scheduling, adaptive concurrency, and crash triage
 
 ---
@@ -78,7 +78,7 @@ The platform automates transforming a standard .NET solution into a feedback-dri
               │                                 │
               ▼                                 ▼
    compile-grammar.sh                  GET /swagger/v1/swagger.json
-   (grammarc/ + optional analyzer/)
+   (grammarc/ + optional dotnet/analyzer/)
               │
      ┌────────┴────────┐
      │                 │
@@ -219,7 +219,7 @@ Both modes expose the identical `/shm/*` HTTP contract and `X-Coverage-Delta` he
 ### Instrumentation Modes
 The instrumentor has two selection modes; both always exclude entry points (`Program`, `Startup`), EF infra (`Migration`, `DesignTimeDbContext`), our own `CoverageExtensions`, and auto-generated types (`.g.`, `c__DisplayClass`).
 
-**Async/iterator state machines (`d__`) are deliberately instrumented, not excluded** (fixed 2026-07-26 — previously listed alongside `c__DisplayClass` in this same "always skip" bucket). Excluding `d__` used to make coverage probes, CmpLog, and ConstantExtractor all blind to a comparison, branch, or literal written directly inside an `async Task` method — the "outer" method a class exposes is just a thin state-machine-builder stub; virtually all of a real `async` method's actual IL lives in its compiler-generated `<Method>d__N` nested type. Since that's where nearly all business logic in a modern ASP.NET Core app actually lives, this was blinding the fuzzer's smartest mechanisms on exactly the code that matters most (confirmed concretely on `demo_app/`'s own catalog — see its README's "coverage-guided fuzzing" writeups). Removing it is safe: the *actual* static-init-timing risk (`Bit.Api.Program+<>c..cctor`'s `AccessViolationException`) is independently handled by the `+<>c`/`/<>c` compiler-lambda-cache check below, which still fully applies — including to a `Program`/`Startup`'s own async state machines, caught by the existing `Program`/`Startup` prefix checks regardless of the `d__` middle segment. See `instrumentor/Program.cs::InstrumentationFilter.Decide`'s own comment and `instrumentor.Tests/InstrumentationFilterTests.cs` for the full reasoning and regression coverage.
+**Async/iterator state machines (`d__`) are deliberately instrumented, not excluded** (fixed 2026-07-26 — previously listed alongside `c__DisplayClass` in this same "always skip" bucket). Excluding `d__` used to make coverage probes, CmpLog, and ConstantExtractor all blind to a comparison, branch, or literal written directly inside an `async Task` method — the "outer" method a class exposes is just a thin state-machine-builder stub; virtually all of a real `async` method's actual IL lives in its compiler-generated `<Method>d__N` nested type. Since that's where nearly all business logic in a modern ASP.NET Core app actually lives, this was blinding the fuzzer's smartest mechanisms on exactly the code that matters most (confirmed concretely on `demo_app/`'s own catalog — see its README's "coverage-guided fuzzing" writeups). Removing it is safe: the *actual* static-init-timing risk (`Bit.Api.Program+<>c..cctor`'s `AccessViolationException`) is independently handled by the `+<>c`/`/<>c` compiler-lambda-cache check below, which still fully applies — including to a `Program`/`Startup`'s own async state machines, caught by the existing `Program`/`Startup` prefix checks regardless of the `d__` middle segment. See `dotnet/instrumentor/Program.cs::InstrumentationFilter.Decide`'s own comment and `dotnet/instrumentor.Tests/InstrumentationFilterTests.cs` for the full reasoning and regression coverage.
 
 1. **`--instrument-all-user-code` (recommended, now the default for generated Dockerfiles):** rewrite every type whose full name does NOT start with a framework prefix (`System.`, `Microsoft.`, `Newtonsoft.`, …). Because the DLL list already contains only the target's own business assemblies, this instruments all of the app's code and nothing third-party.
 2. **`namespaces.json` allowlist:** instrument only types whose full name **contains** a listed namespace (substring match via `fullName.Contains`). Convenient but dangerous — any namespace not listed is silently dropped. This is exactly how Bitwarden's entire `Bit.Commercial.*` Secrets Manager code was omitted from coverage: `Bit.Core` is not a substring of `Bit.Commercial.Core`, and the assembly itself was missing from the DLL list.
@@ -294,12 +294,12 @@ This works regardless of how many project DLLs were instrumented — they all ge
 
 ### `GET /shm/health` — Instrumentation facts (Top-20 #4)
 - Returns `{"shm_bound": bool, "mode": "...", "total_classes": N, "linked_assemblies": N, "instrumented_types": N, "app_assemblies": [...]}`.
-- **Deliberately reports facts, not a verdict.** SharpFuzz's `Trace.SharedMem` type lives only in `SharpFuzz.Common.dll` — never in the app's own IL-rewritten assemblies — so "is assembly X linked" cannot be measured by type reflection on the .NET side; an app assembly that is instrumented correctly will *never* show up as having its own `Trace` type. `app_assemblies` is a diagnostic list of assembly names the runtime has observed loaded that aren't framework/SharpFuzz code (same `frameworkPrefixes` denylist as `instrumentor/Program.cs`, kept in sync manually), useful when diagnosing a failure — not a pass/fail signal by itself. `instrumented_types` (Top-20 #17) is the real build-time instrumented-type count — see "Bitmap Sizing" below.
+- **Deliberately reports facts, not a verdict.** SharpFuzz's `Trace.SharedMem` type lives only in `SharpFuzz.Common.dll` — never in the app's own IL-rewritten assemblies — so "is assembly X linked" cannot be measured by type reflection on the .NET side; an app assembly that is instrumented correctly will *never* show up as having its own `Trace` type. `app_assemblies` is a diagnostic list of assembly names the runtime has observed loaded that aren't framework/SharpFuzz code (same `frameworkPrefixes` denylist as `dotnet/instrumentor/Program.cs`, kept in sync manually), useful when diagnosing a failure — not a pass/fail signal by itself. `instrumented_types` (Top-20 #17) is the real build-time instrumented-type count — see "Bitmap Sizing" below.
 - The actual fail-closed decision is made **engine-side** — see §7's "Self-verifying, fail-closed instrumentation" below.
 
 ### Bitmap Sizing (Top-20 #17)
 Previously the SHM bitmap was a fixed 256KB regardless of application size, so large apps (Bitwarden, BTCPay) collided heavily while tiny ones wasted memory scanning a mostly-empty map. The bitmap is now sized from the **real instrumented-type count** captured at build time:
-1. `instrumentor/Program.cs` counts the types it actually instruments (`instrumentedCount`) and, on success, appends a line to `.upsidefuzz_instrumented.jsonl` next to the DLL it just rewrote: `{"assembly":"Foo.dll","instrumented_types":N}`. A multi-assembly app (one `instrumentor.dll` invocation per DLL during the Docker build) accumulates one line per assembly.
+1. `dotnet/instrumentor/Program.cs` counts the types it actually instruments (`instrumentedCount`) and, on success, appends a line to `.upsidefuzz_instrumented.jsonl` next to the DLL it just rewrote: `{"assembly":"Foo.dll","instrumented_types":N}`. A multi-assembly app (one `instrumentor.dll` invocation per DLL during the Docker build) accumulates one line per assembly.
 2. At runtime, `CoverageRuntime`/`CoverageExtensions`'s `ResolveInstrumentedTypeCount()` reads that file from `AppContext.BaseDirectory` and sums `instrumented_types` across all lines.
 3. `ResolveShmSize()` uses that sum — **only when the `SHM_SIZE` env var isn't pinned explicitly** — to compute a size: ~512 bitmap bytes per instrumented type, rounded up to a power of two, clamped to `[65536, 8388608]` (64KB–8MB). SharpFuzz exposes no public branch/edge count, so instrumented *type* count is a proxy, not a literal edge count — documented as such rather than overclaimed.
 4. On the Go side, `SHMCoverageReader.Init()` (direct-shm mode) trusts the **actual on-disk file size** as ground truth instead of truncating it down to whatever `-coverage-bitmap-size` happened to be passed. This fixed a real latent bug: since the .NET side now sizes the file dynamically, a stale/mismatched flag value used to silently truncate the Go side's view of a properly-sized file, dropping real coverage from the untruncated remainder. A size mismatch is now only ever a diagnostic printf, never a truncation.
@@ -323,7 +323,7 @@ The previous design read a *global* edge count before and after every request �
 The coverage middleware also reports the .NET exception type and message on 5xx responses. The subtlety: in non-Development mode the app's exception handler starts the response and clears headers *before* the middleware's `finally` block runs, so a header set there is lost — this previously left ~84% of production-mode crashes unattributable. The middleware now detects requests carrying `X-Fuzz-Request-Id` (fuzzer traffic only) and, on an unhandled exception, short-circuits with its own 500 carrying `X-Exception-Type` + `X-Exception-Message` (sanitized: CR/LF and control chars stripped, truncated). Real traffic (no fuzz header) is re-thrown untouched. The Go engine reads both headers; the message feeds `cluster.go`'s root-cause key so clustering stays precise even without a dev-mode stack trace.
 ---
 
-## 6. Grammar Generation (`grammarc/` + `analyzer/` — RESTler retired)
+## 6. Grammar Generation (`grammarc/` + `dotnet/analyzer/` — RESTler retired)
 
 RESTler (an external Docker-packaged compiler) has been retired (Top-20 #9). `compile-grammar.sh`
 now drives two first-party components directly, with **no Docker involved in this step at all**
@@ -333,7 +333,7 @@ now drives two first-party components directly, with **no Docker involved in thi
 swagger.json                    .NET source (optional, --src)
      │                                 │
      ▼                                 ▼
-grammarc/oas.py              analyzer/ (Microsoft.CodeAnalysis.CSharp,
+grammarc/oas.py              dotnet/analyzer/ (Microsoft.CodeAnalysis.CSharp,
 (OpenAPI 2/3 parser:           syntax-tree only — no MSBuildWorkspace/
  $ref/allOf/oneOf/anyOf)        NuGet-restore semantic model)
      │                                 │
@@ -513,7 +513,7 @@ constants baked directly into the target's own compiled comparison logic
 OpenAPI spec, dictionary, or generic mutation could ever guess. It's the .NET
 analog of AFL++'s CmpLog/RedQueen.
 
-**Instrument time — `instrumentor/Program.cs::CmpLogInstrumentor`.** A second,
+**Instrument time — `dotnet/instrumentor/Program.cs::CmpLogInstrumentor`.** A second,
 independent Cecil pass (own `Mono.Cecil` package reference; unrelated to
 SharpFuzz's own `Fuzzer.Instrument` call, which is a self-contained black box this
 project doesn't get to hook), run after SharpFuzz's coverage rewrite succeeds,
@@ -590,7 +590,7 @@ open item — see `ARCHITECTURE_REVIEW.md`'s Fuzzing Engine section).
 ### Constant/String Dictionary Extraction (Top-20+ #22)
 
 CmpLog (above) recovers magic values *observed live* as comparisons execute. This is
-the static counterpart: `instrumentor/Program.cs::ConstantExtractor` is a **read-only**
+the static counterpart: `dotnet/instrumentor/Program.cs::ConstantExtractor` is a **read-only**
 Cecil pass over `Ldstr`/`Ldc_I4`/`Ldc_I4_S`/`Ldc_I8` operands in every instrumented
 type's IL, harvesting literals the target's own source declares (`"SUMMER2026"`,
 `if (retries == 7)`) without needing any traffic to reach them first — the .NET analog
@@ -944,9 +944,17 @@ These targets have current quickstarts, prepared trees, or active benchmark mate
 ```
 upside-fuzzer/
 │
-├── fuzz-prep-multi.py          ★ Main tool: analyze, instrument, adapt Dockerfile/compose
+├── fuzz-prep-multi.py          ★ Entry point (thin wrapper -> fuzzprep.cli.main())
+├── fuzzprep/                   ★ The actual analyze/instrument/adapt implementation
+│   ├── models.py               Shared dataclasses (ProjectInfo, MultiAnalysisResult)
+│   ├── analysis.py             MultiProjectAnalyzer: solution scan + business-logic detection
+│   ├── detect.py                Pure regex helpers over Dockerfile/C# source text
+│   ├── docker_gen.py            Dockerfile + compose generation/adaptation
+│   ├── instrumentor_gen.py      Instrumentor source copy + zero-edit coverage-hook assembly
+│   ├── coverage_helper_gen.py   Legacy --inject-mode source support
+│   └── cli.py                  Argument parsing and orchestration (main())
 ├── compile-grammar.sh          ★ Compile swagger.json → templates.export.json + dict.json
-│                                 (grammarc/ + optional analyzer/ — no RESTler, no Docker)
+│                                 (grammarc/ + optional dotnet/analyzer/ — no RESTler, no Docker)
 ├── upsidefuzz.py               ★ Single CLI orchestrator (Top-20 #19) — wraps the pipeline
 │                                 below behind instrument/build/up/down/verify/grammar/fuzz/run
 ├── upsidefuzz                  Zero-install Docker launcher for upsidefuzz.py (see Dockerfile.cli)
@@ -956,7 +964,7 @@ upside-fuzzer/
 │   ├── oas.py                  OpenAPI 2/3 parser ($ref/allOf/oneOf/anyOf resolution)
 │   ├── body_serializer.py      Schema → static/fuzzable/custom_payload segment serializer
 │   ├── dependencies.py         Producer/consumer id inference (path/name convention)
-│   ├── roslyn_merge.py         Merges analyzer/'s type-scoped constraints over OpenAPI's
+│   ├── roslyn_merge.py         Merges dotnet/analyzer/'s type-scoped constraints over OpenAPI's
 │   ├── boundary.py             Boundary-value synthesis
 │   ├── multipart.py            Multipart/form-data template synthesis
 │   ├── emit_templates.py       Writes templates.export.json (fixes the payload_key bug)
@@ -964,34 +972,34 @@ upside-fuzzer/
 │   ├── cli.py                  python3 -m grammarc.cli entry point
 │   └── test_*.py               8 files, unittest/stdlib-only (see §11)
 │
-├── analyzer/                   ★ Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
-│   ├── SourceIndex.cs          Parses all .cs files; partial-class/enum/validator indexing
-│   ├── ConstraintWalker.cs     DataAnnotations constraints, type/property-scoped
-│   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
-│   ├── RouteAuthWalker.cs      [Authorize]/route metadata (controller + minimal-API styles)
-│   └── analyzer.csproj
-├── analyzer.Tests/              xUnit tests for analyzer/ (added 2026-07-25, see §11)
+├── dotnet/                     ★ The two C# build-time tools, each with its own xUnit tests
+│   ├── analyzer/                 Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
+│   │   ├── SourceIndex.cs        Parses all .cs files; partial-class/enum/validator indexing
+│   │   ├── ConstraintWalker.cs   DataAnnotations constraints, type/property-scoped
+│   │   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
+│   │   ├── RouteAuthWalker.cs    [Authorize]/route metadata (controller + minimal-API styles)
+│   │   └── analyzer.csproj
+│   ├── analyzer.Tests/            xUnit tests for analyzer/ (added 2026-07-25, see §11)
+│   ├── instrumentor/              Reference instrumentor source + build script
+│   │   ├── Program.cs             Standalone generic config-driven instrumentor
+│   │   ├── instrument.sh          Build + run script
+│   │   └── instrumentor.csproj    Project file
+│   └── instrumentor.Tests/        xUnit tests for instrumentor/ (added 2026-07-25, see §11)
 │
-├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
-├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
 ├── README.md                   Overview, features, structure
 ├── demo_app/                    ★ TeamFlow: flagship in-repo demo target (see demo_app/README.md)
 │   ├── src/                    3-project ASP.NET Core solution (Core/Infrastructure/Api)
 │   ├── swagger.json            Committed OpenAPI snapshot
 │   └── auth.identities.example.json
 ├── docs/
+│   ├── INSTRUCTIONS.md         ★ Complete runbook (instrument → fuzz → analyze)
+│   ├── ARCHITECTURE.md         ★ Platform internals, diagrams, SHM design (this file)
 │   ├── FUZZER_AUTHENTICATION.md
 │   ├── auth.identities.example.json
 │   ├── QUICKSTART_BITWARDEN.md     Target-specific setup for Bitwarden
 │   ├── QUICKSTART_BTCPAYSERVER.md  Target-specific setup for BTCPayServer
 │   ├── QUICKSTART_ESHOP.md         Target-specific setup for eShopOnWeb
 │   └── QUICKSTART_SIMPLCOMMERCE.md Target-specific setup for SimplCommerce
-│
-├── instrumentor/               Reference instrumentor source + build script
-│   ├── Program.cs              Standalone generic config-driven instrumentor
-│   ├── instrument.sh           Build + run script
-│   └── instrumentor.csproj     Project file
-├── instrumentor.Tests/          xUnit tests for instrumentor/ (added 2026-07-25, see §11)
 │
 ├── void/
 │   ├── export-templates.py     Legacy fallback: old grammar.py → JSON templates
@@ -1026,24 +1034,9 @@ upside-fuzzer/
 │   │   ├── go.mod
 │   │   └── *_test.go           17 files, 31.7% statement coverage (see §11)
 │
-├── grammars/
-│   ├── bitwarden/              Generated grammar, dict, templates, and security overlay
-│   ├── btcpay/                 Generated grammar, dict, and templates
-│   ├── eshop/                  Generated grammar, dict, and templates
-│   └── simplcommerce/          Generated grammar, dict, and templates
-│
-├── restler_bin/                Inert leftover from before RESTler was retired (Top-20 #9);
-│                                 safe to delete, nothing reads or writes it anymore
-│
-├── bitwarden_prep/             Target tree + helper scripts for Bitwarden
-├── btcpayserver/               Raw BTCPayServer checkout
-├── btcpayserver_prep/          Instrumented BTCPayServer tree
-├── eshprep/                    Instrumented eShopOnWeb tree
-├── simplcommerce_prep/         Instrumented SimplCommerce tree
 ├── examples/
 │   └── simplcommerce/          SimplCommerce-specific helper scripts and namespace config
 ├── benchmarks/                 Paper helpers and benchmark post-processing
-├── crashes/                    Fuzzer outputs, PoCs, timelines, and reports
 ├── fixtures/
 │   └── planted-bug-api/        Minimal DB-free ASP.NET Core app used by the E2E CI gate
 ├── scripts/
@@ -1051,12 +1044,18 @@ upside-fuzzer/
 └── .github/workflows/e2e.yml   CI entry point for scripts/e2e-test.sh
 ```
 
+Third-party target checkouts (`bitwarden_prep/`, `btcpayserver/`, `eshprep/`,
+`simplcommerce_prep/`, etc.), their generated `grammars/`, and fuzzer output
+directories (`crashes/`, `summaries/`) are local, gitignored working state —
+produced on demand by `fuzz-prep-multi.py`/`compile-grammar.sh`/`void`, never
+committed, and not part of this map.
+
 ---
 
 ## 11. Continuous Integration (E2E regression gate)
 
 Top-20 #7 — this project's first CI of any kind, added 2026-07-23 as a direct regression
-safety net for `grammarc/`+`analyzer/` (#9/#10) and the mutation-engine changes (#14/#11),
+safety net for `grammarc/`+`dotnet/analyzer/` (#9/#10) and the mutation-engine changes (#14/#11),
 none of which had any automated coverage before this existed.
 
 `.github/workflows/e2e.yml` runs `scripts/e2e-test.sh` on every push/PR. The script proves
@@ -1089,14 +1088,14 @@ in this repo already does. The fixture's `ListItems` handler also lives on a nam
 non-lambda class (`ItemHandlers`) rather than inline in `app.MapGet(...)` — SharpFuzz
 instrumentation blanket-excludes any type whose name contains `+<>c` (compiler-generated
 lambda/closure classes) to prevent a real, previously-hit static-initializer crash class
-(see `instrumentor/Program.cs::ShouldInstrument`'s own comment) — but that exclusion also
+(see `dotnet/instrumentor/Program.cs::ShouldInstrument`'s own comment) — but that exclusion also
 silently zeroes out coverage for logic written directly inline in minimal-API lambdas,
 confirmed empirically while building this fixture (0 SHM edges from real traffic before
 the restructuring, real edge growth after).
 
 Building this fixture and script also surfaced and fixed three real, previously-unknown
 bugs elsewhere in the pipeline: a substring-vs-path-segment matching bug in
-`analyzer/RoslynUtil.IsTestPath`, `analyzer/RouteAuthWalker` never scanning top-level-
+`dotnet/analyzer/RoslynUtil.IsTestPath`, `dotnet/analyzer/RouteAuthWalker` never scanning top-level-
 statement `Program.cs` files for minimal-API routes, and a bash-3.2-specific unbound-array
 crash in `compile-grammar.sh` when `--src` is omitted.
 
@@ -1120,9 +1119,9 @@ one fixture's shape. Added as a second, faster-feedback layer underneath it:
   `test_boundary.py`, `test_dependencies.py`, `test_multipart.py`, `test_roslyn_merge.py`,
   alongside the existing `test_emit_dict.py`/`test_response_schemas.py`. Run any of them
   with `python3 -m unittest grammarc.test_oas -v` (stdlib-only, no pip install).
-- **`instrumentor.Tests/`** and **`analyzer.Tests/`** (new xUnit projects — neither
-  `instrumentor/` nor `analyzer/` had any automated test coverage before this).
-  `instrumentor.Tests` required a small, behavior-preserving refactor first:
+- **`dotnet/instrumentor.Tests/`** and **`dotnet/analyzer.Tests/`** (new xUnit projects —
+  neither `dotnet/instrumentor/` nor `dotnet/analyzer/` had any automated test coverage
+  before this). `instrumentor.Tests` required a small, behavior-preserving refactor first:
   `NamespaceMatcher` and `InstrumentationFilter` were extracted out of top-level
   statements into proper `internal` classes (C# can't expose a top-level-statements
   local function to another assembly via `InternalsVisibleTo` — it compiles to a

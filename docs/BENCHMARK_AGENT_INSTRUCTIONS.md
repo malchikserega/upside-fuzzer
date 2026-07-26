@@ -42,7 +42,7 @@ The benchmark workflow uses these standard locations in the current repo checkou
 - Prepared instrumented copies in `benchmarks/prepared/`
 - Temporary compose/Dockerfile helpers in `benchmarks/tmp/`
 - Final benchmark helpers:
-  - [compile-grammar.sh](../compile-grammar.sh) — **note:** as of the RESTler retirement (see `ARCHITECTURE_REVIEW.md`'s Grammar Generation section), this script no longer runs RESTler at all — it's now `grammarc/`+`analyzer/`. For a RESTler-baseline benchmark rerun, you need RESTler's own standalone compiler (outside this repo) to produce the `RESTler` side of the comparison; this script only produces the `Void` side now.
+  - [compile-grammar.sh](../compile-grammar.sh) — **note:** as of the RESTler retirement (see `ARCHITECTURE_REVIEW.md`'s Grammar Generation section), this script no longer runs RESTler at all — it's now `grammarc/`+`dotnet/analyzer/`. For a RESTler-baseline benchmark rerun, you need RESTler's own standalone compiler (outside this repo) to produce the `RESTler` side of the comparison; this script only produces the `Void` side now.
   - ~~`sanitize-swagger-for-restler.sh`~~ — **deleted** along with RESTler retirement; it stripped `deepObject`/nested-`$ref` query params RESTler's compiler couldn't parse. If re-running a RESTler-baseline benchmark, recover it from git history (`git log --all --full-history -- sanitize-swagger-for-restler.sh`) or reimplement the same swagger sanitization ad hoc — it is not needed for the `Void` side of the comparison.
   - [build_fair_endpoint_comparison.py](/Users/sergeiovchinnikov/PycharmProjects/upside-fuzzer/benchmarks/build_fair_endpoint_comparison.py)
 

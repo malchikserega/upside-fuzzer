@@ -372,7 +372,7 @@ d = json.load(open('summary.json'))['triage_summary'] if False else __import__('
   documented two real bugs in Bitwarden's own `util/SeederApi`/`util/RustSdk` build
   config. Added the `dict.custom.json` workflow (new as of this same session — see
   `INSTRUCTIONS.md` §10).
-- **2026-07-23**: RESTler retired (`grammarc/`+`analyzer/`, no Docker for grammar
+- **2026-07-23**: RESTler retired (`grammarc/`+`dotnet/analyzer/`, no Docker for grammar
   compilation); two Go-engine bugs fixed (path-quoting leak, malformed-bearer-token
   leak on unauthenticated probes); self-verifying fail-closed coverage health check
   added (Top-20 #4).

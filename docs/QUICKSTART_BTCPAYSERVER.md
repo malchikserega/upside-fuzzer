@@ -87,7 +87,7 @@ curl -s -u admin@btcpayserver.local:Password123! http://localhost:7777/swagger/v
 
 ## Step 6: Compile the grammar
 
-RESTler is retired (Top-20 #9/#10) — one command (`grammarc/` + `analyzer/`), no Docker,
+RESTler is retired (Top-20 #9/#10) — one command (`grammarc/` + `dotnet/analyzer/`), no Docker,
 writes `templates.export.json` + `dict.json` directly to `--out`:
 
 ```bash
@@ -96,7 +96,7 @@ cd ..  # back to upside-fuzzer root
 # Note: BTCPayServer's Swagger JSON has a malformed reference that needs to be patched
 python3 examples/btcpayserver/fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
 
-# Compile grammar (grammarc/ OpenAPI parser + analyzer/ Roslyn syntax-tree analysis)
+# Compile grammar (grammarc/ OpenAPI parser + dotnet/analyzer/ Roslyn syntax-tree analysis)
 ./compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
 ```
 

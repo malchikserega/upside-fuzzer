@@ -4,7 +4,7 @@
 **Goal being evaluated against:** *the best open-source feedback-guided REST API fuzzer for .NET* — near-zero config, universal instrumentation, deep bug discovery, researcher-adoptable.
 **Tone:** brutally honest. This is the project's living technical roadmap, not a marketing document — it reflects current state only, not a changelog of everything ever fixed (see git history / commit messages for that).
 
-**Repository state note:** the working tree still carries multiple full target checkouts (`bitwarden_prep*`, `btcpayserver*`, `simplcommerce*`, `esh*`, `restler_*`, `crashes/`, `void/crashes`) — first-party code lives in `fuzz-prep-multi.py`, `compile-grammar.sh`, `grammarc/`, `analyzer/`, `instrumentor/`, `void/`, `demo_app/`, and the docs. Everything else is a target artifact and should be `.gitignore`d out of the repo (see DX section, still open).
+**Repository state note:** the working tree still carries multiple full target checkouts (`bitwarden_prep*`, `btcpayserver*`, `simplcommerce*`, `esh*`, `restler_*`, `crashes/`, `void/crashes`) — first-party code lives in `fuzz-prep-multi.py`, `compile-grammar.sh`, `grammarc/`, `dotnet/analyzer/`, `dotnet/instrumentor/`, `void/`, `demo_app/`, and the docs. Everything else is a target artifact and should be `.gitignore`d out of the repo (see DX section, still open).
 
 **A note on `Top-20 #N` labels:** older code comments, `void/README.md`, `ARCHITECTURE.md`, and several `QUICKSTART_*.md` files still cite features by a `Top-20 #N` ID from this document's earlier numbered-roadmap format. That numbered list has been retired in favor of the current-state sections below (a roadmap that only ever grows numbered items and never removes shipped ones stops being useful), but the IDs already written into those other files are cheap to keep resolvable:
 
@@ -14,7 +14,7 @@
 | #7 | E2E CI regression gate on a planted-bug fixture | #18 | Differential/parser-confusion auth-bypass oracles |
 | #8 | *(still open — ownership-matrix BOLA; see P0 #3 below)* | #19 | Single `upsidefuzz` CLI orchestrator |
 | #9 | First-party OpenAPI→grammar compiler (`grammarc/`), RESTler retired | #21 | CmpLog/RedQueen live comparison-operand harvesting |
-| #10 | Real Roslyn syntax-tree analyzer (`analyzer/`) | #22 | Static constant/string extraction at instrument time |
+| #10 | Real Roslyn syntax-tree analyzer (`dotnet/analyzer/`) | #22 | Static constant/string extraction at instrument time |
 | #11 | CMPLOG-lite / 400-body validation-error mining | #23 | Response-schema conformance oracle |
 | #12 | State-reward stateful sequence search (coarse; see P1 #6 below for the open remainder) | #25 | Global `-seed` (partial — no byte-exact replay tool yet, see P1 #15 below) |
 | #14 | Constraint-aware boundary mutation (partial; see P1 #4/#5 below for the open remainder) | #16 | SARIF findings export (HTML dashboard still open, see P2 #19 below) |
@@ -40,24 +40,24 @@ The system is still architecturally three loosely-joined programs (Python prep/g
 Three subsystems joined by files on disk and HTTP, not schema-validated interfaces:
 
 ```
- (1) PREP / INSTRUMENTATION            (2) GRAMMAR PIPELINE            (3) VOID ENGINE (Go)
- fuzz-prep-multi.py  (Python)          compile-grammar.sh (Bash)       void/go/*.go
-   ├─ MultiProjectAnalyzer               ├─ grammarc/ (Python,           ├─ main → fuzzer → worker (epoch loop)
-   ├─ generate_multi_docker_configs      │    first-party OpenAPI        ├─ template (typed grammar → segments)
-   │    (adapt existing Dockerfile/      │    parser, stdlib-only)       ├─ mutation_engine / mutations (MOpt)
-   │    compose, or generate from        ├─ analyzer/ (C#,               ├─ sequence (producer→consumer,
-   │    scratch)                         │    Microsoft.CodeAnalysis     │    state-reward search)
-   ├─ generate_startup_hook_assembly     │    .CSharp syntax-tree pass)  ├─ store (dict + runtime harvest)
-   │    → UpsideFuzz.Coverage.dll        └─ roslyn_merge.py              ├─ coverage (SHM/HTTP readers,
-   │      (DOTNET_STARTUP_HOOKS,             (OpenAPI + Roslyn merge,    │    hit-count buckets)
-   │       zero source edits)               type/property-scoped)       ├─ cmplog / constants (CmpLog +
-   └─ instrumentor/Program.cs (C#)        → templates.export.json       │    static constant extraction)
-        SharpFuzz.Fuzzer.Instrument         + dict.json                 ├─ oracle (BOLA/authbypass/massassign/
-        (Mono.Cecil IL rewriting,                                       │    injection/differential/schema)
-         + CmpLog + ConstantExtractor)                                  ├─ identity / auth (multi-identity,
-                     │                                                  │    JWT expiry awareness)
-        Docker image: app + /coverage_shm/bitmap (tmpfs)  ◀── mmap ─────┤ crash / cluster / triage / minimize
-                                                            / HTTP ──────┴─ poc / report / sarif / ui / webui
+ (1) PREP / INSTRUMENTATION              (2) GRAMMAR PIPELINE              (3) VOID ENGINE (Go)
+ fuzz-prep-multi.py  (Python)            compile-grammar.sh (Bash)         void/go/*.go
+   ├─ MultiProjectAnalyzer                 ├─ grammarc/ (Python,             ├─ main → fuzzer → worker (epoch loop)
+   ├─ generate_multi_docker_configs        │    first-party OpenAPI          ├─ template (typed grammar → segments)
+   │    (adapt existing Dockerfile/        │    parser, stdlib-only)         ├─ mutation_engine / mutations (MOpt)
+   │    compose, or generate from          ├─ dotnet/analyzer/ (C#,          ├─ sequence (producer→consumer,
+   │    scratch)                           │    Microsoft.CodeAnalysis       │    state-reward search)
+   ├─ generate_startup_hook_assembly       │    .CSharp syntax-tree pass)    ├─ store (dict + runtime harvest)
+   │    → UpsideFuzz.Coverage.dll          └─ roslyn_merge.py                ├─ coverage (SHM/HTTP readers,
+   │      (DOTNET_STARTUP_HOOKS,               (OpenAPI + Roslyn merge,     │    hit-count buckets)
+   │       zero source edits)                   type/property-scoped)       ├─ cmplog / constants (CmpLog +
+   └─ dotnet/instrumentor/Program.cs (C#)      → templates.export.json      │    static constant extraction)
+        SharpFuzz.Fuzzer.Instrument           + dict.json                   ├─ oracle (BOLA/authbypass/massassign/
+        (Mono.Cecil IL rewriting,                                           │    injection/differential/schema)
+         + CmpLog + ConstantExtractor)                                      ├─ identity / auth (multi-identity,
+                     │                                                      │    JWT expiry awareness)
+        Docker image: app + /coverage_shm/bitmap (tmpfs)  ◀── mmap ─────────┤ crash / cluster / triage / minimize
+                                                            / HTTP ──────────┴─ poc / report / sarif / ui / webui
 ```
 
 Data contracts between the three subsystems are still **implicit**: the grammar path emits `templates.export.json`/`dict.json` in a directory the engine reads by convention; the prep path emits `/shm/*` endpoints and `X-Coverage-Delta`/`X-Exception-*` headers the engine expects; auth is a separate JSON file. Nothing type-checks these contracts across the language boundary.
@@ -73,7 +73,7 @@ For each subsystem: current architecture, strengths, **currently open** weakness
 ## 1. Instrumentation & IL Rewriting
 
 ### Current architecture
-`fuzz-prep-multi.py::MultiProjectAnalyzer` scans a solution's `*.csproj` files and, by default, instruments every non-framework type (`--instrument-all-user-code`) rather than relying on namespace-classification heuristics. It either adapts an existing `Dockerfile`/compose file in place (detecting build/runtime stages and publish directory via regex) or generates one from scratch. Instrumentation is **zero-edit**: a generated `UpsideFuzz.Coverage` assembly is wired via `DOTNET_STARTUP_HOOKS` + `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`, so the target's own `Program.cs`/`Startup.cs`/`.csproj` are never touched, and an `AssemblyLoad` handler links coverage into assemblies as they load (including lazily-loaded ones). `instrumentor/Program.cs` runs three independent Cecil passes over each DLL: SharpFuzz's own basic-block coverage rewrite, `CmpLogInstrumentor` (records live string/int comparison operands), and `ConstantExtractor` (read-only harvest of `Ldstr`/`Ldc_I4`/`Ldc_I8` literals). All three now correctly instrument async/iterator state-machine (`<Method>d__N`) types — previously blanket-excluded, which blinded every one of these mechanisms on the compiler-generated type that holds virtually all of a real `async Task` method's actual IL. Instrumentation is self-verifying and fail-closed: `/shm/health` reports facts (`shm_bound`, `linked_assemblies`, `app_assemblies`, `instrumented_types`), and `void/go/coverage.go::checkCoverageHealth` sends real warm-up requests and refuses to start if the bitmap doesn't actually gain edges (`-allow-degraded-coverage` overrides this).
+`fuzz-prep-multi.py::MultiProjectAnalyzer` scans a solution's `*.csproj` files and, by default, instruments every non-framework type (`--instrument-all-user-code`) rather than relying on namespace-classification heuristics. It either adapts an existing `Dockerfile`/compose file in place (detecting build/runtime stages and publish directory via regex) or generates one from scratch. Instrumentation is **zero-edit**: a generated `UpsideFuzz.Coverage` assembly is wired via `DOTNET_STARTUP_HOOKS` + `ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`, so the target's own `Program.cs`/`Startup.cs`/`.csproj` are never touched, and an `AssemblyLoad` handler links coverage into assemblies as they load (including lazily-loaded ones). `dotnet/instrumentor/Program.cs` runs three independent Cecil passes over each DLL: SharpFuzz's own basic-block coverage rewrite, `CmpLogInstrumentor` (records live string/int comparison operands), and `ConstantExtractor` (read-only harvest of `Ldstr`/`Ldc_I4`/`Ldc_I8` literals). All three now correctly instrument async/iterator state-machine (`<Method>d__N`) types — previously blanket-excluded, which blinded every one of these mechanisms on the compiler-generated type that holds virtually all of a real `async Task` method's actual IL. Instrumentation is self-verifying and fail-closed: `/shm/health` reports facts (`shm_bound`, `linked_assemblies`, `app_assemblies`, `instrumented_types`), and `void/go/coverage.go::checkCoverageHealth` sends real warm-up requests and refuses to start if the bitmap doesn't actually gain edges (`-allow-degraded-coverage` overrides this).
 
 ### Strengths
 - SharpFuzz/Cecil IL rewriting gives true basic-block edge coverage — a real grey-box signal most REST fuzzers (Schemathesis, RESTler, Dredd) lack entirely.
@@ -117,10 +117,10 @@ Per-thread trace-buffer isolation for true per-input novelty — diminishing but
 
 ---
 
-## 3. Grammar Generation (`grammarc/` + `analyzer/`)
+## 3. Grammar Generation (`grammarc/` + `dotnet/analyzer/`)
 
 ### Current architecture
-RESTler is fully retired. `grammarc/` (Python, stdlib-only) parses OpenAPI 3.x/Swagger 2.0 directly into a typed request model, infers producer/consumer relationships by path/name convention, synthesizes boundary values, and serializes bodies straight to `templates.export.json`/`dict.json` — no intermediate `grammar.py`, no external compiler, no Docker in this step. `analyzer/` is a real `Microsoft.CodeAnalysis.CSharp` syntax-tree pass (not regex) extracting type/property-scoped `DataAnnotations`/FluentValidation constraints, `[Authorize]` metadata, and route info, merged over the OpenAPI-derived model (`roslyn_merge.py`, Roslyn wins per-scoped-field). Deliberately syntax-tree-only, not a full semantic model via `MSBuildWorkspace`/NuGet restore — a disclosed reliability tradeoff (works on arbitrary target repos without a restore step), not an oversight.
+RESTler is fully retired. `grammarc/` (Python, stdlib-only) parses OpenAPI 3.x/Swagger 2.0 directly into a typed request model, infers producer/consumer relationships by path/name convention, synthesizes boundary values, and serializes bodies straight to `templates.export.json`/`dict.json` — no intermediate `grammar.py`, no external compiler, no Docker in this step. `dotnet/analyzer/` is a real `Microsoft.CodeAnalysis.CSharp` syntax-tree pass (not regex) extracting type/property-scoped `DataAnnotations`/FluentValidation constraints, `[Authorize]` metadata, and route info, merged over the OpenAPI-derived model (`roslyn_merge.py`, Roslyn wins per-scoped-field). Deliberately syntax-tree-only, not a full semantic model via `MSBuildWorkspace`/NuGet restore — a disclosed reliability tradeoff (works on arbitrary target repos without a restore step), not an oversight.
 
 ### Strengths
 - Enriching a black-box grammar with real server-side validation constraints (both OpenAPI and C# attributes) is how you get past 400-rejection walls into real logic — a genuine differentiator vs. Schemathesis, which only sees the spec.
@@ -133,7 +133,7 @@ RESTler is fully retired. `grammarc/` (Python, stdlib-only) parses OpenAPI 3.x/S
 3. **[MED] Producer-consumer inference is still heuristic name-matching** (`fooId`/`foo_id`/path-segment guessing), not schema-typed identifiers — works on clean REST APIs, misbatches on composite keys or non-obvious id naming.
 
 ### Recommended next step
-Move mutation above the flattening step so it operates on the typed model — this is what unlocks structure-aware, field-targeted, schema-respecting-and-violating mutation, and is the natural next investment now that both the grammar (`grammarc/`) and constraints (`analyzer/`) sides are real.
+Move mutation above the flattening step so it operates on the typed model — this is what unlocks structure-aware, field-targeted, schema-respecting-and-violating mutation, and is the natural next investment now that both the grammar (`grammarc/`) and constraints (`dotnet/analyzer/`) sides are real.
 
 **Complexity:** High. **Priority: P1.**
 
@@ -360,7 +360,7 @@ Ordering rationale: OAST and ownership-matrix BOLA are the cheapest large jumps 
 # Missing Features Compared to Existing Fuzzers
 
 ### vs. RESTler
-RESTler's OpenAPI→grammar compilation and producer-consumer inference have been internalized and superseded by `grammarc/`+`analyzer/` (no more external-tool dependency, type-scoped constraints RESTler never had). RESTler still has more mature resource-lifecycle checkers (use-after-free, resource-leak); UpsideFuzz's oracle set is different and stronger on access-control.
+RESTler's OpenAPI→grammar compilation and producer-consumer inference have been internalized and superseded by `grammarc/`+`dotnet/analyzer/` (no more external-tool dependency, type-scoped constraints RESTler never had). RESTler still has more mature resource-lifecycle checkers (use-after-free, resource-leak); UpsideFuzz's oracle set is different and stronger on access-control.
 
 ### vs. EvoMaster
 - White-box SBST search with a typed test genome and branch-distance fitness — EvoMaster gets closer to flipping a specific branch using numeric distance to the condition. UpsideFuzz has no branch-distance/gradient signal.
@@ -399,7 +399,7 @@ In-process per-input coverage, fork mode, value-profile, deterministic + havoc +
                          └───────────────┬────────────────────────────┘
         ┌────────────────────────────────┼──────────────────────────────────┐
         ▼                                 ▼                                   ▼
-   analyzer/ (Roslyn)             UpsideFuzz.Coverage (DOTNET_          Void Engine (Go)
+   dotnet/analyzer/ (Roslyn)             UpsideFuzz.Coverage (DOTNET_          Void Engine (Go)
   - typed per-property             STARTUP_HOOKS, zero-edit,             - typed grammar model (open)
     constraints, [Authorize]        already exists)                      - hit-count-bucket coverage
   - route + auth metadata          - load-time IL rewrite / link           (exists) + per-input novelty
@@ -409,7 +409,7 @@ In-process per-input coverage, fork mode, value-profile, deterministic + havoc +
         │                          - /shm/health self-verify (exists)        exists) + full state graph (open)
         └──────────────┐                    │                            - persistent corpus (open)
                         ▼                    ▼                                   │
-                grammarc/ + analyzer/ → typed request grammar (exists) ─────────┘
+                grammarc/ + dotnet/analyzer/ → typed request grammar (exists) ─────────┘
                                                                         SARIF (exists) / HTML (open)
 ```
 

@@ -149,7 +149,7 @@ the Docker launcher if something required is missing.
 - the Docker CLI + compose-v2 plugin (copied from the official `docker:27-cli` image), for
   issuing `docker compose` commands against your **host's** Docker daemon
 - this repo's own tooling (`fuzz-prep-multi.py`, `compile-grammar.sh`, `verify-hook.sh`,
-  `grammarc/`, `analyzer/`), baked in at `/upsidefuzz`
+  `grammarc/`, `dotnet/analyzer/`), baked in at `/upsidefuzz`
 
 The `./upsidefuzz` launcher runs this image with:
 - `-v /var/run/docker.sock:/var/run/docker.sock` — **Docker-outside-of-Docker**: `docker
