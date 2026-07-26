@@ -70,6 +70,16 @@ instrumented container.
 EOF
             exit 0
             ;;
+        -*)
+            # Fail loud instead of silently absorbing an unrecognized flag (e.g. a
+            # typo'd --main, which fuzz-prep-multi.py accepts but this script never
+            # has) as a positional argument -- that previously produced a confusing
+            # "Dictionary file not found: --main" error far from the real cause,
+            # since it silently landed in POSITIONAL[1] (the dict-path slot) below.
+            echo "❌ Unrecognized flag: $1"
+            echo "   Supported flags: --dict/-d, --src/-s, --out/-o, --help/-h"
+            exit 1
+            ;;
         *)
             POSITIONAL+=("$1")
             shift

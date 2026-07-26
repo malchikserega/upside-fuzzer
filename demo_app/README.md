@@ -145,8 +145,9 @@ Sanity-check instrumentation actually took (not just that the container started)
 curl http://localhost:5299/swagger/v1/swagger.json -o /tmp/teamflow-swagger.json
 cd /path/to/upside-fuzzer
 ./compile-grammar.sh /tmp/teamflow-swagger.json --out grammars/teamflow \
-  --src demo_app --main TeamFlow.Api   # --src+--main pulls in the Roslyn constraint
-                                        # extraction (analyzer/) for #14's demo endpoint
+  --src demo_app   # --src pulls in the Roslyn constraint extraction (analyzer/)
+                   # for #14's demo endpoint; compile-grammar.sh has no --main flag
+                   # (that's a fuzz-prep-multi.py-only flag -- don't mix them up)
 ```
 
 This project doesn't (yet) auto-login for multi-identity fuzzing — `auth.identities.json`
