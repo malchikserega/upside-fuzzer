@@ -963,7 +963,7 @@ def generate_unified_instrumentor(result: MultiAnalysisResult, output_path: Path
     instr_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy the generic instrumentor from the repository root
-    repo_instrumentor = Path(__file__).parent / "instrumentor" / "Program.cs"
+    repo_instrumentor = Path(__file__).parent / "dotnet" / "instrumentor" / "Program.cs"
     if repo_instrumentor.exists():
         shutil.copy2(repo_instrumentor, instr_dir / "Program.cs")
         print(f"  Copied generic instrumentor from {repo_instrumentor}")

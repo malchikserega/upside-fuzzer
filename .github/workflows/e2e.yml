@@ -46,10 +46,10 @@ jobs:
         run: go test ./...
 
       - name: C# instrumentor unit tests
-        run: dotnet test instrumentor.Tests/instrumentor.Tests.csproj
+        run: dotnet test dotnet/instrumentor.Tests/instrumentor.Tests.csproj
 
       - name: C# analyzer unit tests
-        run: dotnet test analyzer.Tests/analyzer.Tests.csproj
+        run: dotnet test dotnet/analyzer.Tests/analyzer.Tests.csproj
 
       - name: Python grammarc unit tests
         run: |

@@ -149,14 +149,14 @@ if [ -n "$SOURCE_CODE_PATH" ]; then
     # discarding it, and print it on failure (previously "-v quiet ... > /dev/null"
     # meant a broken build died with `set -e` and zero visible diagnostics).
     BUILD_LOG="$(mktemp)"
-    if ! ( cd "$ROOT_DIR/analyzer" && dotnet build -v quiet --nologo ) > "$BUILD_LOG" 2>&1; then
+    if ! ( cd "$ROOT_DIR/dotnet/analyzer" && dotnet build -v quiet --nologo ) > "$BUILD_LOG" 2>&1; then
         echo "❌ analyzer build failed:" >&2
         cat "$BUILD_LOG" >&2
         rm -f "$BUILD_LOG"
         exit 1
     fi
     rm -f "$BUILD_LOG"
-    dotnet run --no-build --project "$ROOT_DIR/analyzer" -- --src "$SOURCE_CODE_PATH" --out "$ROSLYN_JSON"
+    dotnet run --no-build --project "$ROOT_DIR/dotnet/analyzer" -- --src "$SOURCE_CODE_PATH" --out "$ROSLYN_JSON"
     ROSLYN_ARGS=(--roslyn "$ROSLYN_JSON")
 fi
 
