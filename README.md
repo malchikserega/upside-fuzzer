@@ -137,7 +137,8 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   ├── multipart.py            Multipart/form-data template synthesis
 │   ├── emit_templates.py       Writes templates.export.json (Go engine contract)
 │   ├── emit_dict.py            Writes dict.json (Go engine contract); scaffolds + merges dict.custom.json
-│   └── cli.py                  Orchestration entry point (python3 -m grammarc.cli)
+│   ├── cli.py                  Orchestration entry point (python3 -m grammarc.cli)
+│   └── README.md               File map and usage
 │
 ├── dotnet/                     The two C# build-time tools, each with its own xUnit test project
 │   ├── analyzer/                Roslyn syntax-tree analyzer (Microsoft.CodeAnalysis.CSharp)
@@ -145,12 +146,14 @@ Check out our step-by-step guides for instrumenting and fuzzing real-world appli
 │   │   ├── ConstraintWalker.cs   DataAnnotations, type/property-scoped
 │   │   ├── FluentValidationWalker.cs
 │   │   ├── RouteAuthWalker.cs   [Authorize]/route metadata (controller + minimal-API styles)
-│   │   └── analyzer.csproj
+│   │   ├── analyzer.csproj
+│   │   └── README.md            File map, usage, build/test
 │   ├── analyzer.Tests/
 │   ├── instrumentor/             SharpFuzz/Cecil IL instrumentor
 │   │   ├── Program.cs
 │   │   ├── instrument.sh
-│   │   └── instrumentor.csproj
+│   │   ├── instrumentor.csproj
+│   │   └── README.md             File map, usage, build/test
 │   └── instrumentor.Tests/
 │
 ├── void/

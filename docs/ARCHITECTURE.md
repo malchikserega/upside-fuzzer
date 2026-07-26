@@ -970,7 +970,8 @@ upside-fuzzer/
 │   ├── emit_templates.py       Writes templates.export.json (fixes the payload_key bug)
 │   ├── emit_dict.py            Writes dict.json
 │   ├── cli.py                  python3 -m grammarc.cli entry point
-│   └── test_*.py               8 files, unittest/stdlib-only (see §11)
+│   ├── test_*.py               8 files, unittest/stdlib-only (see §11)
+│   └── README.md               File map and usage
 │
 ├── dotnet/                     ★ The two C# build-time tools, each with its own xUnit tests
 │   ├── analyzer/                 Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
@@ -978,12 +979,14 @@ upside-fuzzer/
 │   │   ├── ConstraintWalker.cs   DataAnnotations constraints, type/property-scoped
 │   │   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
 │   │   ├── RouteAuthWalker.cs    [Authorize]/route metadata (controller + minimal-API styles)
-│   │   └── analyzer.csproj
+│   │   ├── analyzer.csproj
+│   │   └── README.md             File map, usage, build/test
 │   ├── analyzer.Tests/            xUnit tests for analyzer/ (added 2026-07-25, see §11)
 │   ├── instrumentor/              Reference instrumentor source + build script
 │   │   ├── Program.cs             Standalone generic config-driven instrumentor
 │   │   ├── instrument.sh          Build + run script
-│   │   └── instrumentor.csproj    Project file
+│   │   ├── instrumentor.csproj    Project file
+│   │   └── README.md              File map, usage, build/test
 │   └── instrumentor.Tests/        xUnit tests for instrumentor/ (added 2026-07-25, see §11)
 │
 ├── README.md                   Overview, features, structure
