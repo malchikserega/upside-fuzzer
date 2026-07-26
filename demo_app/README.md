@@ -238,6 +238,84 @@ Dockerized target — swap `TARGET_HOST`/`SHM_HOST` to `http://localhost:5299`, 
 needs no shared volume mount), and run `./void/go/void` (built with `go build` inside
 `void/go/`) with the same `-grammar`/`-auth-file`/`-profile` flags.
 
+## The same thing, via the `upsidefuzz` CLI
+
+Steps 2–4 above, as CLI subcommands instead of four separate tools — verified end to
+end against this exact target. demo_app is single-service (no `--services` needed,
+unlike eShopOnWeb's `sqlserver`+API split) but does need a real token collected from
+the running container before fuzzing authenticated endpoints, so unlike eShopOnWeb's
+one-shot `run`, it's shown here as individual subcommands with the token-collection
+step in between:
+
+```bash
+# Native: python3 upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz instrument --src demo_app --out /tmp/teamflow-prep --main TeamFlow.Api
+
+upsidefuzz up --dir /tmp/teamflow-prep --wait-url http://localhost:5299/health --wait-timeout 120
+
+# Collect tokens (same python3 snippet as "Grammar + auth tokens" above,
+# now hitting the CLI-managed container instead of one you brought up by hand):
+python3 - <<'EOF'
+import json, urllib.request
+base = "http://localhost:5299"
+users = ["alice@acme.test", "bob@acme.test", "carol@acme.test", "dave@globex.test", "erin@globex.test"]
+names = ["acme-admin", "acme-manager", "acme-member", "globex-admin", "globex-member"]
+weights = [1.5, 1.2, 1.0, 1.2, 1.0]
+identities = []
+for email, name, weight in zip(users, names, weights):
+    req = urllib.request.Request(f"{base}/api/auth/login",
+        data=json.dumps({"email": email, "password": "Passw0rd!23"}).encode(),
+        headers={"Content-Type": "application/json"})
+    token = json.load(urllib.request.urlopen(req))["token"]
+    identities.append({"name": name, "jwt": token, "weight": weight})
+identities.append({"name": "guest", "weight": 0.3})
+json.dump({"version": "1", "identities": identities}, open("demo_app/auth.identities.json", "w"), indent=2)
+EOF
+
+upsidefuzz verify --base http://localhost:5299 --probe /health
+
+upsidefuzz grammar http://localhost:5299/swagger/v1/swagger.json --src demo_app \
+  --out /tmp/teamflow-prep/grammar
+
+upsidefuzz fuzz --grammar /tmp/teamflow-prep/grammar --target http://localhost:5299 \
+  --profile security --time-budget 30 --auth-file demo_app/auth.identities.json
+
+upsidefuzz down --dir /tmp/teamflow-prep --volumes
+```
+
+`instrument`/`up` wrap `fuzz-prep-multi.py`/`docker compose` exactly as documented
+above — `up` correctly finds demo_app's adapted `docker-compose.yml` (auto-discovered
+by plain `docker compose`, no `-f` flag needed, since `fuzz-prep-multi.py`'s "adapt an
+existing compose file" path preserves the original filename rather than always writing
+`docker-compose.instrumented.yml`). `fuzz` resolves `void/go/void` automatically (or
+tells you to `go build` it, or to switch to `./upsidefuzz` for the zero-install path)
+and sets `TARGET_HOST`/`SHM_HOST` for you — no manual `export` needed the way the
+plain-`void`-binary alternative above requires.
+
+One honest caveat found while verifying this: `verify`'s synthetic-404-attribution
+check (`Δ2 should be ≤ Δ1 on an idle, sequential repeat`) is flaky against this
+target — occasionally fails with a small positive delta on the second probe, not
+because instrumentation is broken (all the other checks, including cumulative edge
+monotonicity, consistently pass), but because demo_app's own background async work
+(EF Core connection/disposal paths, GC finalizing async state machines) is now fully
+instrumented too (see the async-coverage fix above) and can tick over an edge between
+the two probe requests independent of the probe itself — a visible instance of this
+project's own documented "concurrency-smeared attribution" limitation
+(`ARCHITECTURE_REVIEW.md` §2), not a new bug. `verify`'s overall exit code is still 0
+when this happens.
+
+There is no one-shot `run` example here for the reason above (`run` doesn't have a
+step for collecting per-identity tokens mid-pipeline) — if you only need the `guest`
+identity or don't care about authenticated-endpoint coverage, `run --src demo_app --out
+/tmp/teamflow-prep --main TeamFlow.Api --target http://localhost:5299 --swagger
+http://localhost:5299/swagger/v1/swagger.json --profile security --time-budget 30`
+works standalone, same caveat as eShopOnWeb's own `run` example: fine for targets (or
+partial-auth runs) with no non-standard steps in between.
+
+See [docs/CLI.md](../docs/CLI.md) for the full subcommand reference and the zero-install
+`./upsidefuzz` Docker launcher's own notes (in particular the `localhost` →
+`host.docker.internal` rewriting it does automatically when running that way).
+
 ## Full vulnerability catalog
 
 24 planted bugs across 26 endpoints, mapped to the exact oracle/mechanism that finds

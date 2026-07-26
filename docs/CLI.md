@@ -195,6 +195,7 @@ steps kept as manual steps:
 
 | Target | CLI section |
 |---|---|
+| demo_app (TeamFlow, in-repo) | [demo_app/README.md § The same thing, via the upsidefuzz CLI](../demo_app/README.md#the-same-thing-via-the-upsidefuzz-cli) — `run` works for a quick/guest-only pass; per-identity auth needs the individual subcommands, token collection in between |
 | eShopOnWeb | [QUICKSTART_ESHOP.md § The same thing, via the upsidefuzz CLI](QUICKSTART_ESHOP.md#the-same-thing-via-the-upsidefuzz-cli) — `run` works end to end, no non-standard steps |
 | BTCPayServer | [QUICKSTART_BTCPAYSERVER.md § The same thing, via the upsidefuzz CLI](QUICKSTART_BTCPAYSERVER.md#the-same-thing-via-the-upsidefuzz-cli) — basic-auth swagger download stays manual |
 | SimplCommerce | [QUICKSTART_SIMPLCOMMERCE.md § The same thing, via the upsidefuzz CLI](QUICKSTART_SIMPLCOMMERCE.md#the-same-thing-via-the-upsidefuzz-cli) — swagger sanitize + cookie login stay manual |
