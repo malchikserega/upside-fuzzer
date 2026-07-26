@@ -356,9 +356,30 @@ class MultiProjectAnalyzer:
 # ============================================================================
 
 def _detect_last_stage(content: str) -> Optional[str]:
-    """Find the name of the last named stage (the runtime/final stage)"""
-    stages = re.findall(r'FROM\s+\S+\s+AS\s+(\w+)', content, re.IGNORECASE)
-    return stages[-1] if stages else None
+    """Find the name of the last named stage (the runtime/final stage).
+
+    Must return None -- not an earlier stage's name -- when the Dockerfile's
+    actual final FROM is unnamed. The previous implementation searched for
+    `FROM ... AS X` and took the last match found ANYWHERE in the file, so on
+    the extremely common pattern of an unnamed final runtime stage (no later
+    stage ever needs to reference it by name -- confirmed on demo_app's own
+    Dockerfile, and on both btcpayserver/Dockerfile and simplcommerce/Dockerfile
+    in this repo's own fixture set) it silently returned an EARLIER stage's
+    name (typically the SDK/build stage) as if it were the runtime stage. The
+    caller then inserted the instrumentation stages (which reference that
+    build stage via `FROM {source_stage} AS instrumentation`) BEFORE the build
+    stage's own definition -- an invalid, unbuildable Dockerfile ("no build
+    stage named X"/an image pull for a stage name from Docker Hub) that only
+    surfaces at `docker build` time, not at generation time.
+    """
+    # `(?:--\S+\s+)*` skips BuildKit flags like `--platform=$BUILDPLATFORM` that can
+    # precede the image ref (seen on btcpayserver/Dockerfile in this repo's own
+    # fixture set) -- without it, the flag itself gets consumed by `\S+` and the
+    # following `AS <name>` never matches, silently losing a real stage name.
+    from_stage_names = re.findall(
+        r'^FROM\s+(?:--\S+\s+)*\S+(?:\s+AS\s+(\S+))?', content, re.IGNORECASE | re.MULTILINE
+    )
+    return from_stage_names[-1] if from_stage_names and from_stage_names[-1] else None
 
 
 def _detect_publish_dir(content: str) -> str:
@@ -853,7 +874,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
                     "  # smartfuzzer:\n"
                     "  #   build:\n"
                     "  #     context: ../void\n"
-                    "  #     dockerfile: Dockerfile\n"
+                    "  #     dockerfile: Dockerfile.go\n"
                     "  #   volumes:\n"
                     "  #     - coverage_shm:/coverage_shm\n"
                     "  #   environment:\n"
@@ -909,7 +930,7 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
   # smartfuzzer:
   #   build:
   #     context: ../void
-  #     dockerfile: Dockerfile
+  #     dockerfile: Dockerfile.go
   #   volumes:
   #     - coverage_shm:/coverage_shm
   #   environment:

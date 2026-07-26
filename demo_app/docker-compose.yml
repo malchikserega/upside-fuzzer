@@ -1,0 +1,13 @@
+# Plain, uninstrumented stack -- for browsing/dev, no local .NET SDK required.
+# For the fuzzing pipeline (instrumented target + void fuzzer over shared memory),
+# see README.md's "Fully-dockerized pipeline" section -- that flow uses its own
+# generated compose file, not this one.
+services:
+  teamflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5299:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
