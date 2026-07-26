@@ -73,11 +73,11 @@ This is the budget tier `BENCHMARK_PLAN.md` §6 calls "Comparative (medium)"
 budget:
 
 ```bash
-# Example: eShopOnWeb (see QUICKSTART_ESHOP.md for the full from-scratch setup)
+# Example: eShopOnWeb (see docs/QUICKSTART_ESHOP.md for the full from-scratch setup)
 upsidefuzz fuzz --grammar grammars/eshop --target http://localhost:5200 \
   --profile security --time-budget 60
 
-# Example: Bitwarden (see QUICKSTART_BITWARDEN.md)
+# Example: Bitwarden (see docs/QUICKSTART_BITWARDEN.md)
 upsidefuzz fuzz --grammar grammars/bitwarden --target http://localhost:4000 \
   --profile security --skip-endpoint-on-500 --time-budget 60 \
   --auth-file bitwarden_prep/auth.identities.json

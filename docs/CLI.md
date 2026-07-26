@@ -87,7 +87,7 @@ retrying). Without `--wait-url`, pass `--wait-secs N` for a fixed sleep instead,
 the "wait ~45–90s" convention the QUICKSTART docs use for targets with DB migrations. For
 multi-stage bring-up (Bitwarden's mssql → migrator → api/identity choreography), use plain
 `docker compose` commands as documented in
-[QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md) instead — `up` is for the common,
+[QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md) instead — `up` is for the common,
 single-stage case.
 
 ### `verify`
@@ -195,10 +195,10 @@ steps kept as manual steps:
 
 | Target | CLI section |
 |---|---|
-| eShopOnWeb | [QUICKSTART_ESHOP.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_ESHOP.md#the-same-thing-via-the-upsidefuzz-cli) — `run` works end to end, no non-standard steps |
-| BTCPayServer | [QUICKSTART_BTCPAYSERVER.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_BTCPAYSERVER.md#the-same-thing-via-the-upsidefuzz-cli) — basic-auth swagger download stays manual |
-| SimplCommerce | [QUICKSTART_SIMPLCOMMERCE.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_SIMPLCOMMERCE.md#the-same-thing-via-the-upsidefuzz-cli) — swagger sanitize + cookie login stay manual |
-| Bitwarden (fresh) | [QUICKSTART_BITWARDEN.md § The same thing, via the upsidefuzz CLI](../QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli) — multi-stage bring-up (mssql → migrator → api/identity) stays manual |
+| eShopOnWeb | [QUICKSTART_ESHOP.md § The same thing, via the upsidefuzz CLI](QUICKSTART_ESHOP.md#the-same-thing-via-the-upsidefuzz-cli) — `run` works end to end, no non-standard steps |
+| BTCPayServer | [QUICKSTART_BTCPAYSERVER.md § The same thing, via the upsidefuzz CLI](QUICKSTART_BTCPAYSERVER.md#the-same-thing-via-the-upsidefuzz-cli) — basic-auth swagger download stays manual |
+| SimplCommerce | [QUICKSTART_SIMPLCOMMERCE.md § The same thing, via the upsidefuzz CLI](QUICKSTART_SIMPLCOMMERCE.md#the-same-thing-via-the-upsidefuzz-cli) — swagger sanitize + cookie login stay manual |
+| Bitwarden (fresh) | [QUICKSTART_BITWARDEN.md § The same thing, via the upsidefuzz CLI](QUICKSTART_BITWARDEN.md#the-same-thing-via-the-upsidefuzz-cli) — multi-stage bring-up (mssql → migrator → api/identity) stays manual |
 | Bitwarden (already set up) | [BITWARDEN_FUZZ_RUNBOOK.md § 8](../BITWARDEN_FUZZ_RUNBOOK.md#8-the-same-thing-via-the-upsidefuzz-cli) |
 
 The common pattern across all of them: whatever step is genuinely target-specific (a login

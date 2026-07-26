@@ -12,10 +12,10 @@ All targets below have been fully instrumented with `fuzz-prep-multi.py`, have a
 
 | Target | Type | Auth | Quickstart | Report |
 |--------|------|------|-----------|--------|
-| **eShopOnWeb** | Sample store REST API | JWT (login flow) | [QUICKSTART_ESHOP.md](../QUICKSTART_ESHOP.md) | — |
-| **SimplCommerce** | Modular e-commerce monolith | Cookie + anti-forgery | [QUICKSTART_SIMPLCOMMERCE.md](../QUICKSTART_SIMPLCOMMERCE.md) | [SIMPLCOMMERCE_REPORT.md](reports/SIMPLCOMMERCE_REPORT.md) |
-| **BTCPayServer** | Payment processor (Greenfield API) | API key | [QUICKSTART_BTCPAYSERVER.md](../QUICKSTART_BTCPAYSERVER.md) | [BTCPAYSERVER_REPORT.md](reports/BTCPAYSERVER_REPORT.md) · [Escalation Analysis](reports/BTCPAYSERVER_ESCALATION_ANALYSIS.md) |
-| **Bitwarden** | Password manager backend | JWT (identity service) | [QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md) | [BITWARDEN_REPORT.md](reports/BITWARDEN_REPORT.md) |
+| **eShopOnWeb** | Sample store REST API | JWT (login flow) | [QUICKSTART_ESHOP.md](QUICKSTART_ESHOP.md) | — |
+| **SimplCommerce** | Modular e-commerce monolith | Cookie + anti-forgery | [QUICKSTART_SIMPLCOMMERCE.md](QUICKSTART_SIMPLCOMMERCE.md) | [SIMPLCOMMERCE_REPORT.md](reports/SIMPLCOMMERCE_REPORT.md) |
+| **BTCPayServer** | Payment processor (Greenfield API) | API key | [QUICKSTART_BTCPAYSERVER.md](QUICKSTART_BTCPAYSERVER.md) | [BTCPAYSERVER_REPORT.md](reports/BTCPAYSERVER_REPORT.md) · [Escalation Analysis](reports/BTCPAYSERVER_ESCALATION_ANALYSIS.md) |
+| **Bitwarden** | Password manager backend | JWT (identity service) | [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md) | [BITWARDEN_REPORT.md](reports/BITWARDEN_REPORT.md) |
 | **Jellyfin** | Media server | Static token | See [BENCHMARK_AGENT_INSTRUCTIONS.md §9](BENCHMARK_AGENT_INSTRUCTIONS.md) | — |
 
 ### Which target to pick first

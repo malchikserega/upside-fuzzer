@@ -64,12 +64,21 @@ graph TD
 
 ## Quickstarts
 
+New here? [**demo_app/**](demo_app/README.md) is an in-repo, self-contained .NET REST
+API ("TeamFlow") built specifically to demo this whole approach — 26 endpoints, 24
+planted vulnerabilities across every oracle class this fuzzer supports (BOLA, mass
+assignment, SQLi, SSTI/XSS, SSRF, path traversal, unsafe deserialization, race
+conditions, schema drift), including bugs engineered to be findable *only* through
+coverage-guided feedback. No external target to clone or license — `cd demo_app &&
+dotnet run` gets you a browsable Swagger UI in seconds, and the README walks through
+the full instrument → fuzz pipeline against it end to end.
+
 Check out our step-by-step guides for instrumenting and fuzzing real-world applications from scratch:
 
-- [Bitwarden Quickstart](QUICKSTART_BITWARDEN.md) (Multi-service app, JWT auth, multi-identity and data population)
-- [BTCPayServer Quickstart](QUICKSTART_BTCPAYSERVER.md) (Complex multi-service app, Greenfield API, Greenfield Auth)
-- [eShopOnWeb Quickstart](QUICKSTART_ESHOP.md) (Standard REST API, basic setup)
-- [SimplCommerce Quickstart](QUICKSTART_SIMPLCOMMERCE.md) (Modular Monolith, Anti-forgery + Identity Auth injection)
+- [Bitwarden Quickstart](docs/QUICKSTART_BITWARDEN.md) (Multi-service app, JWT auth, multi-identity and data population)
+- [BTCPayServer Quickstart](docs/QUICKSTART_BTCPAYSERVER.md) (Complex multi-service app, Greenfield API, Greenfield Auth)
+- [eShopOnWeb Quickstart](docs/QUICKSTART_ESHOP.md) (Standard REST API, basic setup)
+- [SimplCommerce Quickstart](docs/QUICKSTART_SIMPLCOMMERCE.md) (Modular Monolith, Anti-forgery + Identity Auth injection)
 
 ---
 

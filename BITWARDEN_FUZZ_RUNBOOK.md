@@ -323,7 +323,7 @@ TARGET_HOST=http://localhost:4100 SHM_HOST=http://localhost:4100 \
 
 For direct-SHM mode (faster coverage reads, needs the engine on the same Docker network
 with the `coverage_shm` volume mounted) see `docs/CLI.md` or the Docker-sidecar examples
-in `QUICKSTART_BITWARDEN.md` — HTTP mode above is simpler to get running first and was
+in `docs/QUICKSTART_BITWARDEN.md` — HTTP mode above is simpler to get running first and was
 what this run actually used for the full hour without issue.
 
 ---

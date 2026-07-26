@@ -4,8 +4,8 @@ Verified stands (2026-07-24): `eshprep/` (eShopOnWeb, port 5200) and
 `bitwarden_prep_clean/` (fresh Bitwarden checkout, hook-mode instrumented,
 port 4000). Both already have compiled grammars (`grammars/eshop`,
 `grammars/bitwarden-clean`) and both stacks are already running -- these
-commands assume that's still true. If not, see QUICKSTART_ESHOP.md /
-QUICKSTART_BITWARDEN.md for bring-up from scratch.
+commands assume that's still true. If not, see docs/QUICKSTART_ESHOP.md /
+docs/QUICKSTART_BITWARDEN.md for bring-up from scratch.
 
 Both commands use **direct-shm** mode (`void-fuzzer` as a sidecar container
 on the target's own Docker network, reading the coverage bitmap via a shared

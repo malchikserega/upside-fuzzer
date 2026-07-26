@@ -972,13 +972,17 @@ upside-fuzzer/
 ├── INSTRUCTIONS.md             ★ Complete runbook (instrument → fuzz → analyze)
 ├── ARCHITECTURE.md             ★ Platform internals, diagrams, SHM design
 ├── README.md                   Overview, features, structure
-├── QUICKSTART_BITWARDEN.md     Target-specific setup for Bitwarden
-├── QUICKSTART_BTCPAYSERVER.md  Target-specific setup for BTCPayServer
-├── QUICKSTART_ESHOP.md         Target-specific setup for eShopOnWeb
-├── QUICKSTART_SIMPLCOMMERCE.md Target-specific setup for SimplCommerce
+├── demo_app/                    ★ TeamFlow: flagship in-repo demo target (see demo_app/README.md)
+│   ├── src/                    3-project ASP.NET Core solution (Core/Infrastructure/Api)
+│   ├── swagger.json            Committed OpenAPI snapshot
+│   └── auth.identities.example.json
 ├── docs/
 │   ├── FUZZER_AUTHENTICATION.md
-│   └── auth.identities.example.json
+│   ├── auth.identities.example.json
+│   ├── QUICKSTART_BITWARDEN.md     Target-specific setup for Bitwarden
+│   ├── QUICKSTART_BTCPAYSERVER.md  Target-specific setup for BTCPayServer
+│   ├── QUICKSTART_ESHOP.md         Target-specific setup for eShopOnWeb
+│   └── QUICKSTART_SIMPLCOMMERCE.md Target-specific setup for SimplCommerce
 │
 ├── instrumentor/               Reference instrumentor source + build script
 │   ├── Program.cs              Standalone generic config-driven instrumentor

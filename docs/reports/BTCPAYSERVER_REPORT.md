@@ -1,6 +1,6 @@
 # UpsideFuzz Final Analysis: BTCPay Server (Greenfield API)
 
-**→ [Back to README](../../README.md) · [BTCPay Quickstart](../../QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md) · [Docs Index](../INDEX.md)**
+**→ [Back to README](../../README.md) · [BTCPay Quickstart](../QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md) · [Docs Index](../INDEX.md)**
 
 > 📌 **Historical run report — 2026-07-07, RESTler-era pipeline.** This predates the RESTler
 > retirement (`ARCHITECTURE_REVIEW.md` Top-20 #9/#10): the "Sequence Engine Evaluation"
@@ -158,4 +158,4 @@ The introduction of the professional dictionary allowed the fuzzer to penetrate 
 
 ---
 
-**→ [Back to README](../../README.md) · [BTCPay Quickstart](../../QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md)**
+**→ [Back to README](../../README.md) · [BTCPay Quickstart](../QUICKSTART_BTCPAYSERVER.md) · [Escalation Analysis](BTCPAYSERVER_ESCALATION_ANALYSIS.md)**

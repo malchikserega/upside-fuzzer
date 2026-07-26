@@ -28,7 +28,7 @@ Step-by-step runbook for **any .NET 8+ web API** — from source code to coverag
 11. [Quality Gates](#11-quality-gates)
 12. [Troubleshooting](#12-troubleshooting)
 
-**Project quickstarts:** [Bitwarden](QUICKSTART_BITWARDEN.md) · [BTCPayServer](QUICKSTART_BTCPAYSERVER.md) · [eShopOnWeb](QUICKSTART_ESHOP.md) · [SimplCommerce](QUICKSTART_SIMPLCOMMERCE.md)
+**Project quickstarts:** [Bitwarden](docs/QUICKSTART_BITWARDEN.md) · [BTCPayServer](docs/QUICKSTART_BTCPAYSERVER.md) · [eShopOnWeb](docs/QUICKSTART_ESHOP.md) · [SimplCommerce](docs/QUICKSTART_SIMPLCOMMERCE.md)
 
 > **Steps 1–5 below, as one command:** `./upsidefuzz run --src ... --out ... --target ... --swagger ...`
 > runs instrument → build+up → verify → grammar → fuzz end to end, needing only Docker locally
@@ -683,25 +683,25 @@ The generic runbook above is the maintained source of truth for instrumentation,
 
 ### Bitwarden
 
-See [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md).
+See [docs/QUICKSTART_BITWARDEN.md](docs/QUICKSTART_BITWARDEN.md).
 
 Use this target when you want a realistic multi-service API with MSSQL, identity flows, strict validation, and multi-user access-control fuzzing. The quickstart covers JWT acquisition, `auth.identities.json`, and test-data population for cross-identity findings.
 
 ### BTCPayServer
 
-See [QUICKSTART_BTCPAYSERVER.md](QUICKSTART_BTCPAYSERVER.md).
+See [docs/QUICKSTART_BTCPAYSERVER.md](docs/QUICKSTART_BTCPAYSERVER.md).
 
 Use this target when you want API-key-driven auth and a more complex service graph around the Greenfield API. The quickstart covers API-key generation, Swagger cleanup, and grammar/template export.
 
 ### eShopOnWeb
 
-See [QUICKSTART_ESHOP.md](QUICKSTART_ESHOP.md).
+See [docs/QUICKSTART_ESHOP.md](docs/QUICKSTART_ESHOP.md).
 
 Use this target as the smallest end-to-end sample in the repo. It is a good sanity check for instrumentation, SHM coverage, and grammar generation on a straightforward REST API.
 
 ### SimplCommerce
 
-See [QUICKSTART_SIMPLCOMMERCE.md](QUICKSTART_SIMPLCOMMERCE.md).
+See [docs/QUICKSTART_SIMPLCOMMERCE.md](docs/QUICKSTART_SIMPLCOMMERCE.md).
 
 Use this target when you want anti-forgery tokens, cookie-based auth, and a modular monolith with more framework surface area than eShopOnWeb.
 

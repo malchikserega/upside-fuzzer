@@ -2,7 +2,7 @@
 
 > Research analysis of 5 crashes found during automated fuzzing. Covers realistic escalation paths to DDoS and potential RCE.
 
-**→ [Back to README](../../README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](../../QUICKSTART_BTCPAYSERVER.md)**
+**→ [Back to README](../../README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](../QUICKSTART_BTCPAYSERVER.md)**
 
 > 📌 **Historical run report — 2026-07-13.** Point-in-time crash analysis, not living
 > documentation; not guaranteed reproducible against the current pipeline (see
@@ -299,4 +299,4 @@ This enables the fuzzer to automatically build a complete exploit: create a legi
 
 ---
 
-**→ [Back to README](../../README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](../../QUICKSTART_BTCPAYSERVER.md)**
+**→ [Back to README](../../README.md) · [BTCPay Report](BTCPAYSERVER_REPORT.md) · [BTCPay Quickstart](../QUICKSTART_BTCPAYSERVER.md)**

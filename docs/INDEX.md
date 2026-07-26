@@ -21,10 +21,10 @@ Step-by-step guides for instrumenting and fuzzing specific real-world applicatio
 
 | Target | Auth Style | Quickstart |
 |--------|-----------|-----------|
-| **eShopOnWeb** | JWT (login flow) | [QUICKSTART_ESHOP.md](../QUICKSTART_ESHOP.md) — smallest target, fastest way to see the whole pipeline work end to end |
-| **SimplCommerce** | Cookie + anti-forgery | [QUICKSTART_SIMPLCOMMERCE.md](../QUICKSTART_SIMPLCOMMERCE.md) |
-| **BTCPayServer** | API key | [QUICKSTART_BTCPAYSERVER.md](../QUICKSTART_BTCPAYSERVER.md) |
-| **Bitwarden** | JWT (identity service) | [QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md) — fresh, from-scratch setup |
+| **eShopOnWeb** | JWT (login flow) | [QUICKSTART_ESHOP.md](QUICKSTART_ESHOP.md) — smallest target, fastest way to see the whole pipeline work end to end |
+| **SimplCommerce** | Cookie + anti-forgery | [QUICKSTART_SIMPLCOMMERCE.md](QUICKSTART_SIMPLCOMMERCE.md) |
+| **BTCPayServer** | API key | [QUICKSTART_BTCPAYSERVER.md](QUICKSTART_BTCPAYSERVER.md) |
+| **Bitwarden** | JWT (identity service) | [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md) — fresh, from-scratch setup |
 | **Bitwarden** (already set up) | — | [BITWARDEN_FUZZ_RUNBOOK.md](../BITWARDEN_FUZZ_RUNBOOK.md) — iterating against an *existing* `bitwarden_prep/` checkout, plus every gotcha found during setup. Use the quickstart for a fresh start; use this once you already have a working instrumented copy and just want to re-run or troubleshoot. |
 
 Which target to pick first → [README.md §Quickstarts](../README.md#quickstarts). Adding a new target entirely → [TARGET_CANDIDATES.md](TARGET_CANDIDATES.md).
@@ -71,7 +71,7 @@ These are dated findings from specific fuzzing campaigns, kept for record — **
 | [BTCPAYSERVER_ESCALATION_ANALYSIS.md](reports/BTCPAYSERVER_ESCALATION_ANALYSIS.md) | BTCPayServer | 2026-07-13 | Crash escalation analysis (DDoS / RCE paths) |
 | [SIMPLCOMMERCE_REPORT.md](reports/SIMPLCOMMERCE_REPORT.md) | SimplCommerce | 2026-07-07 | Baseline vs. professional-dictionary campaign comparison (RESTler-era pipeline) |
 
-For a *current*, reproducible example of findings, see the "Example findings" sections in [QUICKSTART_ESHOP.md](../QUICKSTART_ESHOP.md) and [QUICKSTART_BITWARDEN.md](../QUICKSTART_BITWARDEN.md), which were re-verified against today's pipeline.
+For a *current*, reproducible example of findings, see the "Example findings" sections in [QUICKSTART_ESHOP.md](QUICKSTART_ESHOP.md) and [QUICKSTART_BITWARDEN.md](QUICKSTART_BITWARDEN.md), which were re-verified against today's pipeline.
 
 ---
 
