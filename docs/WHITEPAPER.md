@@ -48,6 +48,37 @@ This is exactly the mechanism that solves the "five checks in a row" problem abo
 
 A fuzzer that has this kind of feedback loop into the target's actual execution is called **grey-box** — it doesn't have full knowledge of the source (that would be *white-box*, like formal verification or symbolic execution), but it isn't flying fully blind either (that's *black-box* — spec-driven request generation with no idea what happened inside).
 
+```mermaid
+flowchart TD
+    A["Pick a seed from the corpus"] --> B["Mutate it"]
+    B --> C["Send the mutated input to the target"]
+    C --> D{"Did any new bitmap\nslot light up?"}
+    D -- "Yes — new coverage" --> E["Save as a new seed\n(it reached somewhere nobody has been)"]
+    D -- "No — nothing new" --> F["Discard\n(probably rejected the same way as before)"]
+    E --> A
+    F --> A
+```
+
+*The entire idea in one loop: instead of judging an input by "did it crash," judge it by "did it reach anywhere new." That single change is what lets the search climb through nested validation checks incrementally instead of needing to guess all of them at once.*
+
+To make the difference concrete:
+
+```mermaid
+flowchart LR
+    subgraph BB["Black-box fuzzing (no coverage signal)"]
+        direction TB
+        bb1["Send request"] --> bb2["Look at status code only"]
+        bb2 --> bb3["200/400/500 — that's all\nyou ever learn"]
+        bb3 -.->|"no idea which check\nwas satisfied"| bb1
+    end
+    subgraph GB["Grey-box fuzzing (this project)"]
+        direction TB
+        gb1["Send request"] --> gb2["Read the coverage bitmap"]
+        gb2 --> gb3["Know exactly which\nvalidation checks passed"]
+        gb3 -->|"mutate toward the\nfrontier that just moved"| gb1
+    end
+```
+
 ## 3. Why REST APIs are a different, harder kind of target
 
 Coverage-guided fuzzing was invented for programs that look like `parse(bytes) -> crash_or_not`: a single process, a single input, run it, check if it died, repeat millions of times per second. A REST API violates almost every one of those assumptions:
@@ -71,6 +102,17 @@ Two refinements make this meaningfully sharper than "just read the spec":
 - **The spec is not the whole truth.** An OpenAPI document is *documentation*, and documentation drifts from the code that actually enforces validation, or was simply never detailed enough to write in the first place (a `string` field with a `[StringLength(50)]` C# attribute the spec-generator never surfaced as `maxLength: 50`). UpsideFuzz additionally parses the target's actual C# source (when available) with a real compiler front-end (Roslyn — see Part II §9) to recover the validation rules the server *genuinely* enforces, which are sometimes stricter, sometimes different, and sometimes simply absent from the spec.
 - **Some fields aren't independent — they're produced and consumed across requests.** `PUT /orders/{id}` needs a real order id, and the only place a real one exists is in the response of a successful `POST /orders`. A grammar that treats every field as independently fuzzable will send `PUT /orders/00000000-0000-0000-0000-000000000000` forever and never test the endpoint against a real object. UpsideFuzz's grammar compiler infers these **producer/consumer relationships** (which operation *creates* an id, which operations *consume* one of the same shape) so the engine can chain real values through — this is what "stateful fuzzing" means, covered in Part II §12.
 
+```mermaid
+flowchart LR
+    A["OpenAPI / Swagger spec\n(method, path, field types,\nrequired/optional, enum/pattern)"] --> C["Typed request template"]
+    B["Target's own C# source\n(real Range/StringLength/\nFluentValidation rules, if available)"] --> C
+    C --> D["A structurally valid,\nlikely-to-be-accepted request"]
+    D --> E["Mutation deliberately breaks\none specific part of it"]
+    E --> F["Request that gets *past*\nvalidation, then probes\nthe logic behind it"]
+```
+
+*The grammar's whole job is turning "random bytes that die at the front door" into "a request the server accepts, with one deliberately broken part." Part II §9–§10 covers exactly how the two input sources on the left are parsed and merged.*
+
 With that vocabulary in hand — coverage feedback, grey-box, seeds/corpus, mutation, grammar, producer/consumer — the rest of this document is UpsideFuzz's actual architecture.
 
 ---
@@ -88,6 +130,32 @@ With that vocabulary in hand — coverage feedback, grey-box, seeds/corpus, muta
 ## 6. The three subsystems, at a glance
 
 UpsideFuzz is three loosely-joined programs, deliberately in three different languages chosen for what each is good at, communicating through plain files and HTTP rather than a shared in-memory model:
+
+```mermaid
+flowchart LR
+    subgraph Prep["fuzz-prep-multi.py / fuzzprep/ (Python)"]
+        P1["Scan the .NET solution"]
+        P2["Adapt Dockerfile / compose"]
+        P3["Generate zero-edit\ncoverage hook + instrumentor"]
+    end
+    subgraph Grammar["grammarc/ (Python) + dotnet/analyzer/ (C#, Roslyn)"]
+        G1["Parse OpenAPI spec"]
+        G2["Parse real C# validation rules"]
+        G3["Merge → typed request grammar"]
+    end
+    subgraph Void["void engine (Go)"]
+        V1["Epoch scheduler + mutation"]
+        V2["Stateful sequences"]
+        V3["Vulnerability oracles"]
+        V4["Crash triage + report"]
+    end
+
+    Prep -->|"instrumented Docker image"| Target(("Running,\ninstrumented API"))
+    Grammar -->|"templates.export.json\n+ dict.json"| Void
+    Target <-->|"mmap bitmap /\nX-Coverage-Delta header"| Void
+```
+
+*Three languages, three responsibilities, joined by plain files and HTTP — not a shared in-memory model. The detailed, file-level version of this same picture follows.*
 
 ```
   .NET solution (source)
@@ -183,6 +251,26 @@ AppDomain.CurrentDomain.AssemblyLoad += (s, e) => LinkAssembly(e.LoadedAssembly)
 
 Step 3 is the part that actually matters in practice. Earlier revisions linked SharpFuzz once, at startup, which silently dropped coverage for any assembly loaded *after* that point — exactly what happens with plugin-style module loading (SimplCommerce's individually-loaded store modules are the concrete example that surfaced this). Hooking the `AssemblyLoad` event instead means each assembly's own copy of `SharpFuzz.Common.Trace.SharedMem` gets pointed at the one shared bitmap the instant it loads, before any of its methods JIT — closing a real, previously-silent coverage gap.
 
+```mermaid
+sequenceDiagram
+    participant Runtime as .NET runtime
+    participant Hook as StartupHook<br/>(UpsideFuzz.Coverage.dll)
+    participant SHM as Shared bitmap<br/>(/coverage_shm/bitmap)
+    participant App as Target app assemblies
+
+    Runtime->>Hook: DOTNET_STARTUP_HOOKS loads this<br/>BEFORE Main()
+    Hook->>Hook: Register AssemblyLoadContext.Resolving<br/>(resolves from /coverage, not app dir)
+    Hook->>SHM: InitializeShm() — map the bitmap
+    Hook->>App: LinkAssembly() on every assembly<br/>already loaded
+    Hook->>Runtime: Register AssemblyLoad handler
+    Runtime->>App: Main() finally runs — target starts normally
+    Note over Runtime,App: Later: a plugin/module assembly<br/>loads lazily at runtime
+    Runtime-->>Hook: AssemblyLoad event fires
+    Hook->>App: LinkAssembly() on the newly-loaded assembly<br/>(closes the "lazy module" gap)
+```
+
+*The whole zero-edit trick in one picture: the hook attaches itself before the target's own code ever runs, and keeps attaching to new assemblies for the entire lifetime of the process — the target's source is never touched at any point in this sequence.*
+
 **`ASPNETCORE_HOSTINGSTARTUPASSEMBLIES`** is the ASP.NET-specific companion mechanism: a "hosting startup" assembly's `IHostingStartup.Configure` runs during host construction, again with zero target-code edits, and can register an `IStartupFilter` that inserts middleware into the request pipeline. UpsideFuzz uses this to add one middleware that both serves the `/shm/*` control endpoints (described in §8) and performs per-request coverage attribution.
 
 The honest tradeoff, stated plainly rather than glossed over: an `IStartupFilter`-registered middleware sits *outside* the app's own configured pipeline. If the target has a global `UseExceptionHandler` that catches unhandled exceptions and writes its own generic 500 response before our middleware's `finally` block runs, the middleware may never see the real exception type for that request. The legacy `--inject-mode source` (which places the middleware *inside* the app's own pipeline by editing `Program.cs` directly) is retained specifically for cases where maximal exception-type fidelity in production mode matters more than the zero-edit guarantee. This is a genuine, currently-unresolved limitation of the zero-edit approach — see §17.
@@ -222,6 +310,26 @@ lock (covLock) {
     totalClasses += novel;
 }
 ```
+
+```mermaid
+sequenceDiagram
+    participant A as Request A
+    participant B as Request B (concurrent)
+    participant Bitmap as Shared bitmap
+    participant Virgin as Shared virgin map<br/>(covLock-protected)
+
+    A->>Bitmap: executes code, writes hit counts
+    B->>Bitmap: executes the SAME edge, writes hit counts
+    par A finishes first
+        A->>Virgin: merge (covLock) — claims this edge's new bucket
+        Virgin-->>A: X-Coverage-Delta: 1 (novel!)
+    and B finishes moments later
+        B->>Virgin: merge (covLock) — bucket already marked
+        Virgin-->>B: X-Coverage-Delta: 0 (not novel — A already claimed it)
+    end
+```
+
+*Naive before/after diffing would have credited **both** A and B with the same delta — double-counting that corrupts every downstream signal built on it. First-observer-wins means only whichever request's merge actually runs first gets the credit; the other correctly sees zero.*
 
 This is stated honestly as an approximation, not a solved problem: it is **not** true per-thread coverage isolation — SharpFuzz's probes all write into one shared buffer regardless, so there is no way to know *which* concurrent request actually executed a given edge, only which one's merge happened to run first. What this design *does* fix is the pathological error: whichever concurrent request reaches the merge step first claims each newly-discovered bucket, and any other concurrent request that also touched it sees the bucket already marked and is correctly credited zero — eliminating the double-counting entirely, while also halving the per-request scan cost versus the naive before/after approach (one pass instead of two, with a fast path that skips any all-zero 8-byte word outright). True per-thread trace-buffer isolation, which would remove even the residual ordering effect, would require forking SharpFuzz's own probe implementation — a real, still-open item tracked in [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md#2-coverage-feedback-shm-bitmap-middleware-readers).
 
@@ -324,6 +432,24 @@ Time Budget
 
 Budget is not statically fixed across a run — a phase that's stopped teaching the fuzzer anything new automatically loses budget to a phase that's still finding new coverage, rather than burning a fixed percentage regardless of whether it's still productive.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Baseline
+    Baseline --> Deterministic: every template sent<br/>unmutated once
+    Deterministic --> Havoc: one mutation per field,<br/>systematically
+    Havoc --> Splicing: 1-4 stacked mutations,<br/>depth escalates on stall
+    Splicing --> Havoc: cross-pollinate two seeds,<br/>feed results back in
+    Havoc --> Havoc: coverage stalled →<br/>increase havoc depth
+    Deterministic --> Deterministic: still finding new edges →<br/>keep this phase funded
+    note right of Havoc
+        Budget continuously reallocated:
+        an unproductive phase loses
+        time to a productive one
+    end note
+```
+
+*Not a strict one-way pipeline — the arrows back into Havoc and the self-loops are the point: this is a feedback-driven budget reallocation, not a fixed four-stage script.*
+
 **Seed energy.** A "seed" is a saved (template, rendered-payload) pair that produced something worth remembering. Every seed carries an **energy** score that determines how often it gets picked (via a Fenwick-tree-weighted random selection — a data structure that makes weighted sampling from a large, frequently-updated set of weights efficient): a seed gains +5 energy every time one of its mutations discovers a new coverage edge, decays by 0.5% every time it's picked (so a seed that stops being productive gradually loses priority instead of hogging the schedule forever or getting stuck at a local maximum), and gets a **surprise bonus** — `1.0 + log2(requests)`, tripled if it's the first new edge found in a long stall — when a heavily-fuzzed, seemingly-exhausted seed unexpectedly yields new coverage anyway. That last rule specifically rewards *deep, rare* transitions (a bug three retries deep into a rate-limiting loop) over merely mapping shallow API surface area, which is a meaningfully different prioritization than "spend equal time on every endpoint." The in-memory corpus this all operates over is capped (pruned once it exceeds 500 seeds) and does not currently persist across runs — see §17.
 
 This entire scheduling apparatus — the epoch model, the Fenwick-tree energy sampling, the MOpt category weighting — is, stated honestly, not a novel algorithm. It is a careful, request-domain-specific port of ideas AFL++ already established for binary fuzzing. What makes it *actually pay off* here specifically is that the coverage signal feeding all of it was made trustworthy first (§8) — a sophisticated scheduler built on top of a smeared, double-counted, or unbucketed coverage signal is optimizing against noise, no matter how good the scheduling math is. Signal quality first, clever search second, in that order.
@@ -333,6 +459,20 @@ This entire scheduling apparatus — the epoch model, the Fenwick-tree energy sa
 Recall §4's point: `PUT /orders/{id}` needs a real order id, and some of the most damaging bugs — a coupon applied twice, a refund issued after a transfer, an object accessed after it was supposedly deleted — only exist across *multiple* steps, never inside any single request in isolation. Pure single-request fuzzing structurally cannot find these, no matter how good its coverage feedback or grammar is.
 
 UpsideFuzz's sequence engine watches every successful write. When a `POST` creates something and the response contains an id (in the JSON body, or a `Location` header), the engine harvests that *real* id, finds which other request templates are known to consume an id of the same shape (via the grammar's own declared producer/consumer relationships from §10, plus an independent same-path-family fallback that still works even when the grammar-level inference is wrong or missing), and fans out follow-up requests in a realistic `POST → GET → PUT → DELETE` priority order, cloning the accumulated chain state per branch so multiple explorations can proceed independently. If a step in a chain fails outright (no real id was ever produced), the engine doesn't just abandon the chain — it falls back to a plausible fake id, so even a "broken" chain still gets to test whether downstream endpoints correctly reject an id that was never valid to begin with.
+
+```mermaid
+flowchart TD
+    P["POST /orders\n{ items: [...] }"] -->|"201 Created\nbody: { id: 482 }"| H["Harvest id = 482"]
+    H --> G["GET /orders/482"]
+    H --> U["PUT /orders/482\n{ ...modified }"]
+    H --> D["DELETE /orders/482"]
+    G -->|"200"| G2["fan out further\nfollow-ups"]
+    U -->|"200"| U2["fan out further\nfollow-ups"]
+    D -->|"200"| D2["chain ends\n(resource gone)"]
+    style H fill:#00000000,stroke-width:2px
+```
+
+*A real id, harvested once from a successful `POST`, gets threaded into every downstream request that needs one — this is what lets the fuzzer actually reach `PUT`/`DELETE` logic instead of only ever probing it with ids that were never valid to begin with.*
 
 The genuinely interesting design decision here is **rewarding new workflow *shapes*, not just new coverage edges**. A raw coverage bitmap cannot distinguish the 1st `GET` after a `POST` from the 3rd identical one — both touch exactly the same code — even though only the first one taught the fuzzer anything about actual multi-step behavior. The sequence engine computes a coarse **shape signature** for every chain — the ordered sequence of `(method, normalized-path, status-class)` triples, deliberately collapsing away the concrete resource id and the exact status code down to just its class (2xx/3xx/4xx/5xx):
 
@@ -361,6 +501,26 @@ This is the section that matters most if the goal is finding *vulnerabilities* r
 **The bug, explained from nothing:** `GET /orders/482` returns order #482's full details. If the server-side code never actually checks that order #482 belongs to *the specific user making this request* — it just looks the order up by the number in the URL and returns whatever it finds — then any logged-in user can read (or, on a `PUT`/`DELETE`, modify or destroy) *anyone else's* data, simply by changing the number in the URL. This bug class is officially named "Broken Object-Level Authorization" (BOLA) — also widely called "Insecure Direct Object Reference" (IDOR) in older material — and it consistently tops the OWASP API Security Top 10 as one of the single most common and most damaging vulnerability classes found in real-world APIs. It's also structurally invisible to any tool that only watches for crashes or error responses: the response is a perfectly well-formed 200 with a normal-looking JSON body. Nothing about the HTTP transaction itself looks wrong.
 
 **What the oracle does:** whenever any request succeeds under one authenticated identity, the engine automatically replays the exact same request under every *other* configured identity, and once more with no credentials at all. If a different identity — or no identity — gets back a substantial, non-trivial body, that's a candidate BOLA/broken-authentication finding. This requires the fuzzer to have at least two distinct real logged-in identities configured to compare against each other (see `docs/FUZZER_AUTHENTICATION.md`), which is why setting up multiple test accounts is a prerequisite step in every quickstart guide for a real target.
+
+```mermaid
+sequenceDiagram
+    participant Fuzzer
+    participant API as Target API
+    participant IdA as Identity A (owner)
+    participant IdB as Identity B (other user)
+    participant Anon as No credentials
+
+    Fuzzer->>API: GET /orders/482 (as Identity A)
+    API-->>Fuzzer: 200 OK — order #482 details
+    Note over Fuzzer: A successful, resource-scoped<br/>request — worth replaying
+    Fuzzer->>API: GET /orders/482 (as Identity B)
+    API-->>Fuzzer: 200 OK — same order #482 details!
+    Fuzzer->>API: GET /orders/482 (no credentials)
+    API-->>Fuzzer: 200 OK — same order #482 details!
+    Note over Fuzzer: Two identities that never should have<br/>seen this both got it → BOLA finding
+```
+
+*This exact replay-and-compare pattern — succeed once under a real identity, then retry as everyone else — is the mechanism behind every oracle in this section, not just BOLA; only what gets compared and what counts as "interesting" changes per oracle.*
 
 **The false-positive engineering, which is most of the actual work:** a naive version of this check would drown in noise, so a considerable amount of the real engineering effort here is specifically about *not* crying wolf:
 - The no-credential probe only fires on endpoints the engine has already, independently, observed rejecting an unauthenticated request with a 401/403 at some point during the run. A genuinely public endpoint (a product catalog, a health check) never accumulates that evidence, so it's simply never flagged — this alone eliminates the single most common false-positive source (a public endpoint "failing" a check that was never applicable to it in the first place).
@@ -417,6 +577,24 @@ A productive coverage-guided fuzzing session against a real API routinely produc
 UpsideFuzz uses a deliberate **two-level** identity scheme to solve this honestly rather than either under- or over-collapsing:
 - A fine-grained **signature** (method + path + status + exception type + a fingerprint of the response), computed and deduplicated by `crash.go`, is used for forensic-level deduplication of near-identical repro variants — useful when you specifically want to see every distinct way a bug was triggered.
 - A coarser **cluster key** (`cluster.go`), built from the *normalized* backend exception message plus the first application-level stack frame (framework frames are deliberately skipped, since they're shared by unrelated bugs and would otherwise merge things that shouldn't merge) — or, when no stack trace is available at all (production mode, see §8's exception-attribution caveat), a fallback of `(method, status code, normalized route template)` — groups crashes by *actual root cause*, which is the number a human actually wants: "how many distinct bugs do I have," not "how many distinct payloads triggered a bug."
+
+```mermaid
+flowchart LR
+    subgraph Sigs["Hundreds of fine-grained signatures\n(distinct path + payload + status)"]
+        s1["GET /orders/1?x=' OR 1=1\n500"]
+        s2["GET /orders/2?x=<script>\n500"]
+        s3["POST /items {qty:-999}\n500"]
+        s4["GET /orders/3?x=DROP TABLE\n500"]
+    end
+    s1 --> c1(("Cluster: NullReferenceException\nat OrderService.Get"))
+    s2 --> c1
+    s4 --> c1
+    s3 --> c2(("Cluster: ArgumentOutOfRangeException\nat InventoryService.Reserve"))
+    c1 --> R["Report: 2 distinct root causes"]
+    c2 --> R
+```
+
+*One real run produced 933 nominally "unique" crash signatures that collapsed to roughly 5 actual bugs once clustered by root cause — the number in the final report is the second one, not the first.*
 
 Every crash also gets an honest, hand-tuned (explicitly not CVSS-equivalent, and labeled as such wherever displayed) **triage score** (`triage.go`) from 0.0–10.0, built from concrete signals: a base score for any 500, a bonus if the response body contains an actual developer-facing stack trace, a further bonus if the body reveals a specific backend failure category (a SQL error, a deadlock, a null-reference exception by name), a bonus scaled by how sensitive the endpoint's path looks (`/admin`, `/auth`), a bonus if the crash was reached via a multi-step stateful sequence (§12) rather than a single request (since that generally indicates a deeper, more specific business-logic failure than a shallow single-request crash) — and explicit *penalties* for crashes against purely synthetic, non-existent paths, or generic content-type-mismatch noise that would otherwise pollute the ranking.
 
