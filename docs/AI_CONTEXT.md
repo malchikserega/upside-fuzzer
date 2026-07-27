@@ -96,15 +96,21 @@ The Go engine (`void/go/`) was refactored into focused single-responsibility fil
 | `template.go` | `templates.export.json` parsing and payload rendering |
 | `mutation_engine.go` | MOpt-style mutation scheduler, adaptive weights, constraint-aware boundary blending |
 | `mutations.go` | Concrete mutation categories (sqli, xss, cmdi, path_traversal, etc.) |
+| `cmplog.go` | CmpLog/RedQueen IL-comparison operand harvesting (`/shm/cmplog` polling, `-cmplog`) |
+| `constants.go` | Static constant/string dictionary extraction pool (`/shm/constants`) |
 | `crash.go` | Crash deduplication, signature generation, and JSONL logging |
 | `cluster.go` | Root-cause clustering: folds many per-payload signatures into one bug via normalized exception message + top app stack frame (endpoint-template fallback when no stack) |
-| `oracle.go` | Vulnerability oracles beyond HTTP 500: BOLA/IDOR + auth-bypass via cross-identity/no-auth replay, and positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS) |
+| `oracle.go` | Vulnerability oracles beyond HTTP 500: BOLA/IDOR + auth-bypass via cross-identity/no-auth replay, mass assignment, and positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS) |
+| `schema_oracle.go` | Response-schema conformance oracle (`-schema-conformance`): undeclared/sensitive fields, type drift |
 | `triage.go` | Source-aware triage and crash severity scoring |
 | `poc.go` | PoC shell scripts and Mermaid exploit timelines |
 | `report.go` | Final JSON bug report assembly |
+| `sarif.go` | SARIF 2.1.0 findings export (`-sarif-file`, opt-in) |
 | `minimize.go` | Delta-debugging to strip unnecessary fields from crashing payloads |
 | `identity.go` | Multi-identity scheduling, weighted selection, race condition probes |
 | `auth.go` | JWT/header/cookie auth state, login fallback, CSRF token harvest |
+| `jwt_expiry.go` | Unsigned JWT `exp`-claim parsing; startup/mid-run expiry warnings per identity |
+| `webui.go` | Embedded live web dashboard (`-web-ui`/`-web-ui-port`) |
 | `ui.go` | Live terminal dashboard rendering and plain logging |
 | `utils.go` | HTTP and string utility functions |
 | `types.go` | Core data structures (`Config`, `WorkItem`, `SendResult`, `Segment`) |

@@ -4,7 +4,7 @@
 **Goal being evaluated against:** *the best open-source feedback-guided REST API fuzzer for .NET* — near-zero config, universal instrumentation, deep bug discovery, researcher-adoptable.
 **Tone:** brutally honest. This is the project's living technical roadmap, not a marketing document — it reflects current state only, not a changelog of everything ever fixed (see git history / commit messages for that).
 
-**Repository state note:** the working tree still carries multiple full target checkouts (`bitwarden_prep*`, `btcpayserver*`, `simplcommerce*`, `esh*`, `restler_*`, `crashes/`, `void/crashes`) — first-party code lives in `fuzz-prep-multi.py`, `compile-grammar.sh`, `grammarc/`, `dotnet/analyzer/`, `dotnet/instrumentor/`, `void/`, `demo_app/`, and the docs. Everything else is a target artifact and should be `.gitignore`d out of the repo (see DX section, still open).
+**Repository state note (resolved):** the working tree's local, gitignored working state (`bitwarden_*`, `btcpayserver*`, `simplcommerce*`, `esh*`, `restler_*`, `crashes/`, `void/crashes`) is no longer a repo-hygiene problem — `.gitignore` now has blanket rules for all of it, and `git ls-files` confirms zero tracked target-checkout files. First-party code lives in `fuzz-prep-multi.py`/`fuzzprep/`, `compile-grammar.sh`, `grammarc/`, `dotnet/analyzer/`, `dotnet/instrumentor/`, `void/`, `demo_app/`, and the docs; everything else is local, on-demand, gitignored working state, produced by running the pipeline against a target.
 
 **A note on `Top-20 #N` labels:** older code comments, `void/README.md`, `ARCHITECTURE.md`, and several `QUICKSTART_*.md` files still cite features by a `Top-20 #N` ID from this document's earlier numbered-roadmap format. That numbered list has been retired in favor of the current-state sections below (a roadmap that only ever grows numbered items and never removes shipped ones stops being useful), but the IDs already written into those other files are cheap to keep resolvable:
 
@@ -16,8 +16,8 @@
 | #9 | First-party OpenAPI→grammar compiler (`grammarc/`), RESTler retired | #21 | CmpLog/RedQueen live comparison-operand harvesting |
 | #10 | Real Roslyn syntax-tree analyzer (`dotnet/analyzer/`) | #22 | Static constant/string extraction at instrument time |
 | #11 | CMPLOG-lite / 400-body validation-error mining | #23 | Response-schema conformance oracle |
-| #12 | State-reward stateful sequence search (coarse; see P1 #6 below for the open remainder) | #25 | Global `-seed` (partial — no byte-exact replay tool yet, see P1 #15 below) |
-| #14 | Constraint-aware boundary mutation (partial; see P1 #4/#5 below for the open remainder) | #16 | SARIF findings export (HTML dashboard still open, see P2 #19 below) |
+| #12 | State-reward stateful sequence search (coarse; see P1 #6 below for the open remainder) | #25 | Global `-seed` (partial — no byte-exact replay tool yet, see P1 #14 below) |
+| #14 | Constraint-aware boundary mutation (partial; see P1 #4/#5 below for the open remainder) | #16 | SARIF findings export (HTML dashboard still open, see P2 #18 below) |
 
 New work should reference this document's actual section names, not a new numbered ID — the point of this refresh is to stop accumulating IDs that need remembering.
 
@@ -27,11 +27,11 @@ New work should reference this document's actual section names, not a new number
 
 UpsideFuzz does things most open-source REST fuzzers do not: real grey-box coverage feedback on .NET via SharpFuzz/Mono.Cecil IL rewriting (now including async/iterator state machines, where nearly all real business logic in a modern ASP.NET Core app actually lives), AFL-style bucketed hit-count coverage with CmpLog/RedQueen-style live comparison harvesting and static constant extraction, a first-party OpenAPI+Roslyn grammar compiler (RESTler fully retired), a state-reward stateful sequence engine, and — the project's clearest differentiator — *positive* vulnerability oracles (BOLA/IDOR, broken-auth, mass-assignment, differential/parser-confusion auth bypass, time-based SQLi/SSTI, response-schema conformance). Instrumentation is zero-edit (`DOTNET_STARTUP_HOOKS`, no source changes) and self-verifying/fail-closed (a degraded run refuses to start rather than silently reporting zero coverage as success). There is real CI: an E2E regression gate against a planted-bug fixture, and a unit-test gate running the full existing Go/C#/Python test suites on every push.
 
-The system is still architecturally three loosely-joined programs (Python prep/grammar, a Go engine, C# instrumentation) held together by file conventions and Docker, not schema-validated interfaces. The biggest **remaining** gaps: no out-of-band interaction server (OAST), so blind SSRF/XXE/RCE/blind-SQLi findings are entirely unconfirmable; BOLA detection is still body-comparison heuristic rather than ownership-matrix aware, so true cross-tenant BOLA where each user legitimately gets a different-shaped body is missed; instrumentation is Docker-only with no non-container host mode; and auth is still "paste a token file" (now with expiry *warnings*, not auto-refresh). The repo itself still carries multiple full target checkouts that should be purged.
+The system is still architecturally three loosely-joined programs (Python prep/grammar, a Go engine, C# instrumentation) held together by file conventions and Docker, not schema-validated interfaces. The biggest **remaining** gaps: no out-of-band interaction server (OAST), so blind SSRF/XXE/RCE/blind-SQLi findings are entirely unconfirmable; BOLA detection is still body-comparison heuristic rather than ownership-matrix aware, so true cross-tenant BOLA where each user legitimately gets a different-shaped body is missed; instrumentation is Docker-only with no non-container host mode; and auth is still "paste a token file" (now with expiry *warnings*, not auto-refresh).
 
 **Where to focus next:** OAST (cheapest large jump in the "deep, realistic bugs" story), ownership-matrix BOLA, and a non-Docker instrumentation path are the three highest-leverage items — the rest of this document orders everything else under them.
 
-**Top structural verdict:** the fuzzer *engine* (scheduling/mutation/corpus) is ~75% of the way to state-of-the-art; *coverage feedback* is ~65% (bucketed + CmpLog + async-aware, still missing true per-input path novelty); *instrumentation universality* is ~55% (zero-edit + self-verifying, still Docker-only + regex-based build detection); *grammar/state modeling* is ~60% (RESTler retired, real Roslyn constraints, still no typed structural mutation or full state-graph search); *engineering rigor* (tests, CI, reproducibility, packaging) is ~55% (both an E2E gate and a full unit-test gate now exist across all three languages; repo hygiene, persistent corpus, and packaging remain open).
+**Top structural verdict:** the fuzzer *engine* (scheduling/mutation/corpus) is ~75% of the way to state-of-the-art; *coverage feedback* is ~65% (bucketed + CmpLog + async-aware, still missing true per-input path novelty); *instrumentation universality* is ~55% (zero-edit + self-verifying, still Docker-only + regex-based build detection); *grammar/state modeling* is ~60% (RESTler retired, real Roslyn constraints, still no typed structural mutation or full state-graph search); *engineering rigor* (tests, CI, reproducibility, packaging) is ~55% (both an E2E gate and a full unit-test gate now exist across all three languages, and repo hygiene is resolved; persistent corpus and packaging remain open).
 
 ---
 
@@ -259,18 +259,18 @@ Two CI jobs run on every push/PR: an E2E regression gate (`scripts/e2e-test.sh`)
 - Two-tier CI (fast unit-test gate, slower E2E gate that depends on it passing first) catches a basic regression in ~1-2 minutes instead of only after a 20-minute Docker build.
 - The single CLI orchestrator plus zero-install Docker mode means a machine with nothing but Docker installed can run the entire pipeline, including the Roslyn analyzer step.
 - Every subcommand is purely additive — running the underlying tools directly, exactly as documented, keeps working unchanged.
+- **Repo hygiene is resolved.** `.gitignore` now has blanket rules covering every target-checkout/generated-output pattern (`bitwarden_*/`, `btcpayserver*/`, `simplcommerce*/`, `esh*/`, `restler_*`, `crashes/`, `void/crashes/`, `summaries/`), and `git ls-files` confirms zero tracked target-checkout files. This was the cheapest open item in this document and is no longer open.
 
 ### Currently open weaknesses
-1. **[HIGH] Repo hygiene.** The tree still carries multiple full target checkouts and generated outputs (`bitwarden_prep*`, `btcpayserver*`, `simplcommerce*`, `esh*`, `restler_output`, `crashes/`, `void/crashes`, `__pycache__`). This bloats clones, confuses the architecture for newcomers, and risks committing target/customer code. Should be `.gitignore`d and purged from history, or moved to `git submodule`/a fetch script.
-2. **[MED] Three-language pipeline with implicit, non-schema-validated file contracts.** Python (prep+grammar) + Bash (compile) + Go (engine) + C# (instrumentor), with onboarding and debugging requiring understanding all four.
-3. **[MED] 90+ CLI flags on `void/go/main.go`.** Profiles (`fast`/`deep`/`security`) mitigate this well for day-to-day use, but the raw surface remains a real docs/maintenance burden.
-4. **[LOW] No versioned releases or packaging.** No `dotnet tool`, no container on a registry, no `brew`/binary release — adoption still requires cloning and reading runbooks.
-5. **[LOW] `demo_app/` (the flagship in-repo demo target) has zero CI coverage.** Unlike `fixtures/planted-bug-api/`, nothing automated verifies its 24-bug catalog stays intact across future engine/instrumentor changes — everything about it has been verified by hand, not by a regression gate.
+1. **[MED] Three-language pipeline with implicit, non-schema-validated file contracts.** Python (prep+grammar) + Bash (compile) + Go (engine) + C# (instrumentor), with onboarding and debugging requiring understanding all four.
+2. **[MED] 90+ CLI flags on `void/go/main.go`.** Profiles (`fast`/`deep`/`security`) mitigate this well for day-to-day use, but the raw surface remains a real docs/maintenance burden.
+3. **[LOW] No versioned releases or packaging.** No `dotnet tool`, no container on a registry, no `brew`/binary release — adoption still requires cloning and reading runbooks.
+4. **[LOW] `demo_app/` (the flagship in-repo demo target) has zero CI coverage.** Unlike `fixtures/planted-bug-api/`, nothing automated verifies its 24-bug catalog stays intact across future engine/instrumentor changes — everything about it has been verified by hand, not by a regression gate.
 
 ### Recommended next step
-Repo hygiene (purging target checkouts) is by far the cheapest of these and has been open the longest — a straightforward `.gitignore` + history-purge pass, no design work required, unlike the other open items in this document.
+CI coverage for `demo_app/` is the cheapest of the remaining items here — a straightforward second E2E-style gate, no design work required, unlike the schema-contract or flag-surface items.
 
-**Complexity:** Low (hygiene) / Medium (everything else here). **Priority: P1 (hygiene), P2 (rest).**
+**Complexity:** Low–Medium. **Priority: P2.**
 
 ---
 
@@ -284,7 +284,6 @@ Repo hygiene (purging target checkouts) is by far the cheapest of these and has 
 - No OAST — my blind SSRF/RCE/XXE findings would depend on luck, not confirmation.
 - Docker-only, with a regex-based Dockerfile-adaptation step that, while now well-tested, is still fundamentally pattern-matching rather than a real build-graph understanding.
 - Auth is still "paste a token file" — expiry is now visible at startup and mid-run, but nothing refreshes it automatically, so a long unattended run against a short-lived-token target still needs babysitting.
-- Repo clutter (multiple full target checkouts) makes the project harder to navigate than it needs to be.
 
 **What features would I immediately miss?**
 An out-of-band interaction server; ownership-matrix BOLA; auto-login/OAuth2; a persistent, resumable corpus; a non-Docker host mode; an HTML findings dashboard (SARIF itself exists).
@@ -308,7 +307,7 @@ Blind injection (SSRF/XXE/RCE/blind-SQLi) without OAST; true cross-tenant BOLA w
 | Oracles | **Strong (differentiator)** | No OAST; BOLA is body-heuristic, not ownership-matrix aware |
 | Triage / cluster / report | Strong | Production-mode clustering under-clusters without a stack trace; no HTML dashboard |
 | Auth / identity | Medium | Manual token file; JWT expiry is visible now, not auto-refreshed |
-| DX / CI / reliability | Improving | Repo hygiene (target checkouts) still unaddressed; no versioned releases |
+| DX / CI / reliability | Improving | No versioned releases; `demo_app/`'s 24-bug catalog has no CI coverage yet |
 
 ---
 
@@ -333,27 +332,26 @@ Ordering rationale: OAST and ownership-matrix BOLA are the cheapest large jumps 
 | 6 | **Coverage-directed sequence fanout** (prioritize consumers with unreached edges; move toward a real resource-lifecycle state graph) | Med–High | 3 wk | Builds incrementally on the existing shape-signature state-reward mechanism |
 | 7 | **Credential-based auto-login + OAuth2/OIDC per identity**, with automatic refresh | Med | 2 wk | Removes the token-file friction JWT-expiry warnings only made visible, not fixed |
 | 8 | **Persistent, resumable corpus** (`corpus/` directory keyed by target) | Low–Med | 1 wk | Warm restarts; real reproducibility and researcher-productivity win, independent of everything else here |
-| 9 | **Repo hygiene** — purge target checkouts from the repo/history | Low | 2–3 d | Cheapest item in this entire document; pure cleanup, no design work |
-| 10 | **JWT/session-lifecycle oracle** (`alg=none`, `kid` injection, tampered/expired token replay, replay after logout, mid-session privilege change) | Med | 2 wk | High-value, .NET-native; reuses existing `identity.go`/`auth.go` |
-| 11 | **Sensitive-data/PII exposure oracle** (emails/tokens/PANs/connection strings/stack traces in 2xx bodies) | Low | 1 wk | Real finding class independent of 500s; regex over bodies already collected |
-| 12 | **Taint-marking of injected values** (tag fuzzer payloads, detect where they resurface in responses/SQL errors/file paths) | Med | 1–2 wk | Sharpens injection-oracle precision, finds reflected sinks, cuts false positives |
-| 13 | **Regression/diff-guided fuzzing** (fuzz only code changed between two commits) | Med | 2 wk | CI-friendly "fuzz just this PR in 5 minutes" — nothing in the .NET space does this out of the box |
-| 14 | **Readiness-gated startup + DB-seeding harness** (poll readiness instead of a fixed sleep; seed known per-identity objects) | Low | 1 wk | Removes startup flakiness; also provides ground truth for ownership-matrix BOLA (#3) |
-| 15 | **Request-journal replay tool** for byte-exact reproducibility (seeding alone isn't bit-for-bit under concurrency) | Med | 2 wk | The remaining piece of "a specific finding is mechanically replayable," not just re-approximated |
-| 16 | **Boolean/error-based injection differentials** (beyond time-based SQLi/SSTI-arithmetic) | Med | 1–2 wk | Widens injection-oracle coverage without needing OAST |
+| 9 | **JWT/session-lifecycle oracle** (`alg=none`, `kid` injection, tampered/expired token replay, replay after logout, mid-session privilege change) | Med | 2 wk | High-value, .NET-native; reuses existing `identity.go`/`auth.go` |
+| 10 | **Sensitive-data/PII exposure oracle** (emails/tokens/PANs/connection strings/stack traces in 2xx bodies) | Low | 1 wk | Real finding class independent of 500s; regex over bodies already collected |
+| 11 | **Taint-marking of injected values** (tag fuzzer payloads, detect where they resurface in responses/SQL errors/file paths) | Med | 1–2 wk | Sharpens injection-oracle precision, finds reflected sinks, cuts false positives |
+| 12 | **Regression/diff-guided fuzzing** (fuzz only code changed between two commits) | Med | 2 wk | CI-friendly "fuzz just this PR in 5 minutes" — nothing in the .NET space does this out of the box |
+| 13 | **Readiness-gated startup + DB-seeding harness** (poll readiness instead of a fixed sleep; seed known per-identity objects) | Low | 1 wk | Removes startup flakiness; also provides ground truth for ownership-matrix BOLA (#3) |
+| 14 | **Request-journal replay tool** for byte-exact reproducibility (seeding alone isn't bit-for-bit under concurrency) | Med | 2 wk | The remaining piece of "a specific finding is mechanically replayable," not just re-approximated |
+| 15 | **Boolean/error-based injection differentials** (beyond time-based SQLi/SSTI-arithmetic) | Med | 1–2 wk | Widens injection-oracle coverage without needing OAST |
 
 ## P2 — real value, lower urgency
 
 | # | Improvement | Difficulty | Effort | Notes |
 |---|---|---|---|---|
-| 17 | **Value-level minimization** (bisect string length/numeric magnitude, not just field removal) | Low–Med | 1 wk | Better PoCs |
-| 18 | **Behavioral mass-assignment confirmation** (read-back or privilege-action probe, not just field-echo detection) | Low–Med | 1 wk | Catches silent privilege writes the echo-based check misses |
-| 19 | **HTML findings dashboard** (SARIF export already exists for CI/scanner integration) | Low | 3–5 d | Human-browsable report for quick manual review |
-| 20 | **Non-REST surfaces**: gRPC, GraphQL (HotChocolate), SignalR/WebSocket | High | 4–6 wk | Large real .NET surface outside the current REST-only model; GraphQL brings its own oracle class |
-| 21 | **Algorithmic-complexity / ReDoS / resource-exhaustion oracle** | Med | 2 wk | DoS class on top of the existing latency baseline |
-| 22 | **Distributed parallel fuzzing + corpus sync** across target replicas | High | 3 wk | Scale on large apps; synergizes with persistent corpus (#8) |
-| 23 | **Versioned releases/packaging** (`dotnet tool`, registry container, brew/binary release) | Med | 2 wk | Adoption; no longer requires cloning + reading runbooks |
-| 24 | **CI coverage for `demo_app/`** (a second E2E-style gate checking a handful of its planted bugs stay findable) | Low–Med | 3–5 d | `demo_app/`'s 24-bug catalog is currently verified by hand only |
+| 16 | **Value-level minimization** (bisect string length/numeric magnitude, not just field removal) | Low–Med | 1 wk | Better PoCs |
+| 17 | **Behavioral mass-assignment confirmation** (read-back or privilege-action probe, not just field-echo detection) | Low–Med | 1 wk | Catches silent privilege writes the echo-based check misses |
+| 18 | **HTML findings dashboard** (SARIF export already exists for CI/scanner integration; a live web dashboard now also exists via `-web-ui`, but it's a live-run view, not a persisted HTML report) | Low | 3–5 d | Human-browsable report for quick manual review |
+| 19 | **Non-REST surfaces**: gRPC, GraphQL (HotChocolate), SignalR/WebSocket | High | 4–6 wk | Large real .NET surface outside the current REST-only model; GraphQL brings its own oracle class |
+| 20 | **Algorithmic-complexity / ReDoS / resource-exhaustion oracle** | Med | 2 wk | DoS class on top of the existing latency baseline |
+| 21 | **Distributed parallel fuzzing + corpus sync** across target replicas | High | 3 wk | Scale on large apps; synergizes with persistent corpus (#8) |
+| 22 | **Versioned releases/packaging** (`dotnet tool`, registry container, brew/binary release) | Med | 2 wk | Adoption; no longer requires cloning + reading runbooks |
+| 23 | **CI coverage for `demo_app/`** (a second E2E-style gate checking a handful of its planted bugs stay findable) | Low–Med | 3–5 d | `demo_app/`'s 24-bug catalog is currently verified by hand only |
 
 ---
 
