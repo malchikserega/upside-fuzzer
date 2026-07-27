@@ -158,6 +158,9 @@ Uses file-name and directory heuristics to identify code worth fuzzing:
 ### Namespace Aggregation
 Collects namespaces from identified files to create a **whitelist filter configuration** (`namespaces.json`) for the generic instrumentor. The instrumentor reads this config at runtime to only instrument code in these namespaces — skipping system libraries and generated code.
 
+### Compose Generation Opt-Out (`--no-compose`)
+By default, when `--src` has no existing compose file, `fuzz-prep-multi.py` generates a single-service `docker-compose.instrumented.yml` from scratch. For a multi-service target (a DB, an identity/auth server, background workers, ...) this auto-generated file is typically thrown away in favor of a hand-written one anyway. `--no-compose` skips generating it and instead writes `COMPOSE_REQUIREMENTS.md` — what a hand-written compose file needs (env vars, volumes, ports) to work with the generated instrumentation — into `--out`. This has no effect when `--src` already has a compose file: that one is always adapted in place either way, regardless of the flag. See `docs/BITWARDEN_FUZZ_RUNBOOK.md` for a worked multi-service example.
+
 ---
 
 ## 2. Docker Build Pipeline
@@ -946,10 +949,13 @@ upside-fuzzer/
 │
 ├── fuzz-prep-multi.py          ★ Entry point (thin wrapper -> fuzzprep.cli.main())
 ├── fuzzprep/                   ★ The actual analyze/instrument/adapt implementation
+│   ├── __init__.py              Module map / package docstring
+│   ├── __main__.py               python3 -m fuzzprep entry point
 │   ├── models.py               Shared dataclasses (ProjectInfo, MultiAnalysisResult)
 │   ├── analysis.py             MultiProjectAnalyzer: solution scan + business-logic detection
 │   ├── detect.py                Pure regex helpers over Dockerfile/C# source text
-│   ├── docker_gen.py            Dockerfile + compose generation/adaptation
+│   ├── docker_gen.py            Dockerfile + compose generation/adaptation (incl. --no-compose,
+│   │                             see below)
 │   ├── instrumentor_gen.py      Instrumentor source copy + zero-edit coverage-hook assembly
 │   ├── coverage_helper_gen.py   Legacy --inject-mode source support
 │   └── cli.py                  Argument parsing and orchestration (main())
@@ -967,6 +973,7 @@ upside-fuzzer/
 │   ├── roslyn_merge.py         Merges dotnet/analyzer/'s type-scoped constraints over OpenAPI's
 │   ├── boundary.py             Boundary-value synthesis
 │   ├── multipart.py            Multipart/form-data template synthesis
+│   ├── common.py               Shared helpers (canonical_key, uniq) used across grammarc modules
 │   ├── emit_templates.py       Writes templates.export.json (fixes the payload_key bug)
 │   ├── emit_dict.py            Writes dict.json
 │   ├── cli.py                  python3 -m grammarc.cli entry point
@@ -975,15 +982,20 @@ upside-fuzzer/
 │
 ├── dotnet/                     ★ The two C# build-time tools, each with its own xUnit tests
 │   ├── analyzer/                 Roslyn syntax-tree analyzer (C#, Microsoft.CodeAnalysis.CSharp)
+│   │   ├── Program.cs            CLI entry point
 │   │   ├── SourceIndex.cs        Parses all .cs files; partial-class/enum/validator indexing
 │   │   ├── ConstraintWalker.cs   DataAnnotations constraints, type/property-scoped
 │   │   ├── FluentValidationWalker.cs   RuleFor(...) chain walking via real syntax nodes
 │   │   ├── RouteAuthWalker.cs    [Authorize]/route metadata (controller + minimal-API styles)
+│   │   ├── TypeResolver.cs       Resolves property CLR types across partial classes/files
+│   │   ├── RoslynUtil.cs         Shared syntax-tree helpers (incl. IsTestPath)
+│   │   ├── Models.cs             Output DTOs (constraint/route/auth JSON shapes)
 │   │   ├── analyzer.csproj
 │   │   └── README.md             File map, usage, build/test
 │   ├── analyzer.Tests/            xUnit tests for analyzer/ (added 2026-07-25, see §11)
 │   ├── instrumentor/              Reference instrumentor source + build script
 │   │   ├── Program.cs             Standalone generic config-driven instrumentor
+│   │   ├── Program.Generated.cs   Dead code, not used (see dotnet/instrumentor/README.md)
 │   │   ├── instrument.sh          Build + run script
 │   │   ├── instrumentor.csproj    Project file
 │   │   └── README.md              File map, usage, build/test
@@ -1031,11 +1043,13 @@ upside-fuzzer/
 │   │   ├── report.go           JSON bug report builder
 │   │   ├── sarif.go            SARIF 2.1.0 findings export (-sarif-file, opt-in)
 │   │   ├── minimize.go         Crash minimization and repro logic
+│   │   ├── jwt_expiry.go       Unsigned JWT exp-claim parsing and expiry warnings (§8)
+│   │   ├── webui.go            Embedded live web dashboard (-web-ui/-web-ui-port)
 │   │   ├── ui.go               Terminal UI and plain logging
 │   │   ├── utils.go            Common helpers and constants
 │   │   ├── types.go            Core data structures
 │   │   ├── go.mod
-│   │   └── *_test.go           17 files, 31.7% statement coverage (see §11)
+│   │   └── *_test.go           18 files, 32.0% statement coverage (see §11)
 │
 ├── examples/
 │   └── simplcommerce/          SimplCommerce-specific helper scripts and namespace config
@@ -1108,7 +1122,7 @@ The E2E gate above proves the pipeline works end-to-end on one fixture; it doesn
 protect individual functions from regressing in ways that don't happen to break that
 one fixture's shape. Added as a second, faster-feedback layer underneath it:
 
-- **`void/go`** — statement coverage raised from 20.0% to 31.7% (`go test -coverprofile`).
+- **`void/go`** — statement coverage raised from 20.0% to 32.0% (`go test -coverprofile`).
   New: `crash_test.go` (crash signature generation, dedup, the root-cause cluster
   recording path), `minimize_test.go` (crash minimization + repro-stability check
   against a real `httptest` server), `auth_test.go` (the anti-forgery token

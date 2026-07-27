@@ -345,13 +345,19 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
 - **`triage.go`**: Source-aware priority and routing of crash severity scores.
 - **`cluster.go`**: Root-cause clustering — collapses many per-payload crash signatures into distinct bugs via normalized exception message + top application stack frame.
-- **`oracle.go`**: Vulnerability oracles beyond HTTP 500 — BOLA/IDOR and broken-auth via cross-identity/no-credential replay, plus positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS).
+- **`oracle.go`**: Vulnerability oracles beyond HTTP 500 — BOLA/IDOR and broken-auth via cross-identity/no-credential replay, mass assignment, plus positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS).
+- **`schema_oracle.go`**: Response-schema conformance oracle (`-schema-conformance`) — undeclared/sensitive fields and type drift vs. the declared OpenAPI response schema.
+- **`cmplog.go`**: CmpLog/RedQueen IL-comparison operand harvesting — polls `/shm/cmplog` and feeds recovered string/int constants into mutation.
+- **`constants.go`**: Static constant/string dictionary extraction pool — fetches `/shm/constants` once at startup.
 - **`poc.go`**: Generation of `curl` reproducer shell scripts and Markdown exploit timelines.
 - **`report.go`**: Assembly of the final JSON crash report and vulnerability findings.
+- **`sarif.go`**: SARIF 2.1.0 findings export (`-sarif-file`, opt-in) for GitHub code scanning/DefectDojo integration.
 - **`minimize.go`**: Delta-debugging logic to binary-search and strip away unnecessary JSON fields from a crashing payload.
 - **`identity.go`**: Auth identity files, weighted identity scheduling, trace decoration, and race condition probes.
+- **`jwt_expiry.go`**: Parses the unsigned `exp` claim off JWT-shaped identity tokens and warns at startup/mid-run before/when one expires.
 - **`mutation_engine.go`**: Context-aware injection algorithms (JSON payload flipping, path traversal injection, query dropping, etc.).
 - **`ui.go`**: Rich terminal dashboard rendering, ASCII progress bars, and run reporting.
+- **`webui.go`**: Embedded live web dashboard (`-web-ui`/`-web-ui-port`) as a browser-based alternative to the terminal UI.
 - **`utils.go`**: General string manipulation, byte arrays, path parsers, and generic mathematical helpers.
 - **`main.go`**: CLI flags parsing, configuration validation, and application bootstrap entry point.
 
