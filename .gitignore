@@ -105,9 +105,13 @@ btcpayserver_prep/
 simplcommerce_prep/
 simplcommerce/
 nopCommerce/
-bitwarden_src/
-bitwarden_scratch*/
 esh/
+
+# Bitwarden checkouts: general pattern, not a fixed list of names -- the QUICKSTART/
+# RUNBOOK docs' own recommended clone directory has already changed once
+# (bitwarden_src -> bitwarden_fresh) and *_prep/ above only catches the instrumented
+# copy, not the raw checkout itself.
+bitwarden_*/
 
 # NOTE: examples/ is intentionally NOT ignored -- it holds small, hand-written,
 # per-target helper scripts (examples/<target>/*.py) that QUICKSTART_*.md docs

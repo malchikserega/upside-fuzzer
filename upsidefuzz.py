@@ -169,6 +169,8 @@ def cmd_instrument(args: argparse.Namespace) -> None:
         cmd += ["--main", args.main]
     if args.exclude_namespaces:
         cmd += ["--exclude-namespaces", args.exclude_namespaces]
+    if args.no_compose:
+        cmd += ["--no-compose"]
     _run(cmd)
 
 
@@ -356,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--main", help="Force the main web API project name")
     sp.add_argument("--exclude-namespaces", help="Comma-separated namespaces to exclude")
     sp.add_argument("--inject-mode", choices=["hook", "source"], default="hook")
+    sp.add_argument(
+        "--no-compose", action="store_true",
+        help="Skip generating docker-compose.instrumented.yml when --src has no compose "
+             "file of its own; writes COMPOSE_REQUIREMENTS.md instead. No effect when "
+             "--src already has a compose file. Use for multi-service targets -- see "
+             "docs/BITWARDEN_FUZZ_RUNBOOK.md.",
+    )
     sp.set_defaults(func=cmd_instrument)
 
     sp = sub.add_parser("build", help="docker compose build the instrumented image")

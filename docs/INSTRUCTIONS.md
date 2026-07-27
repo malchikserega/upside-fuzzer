@@ -158,6 +158,7 @@ python3 /path/to/upside-fuzzer/fuzz-prep-multi.py \
 | `--out` | Output directory for the instrumented copy |
 | `--main` | Web API project name (required for multi-project solutions) |
 | `--inject-mode` | `hook` (default, zero-edit) or `source` (legacy source editing). See below. |
+| `--no-compose` | Only matters when `--src` has **no** compose file of its own (see below). Skips generating a single-service `docker-compose.instrumented.yml` and writes `COMPOSE_REQUIREMENTS.md` instead. |
 
 ### Injection mode (`--inject-mode`)
 
@@ -222,11 +223,18 @@ python3 fuzz-prep-multi.py \
 7. **Adapts** original Dockerfile with 2 injected build stages:
    - `instrumentor-build` — compiles the SharpFuzz instrumentor tool and copies config
    - `instrumentation` — rewrites DLL IL in-place
-7. **Adapts** original `docker-compose.yml`:
-   - Adds `/dev/shm:/dev/shm` volume mount
-   - Adds `coverage_shm` tmpfs volume
-   - Adds `ASPNETCORE_ENVIRONMENT=Development`
-   - Adds commented-out `void` sidecar block
+7. **Compose file** — two cases:
+   - **`--src` already has a `compose.yaml`/`docker-compose.yml`**: adapted in place, always,
+     regardless of `--no-compose` (that flag has no effect here). Adds `/dev/shm:/dev/shm` +
+     `coverage_shm` volume mounts, `coverage_shm` tmpfs volume, `ASPNETCORE_ENVIRONMENT=Development`,
+     and a commented-out `void` sidecar block.
+   - **No compose file found** (true for many multi-service targets — Bitwarden's own repo has
+     none at its root): generates a **single-service** `docker-compose.instrumented.yml` covering
+     only the instrumented service — fine for a genuinely single-service target, but if the real
+     target needs a DB/auth-server/etc. too, this file just gets thrown away. Pass `--no-compose`
+     to skip generating it and get `COMPOSE_REQUIREMENTS.md` instead, spelling out exactly what a
+     hand-written compose file needs (Dockerfile path, the two volume mounts, the tmpfs volume
+     definition). See `docs/BITWARDEN_FUZZ_RUNBOOK.md` §2 for a complete worked example.
 8. **Patches** `.csproj` files: adds `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` and `SharpFuzz` package reference
 9. Injects into `Program.cs`: `CoverageExtensions.Initialize()`, `UseCoverageMiddleware()`, `AddCoverageEndpoints()`
 

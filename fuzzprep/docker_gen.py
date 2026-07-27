@@ -12,7 +12,12 @@ from .models import MultiAnalysisResult
 from .detect import _detect_last_stage, _detect_publish_dir, _detect_source_stage, _strip_publish_single_file
 
 
-def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path, inject_mode: str = "hook"):
+def generate_multi_docker_configs(
+    result: MultiAnalysisResult,
+    output_path: Path,
+    inject_mode: str = "hook",
+    write_compose: bool = True,
+):
     """Adapt original Dockerfile if present, or generate from scratch.
 
     inject_mode:
@@ -21,6 +26,18 @@ def generate_multi_docker_configs(result: MultiAnalysisResult, output_path: Path
                  runtime image, and wire DOTNET_STARTUP_HOOKS +
                  ASPNETCORE_HOSTINGSTARTUPASSEMBLIES via ENV. No app source edits.
       'source' — legacy: coverage lives in CoverageExtensions.cs injected into the app.
+
+    write_compose:
+      When an original compose file exists in the target, it is always adapted in
+      place regardless of this flag (that path is reliable for any service count).
+      This flag only gates the OTHER case: no original compose file was found at
+      all. True (default) writes a single-service docker-compose.instrumented.yml,
+      which is only ever correct for a genuinely single-service target -- multi-
+      service targets (a DB, an auth server, ...) need a hand-written compose file
+      anyway, so generating one here is often just a file that gets thrown away
+      (see docs/BITWARDEN_FUZZ_RUNBOOK.md for a worked example). False skips writing
+      it and instead writes COMPOSE_REQUIREMENTS.md, documenting exactly what a
+      hand-written compose file must include.
     """
 
     main_proj = next((p for p in result.projects if p.name == result.main_project), result.projects[0])
@@ -473,19 +490,20 @@ ENTRYPOINT ["dotnet", "{main_proj.name}.dll"]
         original_compose.write_text(compose_content)
         print("  Adapted original compose with /dev/shm + coverage_shm volumes.")
     else:
-        # Real bug, hit twice in practice (Bitwarden, btcpay-style multi-service
-        # layouts): this branch used to hardcode `dockerfile: Dockerfile`, assuming
-        # the build's Dockerfile always lives at the context root. That's only true
-        # when NO original Dockerfile was found either (the "generate from scratch"
-        # branch above then writes a fresh one to output_path/Dockerfile). When an
-        # original Dockerfile WAS found, it's adapted **in place** at its real
-        # location (e.g. src/Api/Dockerfile) -- never moved to root -- so a compose
-        # file generated here (no original compose existed) must reference that
-        # same real, possibly-nested path, not assume root.
+        # This branch used to hardcode `dockerfile: Dockerfile`, assuming the build's
+        # Dockerfile always lives at the context root. That's only true when NO
+        # original Dockerfile was found either (the "generate from scratch" branch
+        # above then writes a fresh one to output_path/Dockerfile). When an original
+        # Dockerfile WAS found, it's adapted **in place** at its real location (e.g.
+        # src/Api/Dockerfile) -- never moved to root -- so a compose file generated
+        # here (no original compose existed) must reference that same real,
+        # possibly-nested path, not assume root. Fixed 2026-07-25.
         compose_dockerfile_path = (
             str(original_dockerfile.relative_to(output_path)) if original_dockerfile else "Dockerfile"
         )
-        docker_compose_content = f"""services:
+
+        if write_compose:
+            docker_compose_content = f"""services:
   instrumented:
     build:
       context: .
@@ -520,6 +538,85 @@ volumes:
       device: tmpfs
       o: size=4m
 """
-        (output_path / "docker-compose.instrumented.yml").write_text(docker_compose_content)
-        print("  Generated compose file from scratch.")
+            (output_path / "docker-compose.instrumented.yml").write_text(docker_compose_content)
+            print("  Generated compose file from scratch.")
+        else:
+            requirements_content = f"""# Compose requirements for this target
+
+No original compose file was found in `--src`, and `--no-compose` was passed, so
+`fuzz-prep-multi.py` did **not** generate `docker-compose.instrumented.yml`. Write your
+own compose file (any name `docker compose` auto-discovers: `docker-compose.yml` or
+`compose.yaml`) covering whatever this target actually needs (a database, an auth
+server, a data-seeding tool, ...) and give the **one service that runs the instrumented
+Dockerfile below** exactly these four things. Nothing else here is generated or
+required for any other service in your stack.
+
+## 1. Point `build` at the adapted Dockerfile
+
+The Dockerfile below was adapted **in place** at its original location -- never moved to
+the compose-file's own directory root:
+
+```yaml
+    build:
+      context: .
+      dockerfile: {compose_dockerfile_path}
+```
+
+## 2. Mount the coverage shared-memory volume
+
+Both mounts are required. `/dev/shm` is where SharpFuzz's own SHM primitives live;
+`coverage_shm` is the bitmap the fuzzer engine reads from (HTTP polling or a
+direct-mmap sidecar, see `void/README.md`):
+
+```yaml
+    volumes:
+      - /dev/shm:/dev/shm
+      - coverage_shm:/coverage_shm
+```
+
+...and define the named volume once, top-level, in the same compose file:
+
+```yaml
+volumes:
+  coverage_shm:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4m
+```
+
+## 3. Recommended: ASPNETCORE_ENVIRONMENT=Development
+
+Not strictly required for coverage to work, but recommended -- Development mode is
+what makes ASP.NET Core return full exception detail (type, message, stack trace) in
+5xx response bodies instead of a generic error page, which is what the crash triage/
+clustering pipeline uses to produce a real bug label instead of just a status code:
+
+```yaml
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+```
+
+## 4. Optional: a `void` sidecar for direct-shm mode
+
+Only needed if you want the fuzzer to read the coverage bitmap via a direct mmap of
+the `coverage_shm` volume (faster than HTTP polling) instead of running `void` on the
+host. See Mode B in `docs/QUICKSTART_BITWARDEN.md` for a complete, working example --
+copy its `smartfuzzer`/`seeder`-style service block rather than re-deriving it.
+
+## Multi-service targets: nothing above applies to your other services
+
+The four items above apply **only** to the one service built from the Dockerfile this
+tool adapted. A database, auth/identity server, migration job, or data-seeding tool
+needs none of this -- configure them exactly as the target's own real deployment
+requires. `docs/BITWARDEN_FUZZ_RUNBOOK.md` Step 2 is a complete, real, verified
+multi-service compose file (mssql + migrator + api + identity + a data seeder) built
+from exactly this template -- read it end-to-end before writing your own from scratch,
+even for a different target; the shape (one instrumented service, N supporting
+services with ordinary `depends_on`/healthcheck wiring) generalizes directly.
+"""
+            (output_path / "COMPOSE_REQUIREMENTS.md").write_text(requirements_content)
+            print("  --no-compose: skipped generating docker-compose.instrumented.yml.")
+            print(f"  Wrote {output_path / 'COMPOSE_REQUIREMENTS.md'} -- see it for what your own compose file needs.")
 

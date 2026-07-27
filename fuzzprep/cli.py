@@ -27,6 +27,19 @@ def main() -> int:
     parser.add_argument('--main', help='Force the main web API project name (e.g. PublicApi)', default=None)
     parser.add_argument('--exclude-namespaces', help='Comma-separated list of namespaces to EXCLUDE from instrumentation (e.g. Bit.Core.Utilities)', default="")
     parser.add_argument(
+        '--no-compose',
+        action='store_true',
+        help=(
+            "When no original compose file exists in --src, skip generating "
+            "docker-compose.instrumented.yml and write COMPOSE_REQUIREMENTS.md instead "
+            "(what a hand-written compose file needs). Has no effect when --src already "
+            "has a compose file -- that one is always adapted in place either way. Use "
+            "this for multi-service targets (a DB, an auth server, ...) where the "
+            "auto-generated single-service file would just get thrown away -- see "
+            "docs/BITWARDEN_FUZZ_RUNBOOK.md for a worked example."
+        ),
+    )
+    parser.add_argument(
         '--inject-mode',
         choices=['hook', 'source'],
         default='hook',
@@ -55,7 +68,7 @@ def main() -> int:
             # Legacy path: edit the target's Program.cs/Startup.cs and app csprojs.
             patch_all_csprojs(out_path)
             generate_unified_instrumentor(result, out_path)
-            generate_multi_docker_configs(result, out_path, inject_mode='source')
+            generate_multi_docker_configs(result, out_path, inject_mode='source', write_compose=not args.no_compose)
             generate_multi_coverage_helper(result, out_path)
             inject_multi_shm_endpoints(result, out_path)
         else:
@@ -65,7 +78,7 @@ def main() -> int:
             # loaded at process start and links SharpFuzz coverage (including lazily
             # loaded assemblies) via an AppDomain.AssemblyLoad handler.
             generate_unified_instrumentor(result, out_path)
-            generate_multi_docker_configs(result, out_path, inject_mode='hook')
+            generate_multi_docker_configs(result, out_path, inject_mode='hook', write_compose=not args.no_compose)
             generate_startup_hook_assembly(result, out_path)
         generate_coverage_smoke_test(result, out_path)
 

@@ -15,6 +15,27 @@ end-to-end below.
 > assume anything below is still true without re-checking the two things called out in
 > Step 1** — that single check would have caught both changes immediately.
 
+> **Re-verified end-to-end from a completely fresh clone on 2026-07-26** (same repo
+> shape as the 2026-07-25 pass: .NET 10, `/specs/internal/swagger.json`) — every step
+> below, in order, with zero deviation from the documented commands: clone → instrument
+> (22 projects, `--instrument-all-user-code` auto-selected) → hand-written compose build
+> → `verify-hook.sh` (8/8 pass, 6154 instrumented types) → `SeederApi` population (2
+> users, 1 org, folders, ciphers) → grammar compile (`operations=599 templates=603
+> roslyn_matched_types=286 dict_keys=855` — byte-for-byte identical to 2026-07-25) →
+> `dict.custom.json` merge → 15-minute fuzz run. Result: 184,333 requests, 223,091
+> coverage edges, 148 raw crashes collapsing to 44 distinct root causes (source-attributed
+> `confirmed_unhandled_exception` clusters point at real, previously-unknown NREs and an
+> unhandled duplicate-key `SqlException` in `Bit.Api.Controllers.DevicesController.Post`
+> — reproduced independently via the generated PoC script), plus one recurring
+> `likely_vuln_high sqli_time_based` on `DELETE /accounts` matching prior runs. Two real,
+> stale doc claims were found and fixed as part of this pass — Step 2's "known bug" note
+> below (the underlying `fuzz-prep-multi.py`/`fuzzprep` bug it described was already fixed
+> 2026-07-25, hours after this file was first written) and `QUICKSTART_BITWARDEN.md`'s
+> `PROBE=/api/accounts/profile` (this API has no `/api/` prefix on any route; the real
+> path is `/accounts/profile` — confirmed against the live swagger spec). No other
+> deviation from this document was found; every other command, script, and number below
+> is exactly what ran.
+
 ---
 
 ## 0. Prerequisites
@@ -55,14 +76,18 @@ framework denylist), `--cmplog` appended automatically (hook mode only).
 
 ---
 
-## 2. Fix the generated compose file (same known bug, every time)
+## 2. Write the compose file (single-service auto-generated one isn't enough for Bitwarden)
 
-`fuzz-prep-multi.py` finds `src/Api/Dockerfile`, adapts it in place, but — when no
-original compose file exists in the repo (true for a stock Bitwarden checkout) — **generates
-a compose file that references a root-level `Dockerfile` that doesn't exist.** The real
-one lives at `src/Api/Dockerfile`. This is a real, still-unfixed bug in the tool
-(`fuzz-prep-multi.py`'s compose-generation path); the workaround is to hand-write the
-compose file. Use this as a template — it's the exact one verified working 2026-07-25,
+`fuzz-prep-multi.py` finds `src/Api/Dockerfile`, adapts it in place, and — when no
+original compose file exists in the repo (true for a stock Bitwarden checkout) — generates
+a **single-service** compose file (`instrumented:`, `dockerfile: src/Api/Dockerfile`,
+correctly pointing at the real, possibly-nested Dockerfile path — the older
+`dockerfile: Dockerfile`-at-root bug this section used to describe was fixed
+2026-07-25, see `fuzzprep/docker_gen.py`'s comment at the relevant branch). It still only
+covers the API service, though — Bitwarden needs the full stack (DB, migrator, Identity,
+data seeder), which the generator has no way to know about. Hand-write the compose file
+instead. Use this as a template — it's the exact one re-verified end-to-end on
+2026-07-26 against a fresh clone (net10.0, same repo shape as 2026-07-25),
 with MSSQL, migrator, API, Identity, and the SeederApi data tool:
 
 ```yaml
@@ -349,7 +374,7 @@ d = json.load(open('summary.json'))['triage_summary'] if False else __import__('
 
 | Symptom | Cause / Fix |
 |---|---|
-| **New, 2026-07-25**: `docker-compose.instrumented.yml` build fails, or the compose file references a `Dockerfile` that doesn't exist at repo root | Known `fuzz-prep-multi.py` bug — see Step 2. Hand-write the compose file using the template above. |
+| `docker compose build` fails because Bitwarden needs the full stack (DB, migrator, Identity, seeder), not just the API | Expected — `fuzz-prep-multi.py`'s auto-generated compose only ever covers the single instrumented service. Hand-write the compose file using the template above (see Step 2). |
 | **New, 2026-07-25**: `seeder` container: `Unable to load shared library '/app/runtimes/.../libsdk.so'` | Two stacked bugs in `util/SeederApi`/`util/RustSdk` (Bitwarden's own code, not this project's): (1) `util/SeederApi/Dockerfile` sets `CARGO_TARGET_DIR=/tmp/cargo_target`, which silently breaks `RustSdk.csproj`'s hardcoded `Content Include="./rust/target/release/libsdk*.so"` glob — **remove that `export CARGO_TARGET_DIR=...` line** from the Dockerfile. (2) `RustSdk.csproj` has `Content`/`Link` entries only for `linux-x64`/`osx-arm64`/`windows-x64` — no `linux-arm64`. On an arm64 Docker host (Apple Silicon), Rust always compiles for the *builder's* native arch (`--platform=$BUILDPLATFORM` in the Dockerfile, and `cargo build --release` in `RustSdk.csproj`'s `PreBuild` target never passes `--target`), so **forcing `platform: linux/amd64` in compose does NOT fix this** — it just makes the mismatch worse (x64 RID directory, arm64 binary inside it). The actual fix: change both `<Link>runtimes/linux-x64/native/libsdk.so</Link>` entries in `RustSdk.csproj` to `runtimes/linux-arm64/native/libsdk.so`, and build without a platform override. |
 | **New, 2026-07-25**: `POST /seed` → `401 Unauthorized` | `util/SeederApi` requires HTTP Basic Auth (`seederSettings__Username`/`Password` env vars) — not documented as required in its own README's curl examples. Add both env vars to the `seeder` service and pass `Authorization: Basic ...` on every request. |
 | **New, 2026-07-25**: `POST /connect/token` → `400 version_header_missing` | Identity now requires a `Bitwarden-Client-Version` header on token requests (didn't in earlier checkouts). Add `Bitwarden-Client-Version: 2026.7.1` (any plausible version string) to the request. |
@@ -365,6 +390,13 @@ d = json.load(open('summary.json'))['triage_summary'] if False else __import__('
 
 ## Changelog (condensed — see git history for full detail)
 
+- **2026-07-26**: Fresh-clone-to-15-minute-fuzz-run re-verification pass, zero deviation
+  from the documented procedure (see the callout near the top of this file for the full
+  numbers). Fixed two stale doc claims found during this pass: Step 2's "known,
+  still-unfixed `fuzz-prep-multi.py` bug" note (the underlying compose-generation bug
+  was actually fixed 2026-07-25, this file just never caught up — see `fuzzprep/docker_gen.py`)
+  and `QUICKSTART_BITWARDEN.md`'s `verify-hook.sh` probe path (`/api/accounts/profile` →
+  `/accounts/profile` — this API has no `/api/` prefix on any route).
 - **2026-07-25**: Full rewrite after a genuine fresh-clone-to-1-hour-fuzz-run
   end-to-end pass. Switched to `util/SeederApi` for data population (was
   `examples/bitwarden/populate_data.py`). Target moved .NET 8 → .NET 10. Swagger route

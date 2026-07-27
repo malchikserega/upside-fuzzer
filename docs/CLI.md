@@ -68,7 +68,14 @@ upsidefuzz instrument --src ./MyProject/src --out ./my-project-fuzz --main MyPro
 ```
 
 Same flags as `fuzz-prep-multi.py --help` (`--exclude-namespaces`, `--inject-mode
-hook|source`). See [INSTRUCTIONS.md §3](INSTRUCTIONS.md#3-step-1-instrument-the-project).
+hook|source`, `--no-compose`). See [INSTRUCTIONS.md §3](INSTRUCTIONS.md#3-step-1-instrument-the-project).
+
+`--no-compose` only matters for a target with no compose file of its own (many
+multi-service targets, e.g. Bitwarden): instead of a single-service
+`docker-compose.instrumented.yml` that would just get thrown away, `--out` gets a
+`COMPOSE_REQUIREMENTS.md` spelling out what your own hand-written compose file needs.
+Not available on `run` — that subcommand builds/starts the stack immediately after
+instrumenting, which needs a compose file to already exist.
 
 ### `build` / `up` / `down`
 

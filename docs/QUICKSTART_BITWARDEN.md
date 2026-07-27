@@ -281,7 +281,7 @@ actually used to validate this exact run:
 
 ```bash
 cd ..  # repo root
-BASE_URL=http://localhost:4000 PROBE=/api/accounts/profile ./verify-hook.sh
+BASE_URL=http://localhost:4000 PROBE=/accounts/profile ./verify-hook.sh
 # → ALL CHECKS PASSED (8 ok) — zero-edit hook instrumentation + bucketed coverage verified.
 ```
 
@@ -661,7 +661,7 @@ then hand their output to the CLI subcommands:
 upsidefuzz instrument --src ./bitwarden_src --out ./bitwarden_prep --main src/Api
 
 # Step 3's bring-up stays manual (the multi-stage dependency chain above) -- then verify:
-upsidefuzz verify --base http://localhost:4000 --probe /api/accounts/profile
+upsidefuzz verify --base http://localhost:4000 --probe /accounts/profile
 
 # Steps 4-6 (get_apikey.py, auth identity file, DB population) stay manual -- see above.
 
