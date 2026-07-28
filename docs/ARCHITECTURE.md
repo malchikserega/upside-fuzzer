@@ -803,6 +803,18 @@ See `docs/resource-state-graph-plan.md` for the full design rationale and
 7-body corpus, the old pipeline found 1 candidate total; the new pipeline
 found 11).
 
+**Value substitution is graph-aware, not just consumer scheduling** (2026-07-28
+follow-up): `pickFollowupPathValue` prefers a resource-graph-tracked, still-alive
+instance of the consumer's expected resource type over the old id-name-centric
+extraction's first hit when filling a follow-up's path placeholder; body/query
+fields get the same treatment via `pickCustomPayloadValueGraphBiased`
+(`-resource-graph-value-bias-weight`). Previously the graph only influenced
+*which* consumer template got called next, never *which concrete value* was
+plugged into it — see `docs/resource-state-graph-report.md`'s "Follow-up pass"
+section for the live-run findings that surfaced this and the four related
+fixes (dedup real-ID preference, a lowered persistence bar for genuine chains,
+crash-to-sequence linkage, and stop-reason counters).
+
 ### Self-verifying, fail-closed instrumentation (Top-20 #4)
 
 `coverage.go::checkCoverageHealth` runs once, right after templates are loaded

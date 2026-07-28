@@ -29,12 +29,13 @@ func newCrashTestFuzzer(t *testing.T) *Fuzzer {
 			PocDir:           "",
 			TimelineDir:      "",
 		},
-		crashWriter:     crashW,
-		uniqueWriter:    uniqW,
-		uniqueCrashKeys: map[string]struct{}{},
-		crashBoost:      map[string]int{},
-		crashBoostCount: map[string]int{},
-		startTime:       time.Now(),
+		crashWriter:       crashW,
+		uniqueWriter:      uniqW,
+		uniqueCrashKeys:   map[string]struct{}{},
+		crashesBySequence: map[string][]string{},
+		crashBoost:        map[string]int{},
+		crashBoostCount:   map[string]int{},
+		startTime:         time.Now(),
 	}
 }
 
@@ -198,5 +199,70 @@ func TestExtractExceptionTypeParsesDotNetExceptionNames(t *testing.T) {
 		if got != want {
 			t.Errorf("extractExceptionType(%q) = %q, want %q", body, got, want)
 		}
+	}
+}
+
+// TestRecordCrash_LinksToOriginatingSequence verifies item #4 (docs/
+// resource-state-graph-report.md): a crash on a sequence-engine follow-up
+// request gets both a populated CrashRecord.SequenceID and an entry in
+// f.crashesBySequence keyed by that sequence ID, indexed by root-cause
+// cluster key (not raw signature) so it lines up with the run's own
+// distinct_root_causes accounting.
+func TestRecordCrash_LinksToOriginatingSequence(t *testing.T) {
+	f := newCrashTestFuzzer(t)
+	res := SendResult{
+		Item: WorkItem{
+			TemplateID:    1,
+			Method:        "PUT",
+			Path:          "/widgets/1",
+			MutationLabel: "seq(d1:GET /widgets->PUT)",
+			MutationName:  "sequence",
+			SeqState:      &SequenceState{ID: "seq-linked-1"},
+		},
+		Status:        500,
+		ExceptionType: "NullReferenceException",
+		Body:          "boom",
+	}
+
+	f.recordCrash(res)
+
+	keys, ok := f.crashesBySequence["seq-linked-1"]
+	if !ok || len(keys) != 1 {
+		t.Fatalf("expected exactly 1 cluster key linked to seq-linked-1, got %v", keys)
+	}
+}
+
+func TestRecordCrash_NoSequenceStateLeavesNoLinkage(t *testing.T) {
+	f := newCrashTestFuzzer(t)
+	res := mkCrashResult("GET", "/items/1", 500, "NullReferenceException", "boom")
+
+	f.recordCrash(res)
+
+	if len(f.crashesBySequence) != 0 {
+		t.Fatalf("expected no crashesBySequence entries for a non-sequence crash, got %v", f.crashesBySequence)
+	}
+}
+
+func TestRecordCrash_SequenceIDDeduplicatesRepeatedClusterKey(t *testing.T) {
+	// Two crashes from the SAME sequence with the SAME root-cause cluster
+	// (same method/status/exception-type/normalized-path) must not duplicate
+	// the cluster key in crashesBySequence.
+	f := newCrashTestFuzzer(t)
+	seqState := &SequenceState{ID: "seq-repeat"}
+	mk := func() SendResult {
+		return SendResult{
+			Item: WorkItem{
+				TemplateID: 1, Method: "PUT", Path: "/widgets/1",
+				MutationLabel: "seq(d1:GET /widgets->PUT)", MutationName: "sequence",
+				SeqState: seqState,
+			},
+			Status: 500, ExceptionType: "NullReferenceException", Body: "boom",
+		}
+	}
+	f.recordCrash(mk())
+	f.recordCrash(mk())
+
+	if len(f.crashesBySequence["seq-repeat"]) != 1 {
+		t.Fatalf("expected exactly 1 deduplicated cluster key, got %v", f.crashesBySequence["seq-repeat"])
 	}
 }

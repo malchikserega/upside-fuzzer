@@ -23,6 +23,30 @@ import (
 // ordinary coverage-driven energy.
 const stateNoveltyBonus = 5.0
 
+// pickFollowupPathValue chooses the concrete value to substitute into a
+// follow-up template's remaining path placeholder(s) (item #2, docs/
+// resource-state-graph-report.md). It prefers a resource-graph-tracked,
+// still-alive instance of the consumer's expected resource type over
+// entityIDs[0] (the old id-name-centric extraction's first hit) -- previously
+// this substitution ALWAYS used entityIDs[0] regardless of what the richer
+// resource-graph pipeline had extracted for this exact step, so the graph
+// only ever influenced *which* consumer template got scheduled
+// (rankConsumersCoverageDirected), never *which concrete value* was plugged
+// into it. Returns ok=false if neither source has anything to offer.
+func (f *Fuzzer) pickFollowupPathValue(tid int, entityIDs []string) (value string, fromGraph bool, ok bool) {
+	if f.cfg.ResourceGraphEnabled {
+		if rt := resourceTypeFromEndpointPath(f.meta[tid].Norm); rt != "" {
+			if compat := f.resourceGraph.findCompatibleResources(rt, LifecycleCreated, LifecycleReadable, LifecycleModified); len(compat) > 0 {
+				return compat[0].Canonical.RawValue, true, true
+			}
+		}
+	}
+	if len(entityIDs) > 0 {
+		return entityIDs[0], false, true
+	}
+	return "", false, false
+}
+
 func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	source := res.Item
 	if f.cfg.ResourceGraphEnabled {
@@ -32,6 +56,7 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		f.resourceGraph.markConsumerResult(source.TemplateID, res.Status >= 400)
 	}
 	if source.SeqDepth >= maxInt(1, f.cfg.SequenceMaxDepth) {
+		f.seqStopMaxDepth++
 		f.maybePersistSequence(res)
 		return 0
 	}
@@ -131,6 +156,7 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 
 	// If the step failed (4xx/5xx), we might still persist if we reached depth, but we don't branch further
 	if res.Status >= 400 {
+		f.seqStopFailedStep++
 		f.maybePersistSequence(res)
 		return 0
 	}
@@ -138,12 +164,14 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	if len(producedDeps) == 0 && len(entityIDs) == 0 {
 		meta := f.meta[source.TemplateID]
 		if meta.Method != "POST" && meta.Method != "PUT" && meta.Method != "PATCH" {
+			f.seqStopNoProducedValue++
 			return 0
 		}
 	}
 
 	followups := f.findFollowups(source.TemplateID, source.Method, normalizePath(source.Path), producedDeps, producedIDKeys)
 	if len(followups) == 0 {
+		f.seqStopNoFollowupCandidate++
 		f.maybePersistSequence(res)
 		return 0
 	}
@@ -210,8 +238,22 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 				}
 			}
 		}
-		if !usedStaleExploration && len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
-			item.Path = rePathParam.ReplaceAllString(item.Path, entityIDs[0])
+		// Item #2 (docs/resource-state-graph-report.md): prefer a resource-graph-
+		// tracked, still-alive instance of the consumer's expected resource type
+		// over entityIDs[0] (the old id-name-centric extraction's first hit).
+		// Previously this substitution ALWAYS used entityIDs[0] regardless of
+		// what the richer resource-graph pipeline had extracted for this exact
+		// step -- the graph only ever influenced *which* consumer template got
+		// scheduled (rankConsumersCoverageDirected), never *which concrete value*
+		// was plugged into it. That gap is why real-ID chains were rare even
+		// when the graph had a perfectly good GUID on hand: the substitution
+		// simply never looked at it.
+		usedGraphValue := false
+		if !usedStaleExploration && strings.Contains(item.Path, "{") {
+			if value, fromGraph, ok := f.pickFollowupPathValue(tid, entityIDs); ok {
+				item.Path = rePathParam.ReplaceAllString(item.Path, value)
+				usedGraphValue = fromGraph
+			}
 		}
 
 		item.SeqDepth = nextState.Depth
@@ -225,6 +267,9 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		}
 		if usedStaleExploration {
 			seqLabel += "+explore_stale"
+		}
+		if usedGraphValue {
+			seqLabel += "+graph_id"
 		}
 		item.MutationLabel = seqLabel
 		item.MutationName = "sequence"
@@ -241,6 +286,7 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	}
 
 	if enqueued == 0 {
+		f.seqStopRenderFailed++
 		f.maybePersistSequence(res)
 	}
 
@@ -346,7 +392,22 @@ func (f *Fuzzer) recordResourceGraphStep(source WorkItem, res SendResult, seqID,
 
 func (f *Fuzzer) maybePersistSequence(res SendResult) {
 	state := res.Item.SeqState
-	if state == nil || state.Depth < 2 { // Depth is 0-indexed, so 2 means length 3
+	if state == nil {
+		return
+	}
+
+	// Item #3 (docs/resource-state-graph-report.md): a sequence that hasn't
+	// reached the full configured depth is normally invisible to persistence
+	// entirely -- the depth<2 gate below -- even when its own resource graph
+	// shows a genuine real-ID producer->consumer chain, the single most
+	// useful signal this feature can produce. Bypass the depth gate
+	// specifically for that case (state.Depth>=1 means at least 2 steps,
+	// the minimum a producer->consumer pair requires); every other kind of
+	// shallow sequence is still gated by depth exactly as before, so this
+	// doesn't flood disk with generic 2-step attempts that have nothing
+	// resource-graph-interesting to show.
+	hasRealIDChain := f.cfg.ResourceGraphEnabled && state.Depth >= 1 && f.sequenceHasRealIDChain(state)
+	if state.Depth < 2 && !hasRealIDChain { // Depth is 0-indexed, so 2 means length 3
 		return
 	}
 
@@ -361,8 +422,8 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 
 	// Benchmark event stream (BENCHMARK_PLAN.md §12 sequence_event.jsonl, a
 	// no-op unless -event-log was passed): every sequence that reached this
-	// terminal point (depth>=2) is logged here, regardless of whether it goes
-	// on to be persisted to disk below -- "sequences attempted" needs the full
+	// terminal point is logged here, regardless of whether it goes on to be
+	// persisted to disk below -- "sequences attempted" needs the full
 	// population, not just the successful subset.
 	f.logSequenceEvent(state, successRatio >= 0.5)
 
@@ -377,27 +438,66 @@ func (f *Fuzzer) maybePersistSequence(res SendResult) {
 
 	// Dedup by final workflow shape (Top-20 #12): many sequences reach the exact
 	// same (method,normpath,status-class) shape via different concrete IDs/values
-	// -- those are equivalent workflows for reporting purposes, so only the first
-	// one is persisted to disk. Addresses docs/ARCHITECTURE_REVIEW.md §5 weakness #3
-	// ("no dedup of equivalent workflows").
+	// -- those are equivalent workflows for reporting purposes, so only one
+	// exemplar is kept on disk per shape. Addresses docs/ARCHITECTURE_REVIEW.md §5
+	// weakness #3 ("no dedup of equivalent workflows").
+	//
+	// Item #1 (docs/resource-state-graph-report.md): the kept exemplar is no
+	// longer strictly "whichever arrived first" -- if a later occurrence of the
+	// same shape carries genuine real-ID provenance and the currently-persisted
+	// exemplar doesn't, the later one replaces it on disk. This directly
+	// improves what a reader inspecting crashes/workflows/ actually sees,
+	// without persisting more files overall (still exactly one exemplar per
+	// shape) and without changing scheduling or any other behavior.
 	sig := sequenceStateSignature(state)
-	if _, dup := f.persistedWorkflowSigs[sig]; dup {
+	if existing, dup := f.persistedWorkflowExemplars[sig]; dup {
+		f.dedupDuplicateRejected++
+		if hasRealIDChain {
+			f.dedupRealIDChainRejected++
+			if !existing.hasRealIDChain {
+				f.replacePersistedWorkflow(existing, state)
+				f.persistedWorkflowExemplars[sig] = persistedExemplar{seqID: state.ID, depth: state.Depth, hasRealIDChain: true}
+				f.dedupRealIDChainUpgrades++
+			}
+		}
 		return
 	}
-	f.persistedWorkflowSigs[sig] = struct{}{}
+	f.persistedWorkflowExemplars[sig] = persistedExemplar{seqID: state.ID, depth: state.Depth, hasRealIDChain: hasRealIDChain}
 
 	// Save to disk
 	f.persistWorkflow(state)
 	f.workflowsPersisted++
 }
 
+// persistedExemplar tracks which sequence is currently the on-disk exemplar
+// for a given workflow shape signature (sequenceStateSignature), so a later
+// sequence reaching the same shape with genuine real-ID chain provenance can
+// replace a weaker (e.g. placeholder-value) earlier exemplar instead of being
+// silently discarded -- see maybePersistSequence's dedup-upgrade path (item #1).
+type persistedExemplar struct {
+	seqID          string
+	depth          int
+	hasRealIDChain bool
+}
+
+// replacePersistedWorkflow removes the on-disk exemplar for a shape (an
+// earlier, weaker-provenance sequence) and persists the new, real-ID-backed
+// one in its place.
+func (f *Fuzzer) replacePersistedWorkflow(old persistedExemplar, newState *SequenceState) {
+	oldJSON, oldSH := f.workflowFilePaths(old.depth, old.seqID)
+	_ = os.Remove(oldJSON)
+	_ = os.Remove(oldSH)
+	f.persistWorkflow(newState)
+}
+
 // logSequenceEvent appends one row to sequence_event.jsonl (BENCHMARK_PLAN.md
 // §12), a no-op unless -event-log was passed. new_coverage reports
 // state.Energy as the closest available proxy -- it blends real coverage
 // gain with the state-novelty bonus (Top-20 #12, stateNoveltyBonus), not a
-// pure edge count; produced_bug_id is left empty, since this codebase has no
-// mechanism today correlating a specific crash/finding back to the sequence
-// that produced it (a genuine gap, not silently faked here).
+// pure edge count; produced_bug_id is a comma-joined list of root-cause
+// cluster keys crash.go's recordCrash recorded against this sequence ID
+// (item #4, docs/resource-state-graph-report.md) -- empty if none, not a
+// placeholder.
 func (f *Fuzzer) logSequenceEvent(state *SequenceState, successFlag bool) {
 	if f.sequenceEventWriter == nil {
 		return
@@ -410,6 +510,12 @@ func (f *Fuzzer) logSequenceEvent(state *SequenceState, successFlag bool) {
 			"status": step.Status,
 		})
 	}
+	// Item #4 (docs/resource-state-graph-report.md): produced_bug_id now
+	// reflects the root-cause cluster key(s) crash.go's recordCrash indexed
+	// under this sequence ID, if any -- previously always "" (see the removed
+	// comment above this function, which called that out as a genuine,
+	// undisguised gap rather than a silently-faked field).
+	producedBugID := strings.Join(f.crashesBySequence[state.ID], ",")
 	row := map[string]any{
 		"run_id":             f.cfg.RunID,
 		"ts":                 time.Now().Unix(),
@@ -420,7 +526,7 @@ func (f *Fuzzer) logSequenceEvent(state *SequenceState, successFlag bool) {
 		"harvested_entities": state.Values,
 		"success_flag":       successFlag,
 		"new_coverage":       state.Energy,
-		"produced_bug_id":    "",
+		"produced_bug_id":    producedBugID,
 	}
 	_ = f.sequenceEventWriter.Write(row)
 }
@@ -460,6 +566,56 @@ func statusClass(status int) int {
 	}
 }
 
+// sequenceHasRealIDChain reports whether this sequence's own resource-graph
+// snapshot shows a genuine producer(response)->consumer(later request) reuse
+// of a real, GUID-shaped identity value -- i.e. a value extracted from an
+// earlier step's response literally reappearing in a later step's request
+// path/body/headers. This is a diagnostic-only check (dedupRealIDChainRejected
+// in maybePersistSequence): it measures the ceiling on how many dedup-rejected
+// sequences would have upgraded the persisted exemplar for their shape if the
+// dedup tie-breaker preferred real-ID provenance over first-arrival. It never
+// affects scheduling, persistence, or any other behavior.
+func (f *Fuzzer) sequenceHasRealIDChain(state *SequenceState) bool {
+	resources, _ := f.resourceGraph.snapshotForSequence(state.ID)
+	if len(resources) == 0 {
+		return false
+	}
+	hist := state.History
+	for _, r := range resources {
+		rawVal := r.Canonical.RawValue
+		if !reUUIDLike.MatchString(rawVal) {
+			continue
+		}
+		producedAt := -1
+		for i, h := range hist {
+			if h.Method+" "+h.Path == r.SourceOperation {
+				producedAt = i
+				break
+			}
+		}
+		if producedAt < 0 {
+			continue
+		}
+		for j := producedAt + 1; j < len(hist); j++ {
+			headersJSON, _ := json.Marshal(hist[j].Headers)
+			haystack := hist[j].Path + " " + hist[j].Body + " " + string(headersJSON)
+			if strings.Contains(haystack, rawVal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// workflowFilePaths returns the on-disk paths persistWorkflow uses for a given
+// sequence (depth, ID) pair. Shared with replacePersistedWorkflow (item #1)
+// so an upgraded exemplar's old files can be located and removed.
+func (f *Fuzzer) workflowFilePaths(depth int, seqID string) (jsonPath, shPath string) {
+	outDir := filepath.Join(filepath.Dir(f.cfg.TimelineDir), "workflows")
+	fnameBase := fmt.Sprintf("workflow_d%d_%s", depth+1, seqID)
+	return filepath.Join(outDir, fnameBase+".json"), filepath.Join(outDir, fnameBase+".sh")
+}
+
 func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 	if f.cfg.TimelineDir == "" {
 		return
@@ -471,9 +627,7 @@ func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 		state.Resources, state.Transitions = f.resourceGraph.snapshotForSequence(state.ID)
 	}
 
-	fnameBase := fmt.Sprintf("workflow_d%d_%s", state.Depth+1, state.ID)
-	fpathJSON := filepath.Join(outDir, fnameBase+".json")
-	fpathSH := filepath.Join(outDir, fnameBase+".sh")
+	fpathJSON, fpathSH := f.workflowFilePaths(state.Depth, state.ID)
 
 	buf, err := json.MarshalIndent(state, "", "  ")
 	if err == nil {

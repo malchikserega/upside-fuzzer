@@ -66,11 +66,11 @@ func TestSequenceStateSignature(t *testing.T) {
 // right after computing the signature, without needing template rendering.
 func TestEnqueueSequenceFollowupsRewardsNewStateOnce(t *testing.T) {
 	f := &Fuzzer{
-		depIndex:              map[int]DepInfo{},
-		meta:                  map[int]TemplateMeta{},
-		seenStateSigs:         map[string]struct{}{},
-		persistedWorkflowSigs: map[string]struct{}{},
-		cfg:                   Config{SequenceMaxDepth: 3},
+		depIndex:                   map[int]DepInfo{},
+		meta:                       map[int]TemplateMeta{},
+		seenStateSigs:              map[string]struct{}{},
+		persistedWorkflowExemplars: map[string]persistedExemplar{},
+		cfg:                        Config{SequenceMaxDepth: 3},
 	}
 
 	mkRes := func() SendResult {
@@ -100,7 +100,7 @@ func TestEnqueueSequenceFollowupsRewardsNewStateOnce(t *testing.T) {
 // payloads) are only persisted once (Top-20 #12, closing the "no dedup of
 // equivalent workflows" gap in docs/ARCHITECTURE_REVIEW.md §5).
 func TestMaybePersistSequenceDedupsByFinalShape(t *testing.T) {
-	f := &Fuzzer{persistedWorkflowSigs: map[string]struct{}{}}
+	f := &Fuzzer{persistedWorkflowExemplars: map[string]persistedExemplar{}}
 
 	mkState := func(body string) *SequenceState {
 		return &SequenceState{

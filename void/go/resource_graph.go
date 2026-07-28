@@ -16,7 +16,7 @@ import (
 // mainLoop's own select -- i.e. always on the single main-loop goroutine, never
 // concurrently with itself (verified directly against worker.go/sequence.go call
 // graphs; matches the existing, established ownership model for f.seenStateSigs/
-// f.persistedWorkflowSigs, which are plain unsynchronized maps for the identical
+// f.persistedWorkflowExemplars, which are plain unsynchronized maps for the identical
 // reason). ResourceGraph still carries a mutex defensively -- cheap, and removes
 // any future risk if a call site changes -- verified safe under -race by
 // resource_graph_test.go's adversarial concurrent-caller test.

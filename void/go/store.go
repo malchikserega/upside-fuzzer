@@ -393,6 +393,67 @@ func (r *RuntimeStore) pickCustomPayloadValue(key string, dict *DictStore, fallb
 	return fmt.Sprintf("fuzz-%016x", rand.Uint64())
 }
 
+// pickCustomPayloadValueGraphBiased is pickCustomPayloadValue's Fuzzer-level
+// counterpart (item #2, docs/resource-state-graph-report.md): it starts from
+// the exact same candidate pool, then -- when the field key maps to a
+// resource-graph-tracked type (resourceTypeFromKeyName) -- appends that
+// type's known-alive instances ResourceGraphValueBiasWeight times each before
+// picking. This raises their odds of being selected by the uniform
+// rand.Intn(len(cands)) below without removing any of the existing generic/
+// boundary-value candidates (fuzzstring, sample, true, false, etc.), which
+// are a deliberate and valuable part of the mutation corpus in their own
+// right -- this only tips the balance, it doesn't replace them.
+// graphBiasedPayloadCandidates builds the exact candidate pool
+// pickCustomPayloadValueGraphBiased picks from (item #2, docs/resource-state-
+// graph-report.md): the pre-existing customPayloadCandidates pool, plus
+// ResourceGraphValueBiasWeight extra copies of each of up to 5 resource-graph-
+// known, still-alive instances matching this field's inferred resource type.
+// Split out from the picking step so the pool itself is directly assertable
+// in tests without depending on math/rand's output.
+func (f *Fuzzer) graphBiasedPayloadCandidates(key string) []string {
+	cands := f.runtime.customPayloadCandidates(key, f.dict)
+	if f.cfg.ResourceGraphEnabled {
+		if rt := resourceTypeFromKeyName(key); rt != "" {
+			compat := f.resourceGraph.findCompatibleResources(rt, LifecycleCreated, LifecycleReadable, LifecycleModified)
+			weight := maxInt(0, f.cfg.ResourceGraphValueBiasWeight)
+			// Bounded: at most 5 distinct instances considered, so a resource
+			// type with a large pool doesn't dominate the candidate list.
+			for i, inst := range compat {
+				if i >= 5 {
+					break
+				}
+				for j := 0; j < weight; j++ {
+					cands = append(cands, inst.Canonical.RawValue)
+				}
+			}
+		}
+	}
+	return cands
+}
+
+// pickCustomPayloadValueGraphBiased is pickCustomPayloadValue's Fuzzer-level
+// counterpart (item #2, docs/resource-state-graph-report.md): starts from the
+// candidate pool graphBiasedPayloadCandidates builds -- the exact same base
+// pool pickCustomPayloadValue uses, plus weighted resource-graph-known
+// instances -- then picks uniformly at random exactly like the original. This
+// raises a real, graph-tracked value's odds of being selected without
+// removing any of the existing generic/boundary-value candidates
+// (fuzzstring, sample, true, false, etc.), which are a deliberate and
+// valuable part of the mutation corpus in their own right -- this only tips
+// the balance, it doesn't replace them.
+func (f *Fuzzer) pickCustomPayloadValueGraphBiased(key string, fallback string) string {
+	cands := f.graphBiasedPayloadCandidates(key)
+	if len(cands) > 0 {
+		return cands[rand.Intn(len(cands))]
+	}
+	if fallback != "" {
+		if !strings.HasPrefix(fallback, "CUSTOM_PAYLOAD") {
+			return fallback
+		}
+	}
+	return fmt.Sprintf("fuzz-%016x", rand.Uint64())
+}
+
 func (r *RuntimeStore) pickDynamic(depName string, dict *DictStore) (string, string) {
 	if v := r.getDepValue(depName); v != "" {
 		return v, "dep_known"

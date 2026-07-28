@@ -62,13 +62,46 @@ type Fuzzer struct {
 
 	// State-reward sequence search (Top-20 #12): seenStateSigs tracks every
 	// distinct workflow-shape signature (see sequence.go::sequenceStateSignature)
-	// reached this run, for novelty reward + fanout widening; persistedWorkflowSigs
+	// reached this run, for novelty reward + fanout widening; persistedWorkflowExemplars
 	// dedups the on-disk workflow report by final shape so equivalent workflows
-	// (same shape, different concrete IDs) aren't all dumped to disk.
-	seenStateSigs         map[string]struct{}
-	persistedWorkflowSigs map[string]struct{}
-	newStatesFound        int
-	workflowsPersisted    int
+	// (same shape, different concrete IDs) aren't all dumped to disk -- it also
+	// records whether the currently-kept exemplar has real-ID provenance, so a
+	// later occurrence of the same shape can upgrade it (item #1, docs/
+	// resource-state-graph-report.md; see maybePersistSequence/sequence.go).
+	seenStateSigs              map[string]struct{}
+	persistedWorkflowExemplars map[string]persistedExemplar
+	newStatesFound             int
+	workflowsPersisted         int
+
+	// dedupRealIDChainRejected counts sequences that reached maybePersistSequence's
+	// dedup gate for a shape already claimed by an earlier (possibly
+	// placeholder-value) exemplar, but which themselves show a genuine
+	// producer(response)->consumer(later request) real-ID reuse. Of those,
+	// dedupRealIDChainUpgrades counts how many actually replaced the persisted
+	// exemplar (i.e. the existing one didn't already have real-ID provenance) --
+	// the rest were rejected because the existing exemplar was already just as
+	// good. dedupDuplicateRejected is the total count regardless of provenance.
+	dedupRealIDChainRejected int
+	dedupRealIDChainUpgrades int
+	dedupDuplicateRejected   int
+
+	// crashesBySequence indexes unique-crash root-cause cluster keys by the
+	// originating SequenceState.ID (item #4, docs/resource-state-graph-report.md),
+	// populated in crash.go::recordCrash and read back in
+	// sequence.go::logSequenceEvent to populate produced_bug_id -- closing a
+	// gap this codebase's own comments used to flag explicitly.
+	crashesBySequence map[string][]string
+
+	// seqStop* counters (item #5, docs/resource-state-graph-report.md) record
+	// *why* a sequence branch stopped extending, at each of
+	// enqueueSequenceFollowups' early-return points -- previously
+	// undifferentiated, making it expensive to answer "why don't more chains
+	// reach full depth" without ad hoc log analysis.
+	seqStopMaxDepth            int // hit the configured max sequence depth
+	seqStopFailedStep          int // this step returned 4xx/5xx
+	seqStopNoProducedValue     int // non-mutating method produced no chainable value
+	seqStopNoFollowupCandidate int // no compatible consumer template found
+	seqStopRenderFailed        int // every candidate follow-up failed to render
 
 	endpointStats map[string]*EndpointStats
 	mutationStats map[string]*MutationStats
@@ -289,55 +322,56 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 	}
 
 	f := &Fuzzer{
-		cfg:                   cfg,
-		target:                target,
-		shm:                   shmHost,
-		client:                client,
-		coverage:              coverage,
-		templates:             templates,
-		tmplByID:              map[int]*Template{},
-		meta:                  map[int]TemplateMeta{},
-		tmplEPKey:             map[int]string{},
-		responseSchemas:       map[string]map[string]map[string]string{},
-		depIndex:              map[int]DepInfo{},
-		depConsumers:          map[string][]int{},
-		idConsumers:           map[string][]int{},
-		templatePriority:      map[int]float64{},
-		runtime:               newRuntimeStore(),
-		dict:                  dict,
-		seedSampler:           NewFenwickSampler(),
-		endpointStats:         map[string]*EndpointStats{},
-		mutationStats:         map[string]*MutationStats{},
-		authBlocked:           map[string]*AuthBlockedState{},
-		clientSamples:         map[string][]string{},
-		learnedByEndpoint:     map[string]int{},
-		uniqueCrashKeys:       map[string]struct{}{},
-		clusters:              map[string]*ClusterInfo{},
-		blockedEndpoints:      map[string]struct{}{},
-		forceFormEndpoints:    map[string]struct{}{},
-		antiForgeryHarvestAt:  map[string]time.Time{},
-		antiForgeryTokens:     map[string]time.Time{},
-		authHeaders:           map[string]string{},
-		crashBoost:            map[string]int{},
-		crashBoostCount:       map[string]int{},
-		replayQueue:           make([]WorkItem, 0, 64),
-		oracleQueue:           make([]WorkItem, 0, 64),
-		accessProbeCount:      map[string]int{},
-		aclSeen:               map[string]struct{}{},
-		authRequiredEndpoints: map[string]int{},
-		replayByEndpoint:      map[string]int{},
-		seenStateSigs:         map[string]struct{}{},
-		persistedWorkflowSigs: map[string]struct{}{},
-		identities:            nil,
-		identityOrder:         nil,
-		identityCursor:        0,
-		crashWriter:           crashWriter,
-		uniqueWriter:          uniqueWriter,
-		eventLogWriter:        eventLogWriter,
-		epochEventWriter:      epochEventWriter,
-		sequenceEventWriter:   sequenceEventWriter,
-		findings:              make([]CrashFinding, 0, 64),
-		raceQueue:             make([]WorkItem, 0, 128),
+		cfg:                        cfg,
+		target:                     target,
+		shm:                        shmHost,
+		client:                     client,
+		coverage:                   coverage,
+		templates:                  templates,
+		tmplByID:                   map[int]*Template{},
+		meta:                       map[int]TemplateMeta{},
+		tmplEPKey:                  map[int]string{},
+		responseSchemas:            map[string]map[string]map[string]string{},
+		depIndex:                   map[int]DepInfo{},
+		depConsumers:               map[string][]int{},
+		idConsumers:                map[string][]int{},
+		templatePriority:           map[int]float64{},
+		runtime:                    newRuntimeStore(),
+		dict:                       dict,
+		seedSampler:                NewFenwickSampler(),
+		endpointStats:              map[string]*EndpointStats{},
+		mutationStats:              map[string]*MutationStats{},
+		authBlocked:                map[string]*AuthBlockedState{},
+		clientSamples:              map[string][]string{},
+		learnedByEndpoint:          map[string]int{},
+		uniqueCrashKeys:            map[string]struct{}{},
+		clusters:                   map[string]*ClusterInfo{},
+		blockedEndpoints:           map[string]struct{}{},
+		forceFormEndpoints:         map[string]struct{}{},
+		antiForgeryHarvestAt:       map[string]time.Time{},
+		antiForgeryTokens:          map[string]time.Time{},
+		authHeaders:                map[string]string{},
+		crashBoost:                 map[string]int{},
+		crashBoostCount:            map[string]int{},
+		replayQueue:                make([]WorkItem, 0, 64),
+		oracleQueue:                make([]WorkItem, 0, 64),
+		accessProbeCount:           map[string]int{},
+		aclSeen:                    map[string]struct{}{},
+		authRequiredEndpoints:      map[string]int{},
+		replayByEndpoint:           map[string]int{},
+		seenStateSigs:              map[string]struct{}{},
+		persistedWorkflowExemplars: map[string]persistedExemplar{},
+		crashesBySequence:          map[string][]string{},
+		identities:                 nil,
+		identityOrder:              nil,
+		identityCursor:             0,
+		crashWriter:                crashWriter,
+		uniqueWriter:               uniqueWriter,
+		eventLogWriter:             eventLogWriter,
+		epochEventWriter:           epochEventWriter,
+		sequenceEventWriter:        sequenceEventWriter,
+		findings:                   make([]CrashFinding, 0, 64),
+		raceQueue:                  make([]WorkItem, 0, 128),
 		currentConcurrency: clampInt(cfg.Concurrency,
 			clampInt(cfg.MinConcurrency, 1, 4096),
 			clampInt(cfg.MaxConcurrency, 1, 4096),

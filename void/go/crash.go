@@ -28,6 +28,10 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	triage := f.triageCrash(res)
 	crashHeaders := f.resolvedCrashHeaders(res.Item)
 	crashAuthContext := maskedAuthContext(res.Item.Identity, crashHeaders)
+	seqID := ""
+	if res.Item.SeqState != nil {
+		seqID = res.Item.SeqState.ID
+	}
 	rec := CrashRecord{
 		TS:            time.Now().Format(time.RFC3339),
 		ElapsedSec:    fmt.Sprintf("%.3f", elapsed),
@@ -44,6 +48,7 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 		ExceptionType: res.ExceptionType,
 		AuthContext:   crashAuthContext,
 		Triage:        triage,
+		SequenceID:    seqID,
 	}
 	_ = f.crashWriter.Write(rec)
 	if _, ok := f.uniqueCrashKeys[sig]; ok {
@@ -51,6 +56,25 @@ func (f *Fuzzer) recordCrash(res SendResult) bool {
 	}
 	f.uniqueCrashKeys[sig] = struct{}{}
 	f.uniqueCrashes++
+
+	// Item #4 (docs/resource-state-graph-report.md): index this unique crash's
+	// root-cause cluster by originating sequence ID, so logSequenceEvent can
+	// populate produced_bug_id below instead of always leaving it empty --
+	// closing the gap this codebase's own comment used to flag explicitly
+	// ("no mechanism today correlating a specific crash/finding back to the
+	// sequence that produced it").
+	if seqID != "" {
+		already := false
+		for _, k := range f.crashesBySequence[seqID] {
+			if k == clusterKey {
+				already = true
+				break
+			}
+		}
+		if !already {
+			f.crashesBySequence[seqID] = append(f.crashesBySequence[seqID], clusterKey)
+		}
+	}
 
 	// Fold this unique variant into its root-cause cluster (many signatures -> one bug).
 	f.recordCluster(

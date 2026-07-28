@@ -264,7 +264,7 @@ func (f *Fuzzer) adaptPathParamsFromRuntime(t *Template, path string) (string, [
 		if !isPathPlaceholderValue(cur) {
 			continue
 		}
-		cand := f.runtime.pickCustomPayloadValue(name, f.dict, cur)
+		cand := f.pickCustomPayloadValueGraphBiased(name, cur)
 		cand = normalizePathParamValue(cand, cur)
 		if cand == "" || cand == cur {
 			continue
@@ -393,7 +393,7 @@ func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocD
 					}
 				}
 				if val == "" || strings.HasPrefix(val, "CUSTOM_PAYLOAD") {
-					val = f.runtime.pickCustomPayloadValue(s.PayloadKey, f.dict, s.Default)
+					val = f.pickCustomPayloadValueGraphBiased(s.PayloadKey, s.Default)
 					mutParts = append(mutParts, "dict_"+s.PayloadKey)
 				}
 			}

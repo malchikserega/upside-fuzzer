@@ -226,8 +226,21 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 | `-resource-graph-yield-weight` | `2.0` | Scoring weight per historical new-edge discovered at a consumer's endpoint |
 | `-resource-graph-failure-penalty` | `5.0` | Scoring penalty per consecutive failed attempt at a consumer |
 | `-resource-graph-stale-explore-prob` | `0.15` | Probability of deliberately binding a follow-up to a DELETED/INVALIDATED resource, to exercise stale-read/update-after-delete workflows rather than only valid ones |
+| `-resource-graph-value-bias-weight` | `3` | Extra weighted copies of a resource-graph-known, still-alive value added to a body/query field's candidate pool before random selection (`0` disables the bias). See "Chain-quality improvements" below |
 
 Lifecycle states (`Unknown`/`Discovered`/`Created`/`Readable`/`Modified`/`Deleted`/`Invalidated`/`FailedCreation`/`FailedModification`/`FailedDeletion`/`Stale`) are derived from method+status+prior-state, never method alone — e.g. a `GET` returning 200 against a resource this run already deleted is `Stale`/`invalid`, not `Readable`. Persisted workflow JSON (`workflows/*.json`) gains optional `resources`/`transitions` fields with the graph's own snapshot for that sequence.
+
+#### Chain-quality improvements
+
+Five targeted fixes, measured against a real Bitwarden fuzzing run and documented in full (including the measurements that justified them) in [`docs/resource-state-graph-report.md`](../docs/resource-state-graph-report.md):
+
+1. **Value substitution now prefers resource-graph values.** Previously, a sequence follow-up's path placeholder was *always* filled from the old id-name-centric extraction (`entityIDs[0]`), even when the resource graph had a real, freshly-extracted GUID on hand for that exact consumer's resource type — the graph only ever influenced *which* consumer template got scheduled next, never *which concrete value* was plugged into it. `pickFollowupPathValue` (`sequence.go`) now checks `findCompatibleResources` first; body/query fields get the same treatment via `-resource-graph-value-bias-weight` (weighted extra candidates, not a replacement — generic/boundary values like `fuzzstring`/`sample`/`true`/`false` remain in the pool). Follow-ups that used a graph value carry a `+graph_id` tag in their mutation label.
+2. **Dedup upgrades to real-ID provenance.** The on-disk workflow exemplar kept per shape signature is no longer strictly "whichever sequence arrived first" — if a later occurrence of the same shape shows a genuine producer(response)→consumer(request) real-ID chain and the current exemplar doesn't, the later one replaces it on disk (still exactly one file per shape).
+3. **Persistence bar lowered for genuine real-ID chains.** A sequence normally needs to reach the full configured depth (`-sequence-max-depth`) before `maybePersistSequence` will write it to disk. A shallower sequence (as few as 2 steps) that already shows a genuine real-ID chain bypasses that gate — the single most useful signal this feature can produce was previously invisible below full depth regardless of quality.
+4. **Crashes now link back to their originating sequence.** `CrashRecord` gained a `sequence_id` field, and `sequence_event.jsonl`'s `produced_bug_id` (previously always empty, an explicitly-flagged gap) is now populated from the root-cause cluster(s) recorded against that sequence.
+5. **Counters for why a sequence stopped extending.** `seq_stop_max_depth` / `seq_stop_failed_step` / `seq_stop_no_produced_value` / `seq_stop_no_followup_candidate` / `seq_stop_render_failed` (printed at run end and in the summary JSON) replace what used to require ad hoc log analysis to answer "why don't more chains reach full depth."
+
+Measured impact (10-minute validation run, see the report for full numbers): before these fixes, only 3/59 dedup-rejected sequences in a comparable run carried real-ID provenance — these fixes target the value-substitution step that was the actual root cause of that low rate, not just its downstream symptom.
 
 ### Crash Analysis (all ON by default)
 

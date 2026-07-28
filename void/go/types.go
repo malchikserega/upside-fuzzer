@@ -114,10 +114,17 @@ type Config struct {
 	ResourceGraphYieldWeight      float64
 	ResourceGraphFailurePenalty   float64
 	ResourceGraphStaleExploreProb float64
-	CrashFile                     string
-	UniqueCrashFile               string
-	SummaryFile                   string
-	ReportFile                    string
+	// ResourceGraphValueBiasWeight (item #2, docs/resource-state-graph-report.md):
+	// how many extra copies of a resource-graph-known, still-alive instance to
+	// add to a value-substitution candidate pool before picking uniformly at
+	// random -- raises its selection odds without removing any generic/
+	// boundary-value candidates already in the pool. 0 disables the bias
+	// entirely (falls back to the pre-existing uniform behavior).
+	ResourceGraphValueBiasWeight int
+	CrashFile                    string
+	UniqueCrashFile              string
+	SummaryFile                  string
+	ReportFile                   string
 	// SARIFFile, when set, additionally writes findings in SARIF 2.1.0 format
 	// (Top-20 §16) so they drop directly into GitHub code scanning / DefectDojo /
 	// any other SARIF-consuming dashboard. Opt-in: empty (the default) writes nothing.
@@ -213,11 +220,18 @@ type MutationStats struct {
 }
 
 type CrashRecord struct {
-	TS            string         `json:"ts"`
-	ElapsedSec    string         `json:"elapsed_secs"`
-	Signature     string         `json:"signature,omitempty"`
-	ClusterKey    string         `json:"cluster_key,omitempty"`
-	ClusterLabel  string         `json:"cluster_label,omitempty"`
+	TS           string `json:"ts"`
+	ElapsedSec   string `json:"elapsed_secs"`
+	Signature    string `json:"signature,omitempty"`
+	ClusterKey   string `json:"cluster_key,omitempty"`
+	ClusterLabel string `json:"cluster_label,omitempty"`
+	// SequenceID (item #4, docs/resource-state-graph-report.md) is the
+	// originating sequence's ID (SequenceState.ID) when this crash happened on
+	// a sequence-engine follow-up request, empty otherwise. Lets a reader cross-
+	// reference a crash back to its full request chain in crashes/workflows/
+	// (when that sequence was also persisted there) or simply group multiple
+	// crashes that came from exploring the same root sequence.
+	SequenceID    string         `json:"sequence_id,omitempty"`
 	Status        int            `json:"status_code"`
 	Method        string         `json:"method"`
 	Path          string         `json:"path"`

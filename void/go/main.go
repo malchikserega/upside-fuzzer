@@ -109,6 +109,7 @@ func parseFlags() Config {
 	flag.Float64Var(&cfg.ResourceGraphYieldWeight, "resource-graph-yield-weight", 2.0, "Scoring weight per historical new-edge discovered at a consumer's endpoint")
 	flag.Float64Var(&cfg.ResourceGraphFailurePenalty, "resource-graph-failure-penalty", 5.0, "Scoring penalty per consecutive failed attempt at a sequence consumer")
 	flag.Float64Var(&cfg.ResourceGraphStaleExploreProb, "resource-graph-stale-explore-prob", 0.15, "Probability of deliberately binding a follow-up request to a resource already known to be DELETED/INVALIDATED, to exercise post-lifecycle-transition behavior (stale reads, update-after-delete) rather than only continuing a valid workflow")
+	flag.IntVar(&cfg.ResourceGraphValueBiasWeight, "resource-graph-value-bias-weight", 3, "Extra weighted copies of a resource-graph-known, still-alive value added to a field's candidate pool before random selection (0 disables the bias)")
 	flag.StringVar(&cfg.CrashFile, "crash-file", filepath.Join("./crashes", "crashes-"+nowTS+".jsonl"), "Path to all crash JSONL")
 	flag.StringVar(&cfg.UniqueCrashFile, "unique-crash-file", filepath.Join("./crashes", "unique-crashes-"+nowTS+".jsonl"), "Path to unique crash JSONL")
 	flag.StringVar(&cfg.SummaryFile, "summary-file", filepath.Join("./summaries", "summary-"+nowTS+".json"), "Path to run summary JSON")

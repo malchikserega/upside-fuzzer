@@ -238,3 +238,68 @@ Stated plainly, per this project's own established documentation convention (see
 Everything already tracked in `docs/ARCHITECTURE_REVIEW.md`'s own P0/P1/P2 backlog (OAST, ownership-matrix
 BOLA, a non-Docker host mode, a persistent corpus, typed structural mutation) remains open and unrelated
 to this pass's scope.
+
+## Follow-up pass (2026-07-28): chain-quality fixes from live-run findings
+
+The 40-minute and 10-minute live Bitwarden runs described above (and their `Dedup diagnostic` counter,
+added specifically to measure this) surfaced a concrete, small-but-nonzero improvement ceiling: 1/72 and
+3/59 dedup-rejected sequences respectively carried a genuine real-ID producer→consumer chain that the
+first-come-first-served dedup logic was discarding. Digging into *why* the ceiling was that low (not just
+accepting the number) led to the actual root cause and four related visibility gaps, all fixed together:
+
+1. **Value substitution now prefers resource-graph values (the actual root cause).** Tracing the code
+   path that fills a sequence follow-up's path placeholder found that it *always* used `entityIDs[0]`
+   (the old id-name-centric extraction's first hit) — the resource graph only ever influenced *which*
+   consumer template got scheduled next (`rankConsumersCoverageDirected`), never *which concrete value*
+   was plugged into the request. That is why real-ID chains were rare even when the graph had a perfectly
+   good GUID on hand: the substitution simply never looked at it. Fixed in `pickFollowupPathValue`
+   (`sequence.go`), which now checks `findCompatibleResources` for the consumer's expected resource type
+   before falling back to `entityIDs[0]`. The same bias is applied to body/query fields via
+   `pickCustomPayloadValueGraphBiased`/`graphBiasedPayloadCandidates` (`store.go`) and the new
+   `-resource-graph-value-bias-weight` flag (default `3`) — extra weighted copies of a known-alive graph
+   value are added to the existing candidate pool, not a replacement for it, so generic/boundary-value
+   mutation (`fuzzstring`, `sample`, `true`, `false`, etc. — a deliberate and valuable part of the mutation
+   corpus) is untouched.
+2. **Dedup upgrades to real-ID provenance.** `maybePersistSequence`'s per-shape exemplar map
+   (`persistedWorkflowExemplars`) now tracks whether the kept exemplar has real-ID provenance; a later
+   sequence reaching the same shape with a genuine chain and the current exemplar without one replaces it
+   on disk (old `.json`/`.sh` files removed, new ones written) — still exactly one exemplar per shape, just
+   a better one when a better one exists.
+3. **Persistence bar lowered for genuine real-ID chains.** `maybePersistSequence` required
+   `state.Depth >= 2` (the full configured depth) before persisting anything at all. A sequence with as
+   few as 2 steps that already shows a genuine real-ID chain (`sequenceHasRealIDChain`) now bypasses that
+   gate — previously the single most useful signal this feature can produce was invisible below full
+   depth regardless of how good it was. Every other kind of shallow sequence remains gated exactly as
+   before, so this doesn't flood disk with generic 2-step attempts.
+4. **Crashes now link back to their originating sequence.** `CrashRecord` gained a `sequence_id` field
+   (populated in `recordCrash`), and `f.crashesBySequence` indexes root-cause cluster keys by sequence ID
+   so `logSequenceEvent`'s `produced_bug_id` — previously always `""`, a gap this codebase's own comments
+   used to flag explicitly rather than silently fake — is now populated when a crash occurred on that
+   sequence.
+5. **Counters for why a sequence stopped extending.** Five new counters (`seqStopMaxDepth`,
+   `seqStopFailedStep`, `seqStopNoProducedValue`, `seqStopNoFollowupCandidate`, `seqStopRenderFailed`) are
+   incremented at each of `enqueueSequenceFollowups`' early-return points and printed in the final report
+   and summary JSON — answering "why don't more chains reach full depth" without ad hoc log analysis
+   (which is how the investigation that led to this whole pass was actually done).
+
+### Validation
+
+25 new tests (`improvements_test.go`, plus 3 more appended to `crash_test.go`) cover all five fixes:
+dedup-upgrade (including the negative case — an existing real-ID exemplar must not be downgraded, and
+plain-vs-plain dedup must behave exactly as before), the depth-gate bypass (both the positive case and a
+depth-0 sanity check confirming `sequenceHasRealIDChain` isn't even invoked when a chain is structurally
+impossible), `pickFollowupPathValue`'s preference order (including the `-resource-graph=false` case
+reproducing the old behavior exactly), `graphBiasedPayloadCandidates`'s weighting and 5-instance bound,
+crash-to-sequence linkage (including dedup of a repeated cluster key from the same sequence), and all five
+stop-reason counters in isolation. Full suite: 212 → 237 tests, coverage 37.8% → 39.7%, race-clean
+(`go test -race -count=5 ./...`).
+
+### What this pass does *not* claim
+
+This pass is validated by targeted unit/regression tests confirming each mechanism behaves correctly in
+isolation — it does **not** include a fresh end-to-end live-target re-run measuring the *after* state of
+the dedup real-ID-chain ratio (i.e., a new "X/Y dedup-rejected sequences now carry real-ID provenance"
+number with these fixes active). The 1/72 and 3/59 figures above are the *before* numbers that motivated
+this work, not a before/after comparison. A natural next validation step would be a fresh live run against
+the same Bitwarden target to measure whether item #1 (value-substitution bias) actually raises that ratio
+in practice, and by how much.

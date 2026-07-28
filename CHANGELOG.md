@@ -4,6 +4,45 @@ This project did not previously keep a changelog; this file starts with the opti
 pass below. Entries are grouped by change, newest first. Full detail for the pass below is in
 [`docs/optimization-report.md`](docs/optimization-report.md).
 
+## Sequence chain-quality fixes (2026-07-28)
+
+Five targeted fixes to the sequence/resource-graph engine, prompted by findings from live Bitwarden
+validation runs (real-ID chains were rare in persisted workflow output even when the resource graph had
+good data on hand). Full detail, root-cause analysis, and measured before-state numbers:
+[`docs/resource-state-graph-report.md`](docs/resource-state-graph-report.md#follow-up-pass-2026-07-28-chain-quality-fixes-from-live-run-findings).
+
+### Fixed
+- **The actual root cause**: a sequence follow-up's path placeholder was always filled from the old
+  id-name-centric extraction (`entityIDs[0]`), never from the resource graph's own richer extraction, even
+  when the graph had a real GUID on hand for the exact consumer being called — the graph only ever
+  influenced *which* template got scheduled, never *which value* was plugged into it
+  (`sequence.go::pickFollowupPathValue`). The same bias now applies to body/query fields
+  (`store.go::pickCustomPayloadValueGraphBiased`/`graphBiasedPayloadCandidates`, new
+  `-resource-graph-value-bias-weight` flag, default `3`) — additive weighting, not a replacement for the
+  existing generic/boundary-value candidate pool.
+- **Dedup now prefers real-ID provenance**: the on-disk workflow exemplar kept per shape signature is no
+  longer strictly "whichever sequence arrived first" — a later occurrence with genuine real-ID chain
+  provenance replaces a weaker existing exemplar (`sequence.go::maybePersistSequence`,
+  `persistedWorkflowExemplars`).
+- **Persistence bar lowered for genuine real-ID chains**: a sequence previously had to reach the full
+  configured depth before being persisted at all; one with as few as 2 steps and a genuine real-ID chain
+  now bypasses that gate.
+- **Crashes now link back to their originating sequence**: `CrashRecord.SequenceID` (new field) plus
+  `sequence_event.jsonl`'s `produced_bug_id` (previously always empty, an explicitly-flagged gap) now
+  populated from `crash.go`'s new `crashesBySequence` index.
+- **Counters for why a sequence stopped extending**: `seq_stop_max_depth` /`_failed_step` /
+  `_no_produced_value` / `_no_followup_candidate` / `_render_failed`, printed at run end and in the summary
+  JSON.
+
+### Added
+- 25 new tests (`void/go/improvements_test.go`, 3 appended to `crash_test.go`) covering all five fixes,
+  including negative cases (no downgrade of an already-good exemplar, `-resource-graph=false` reproducing
+  old behavior exactly, depth-0 never bypassing the persistence gate). `void/go` test count 212 → 237,
+  coverage 37.8% → 39.7%, race-clean.
+
+No public interface or on-disk contract changed beyond the additive `sequence_id`/`produced_bug_id`
+fields (both were already-declared fields/keys, just previously always empty) and the one new CLI flag.
+
 ## Typed resource state graph & generalized entity extraction (2026-07-27)
 
 Replaced the sequence engine's coarse per-chain shape signature and id-name-centric extraction with a
