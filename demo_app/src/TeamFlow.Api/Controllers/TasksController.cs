@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,13 +16,17 @@ public class TasksController : ControllerBase
     private readonly TeamFlowDbContext _db;
     private readonly TaskLifecycleService _lifecycle;
     private readonly TaskPreviewService _preview;
+    private readonly TaskApprovalService _approval;
 
-    public TasksController(TeamFlowDbContext db, TaskLifecycleService lifecycle, TaskPreviewService preview)
+    public TasksController(TeamFlowDbContext db, TaskLifecycleService lifecycle, TaskPreviewService preview, TaskApprovalService approval)
     {
         _db = db;
         _lifecycle = lifecycle;
         _preview = preview;
+        _approval = approval;
     }
+
+    private int CurrentUserId => int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     // Vulnerability #12 (BOLA): any authenticated user can read any task, in any
     // project, in any organization.
@@ -144,6 +149,56 @@ public class TasksController : ControllerBase
         {
             var unlocked = await _lifecycle.TryUnlockAsync(taskId, request.VerificationLevel, request.Region, request.UnlockCode);
             return Ok(new { unlocked });
+        }
+        catch (TaskNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
+    // Intended first step of the approval workflow -- deliberately clean, drives
+    // a task into PendingReview so #38/#39 below have a realistic precondition
+    // to (correctly, or in #38's case incorrectly) require.
+    [HttpPost("{taskId:int}/submit-for-review")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> SubmitForReview(int taskId)
+    {
+        try
+        {
+            var task = await _approval.SubmitForReviewAsync(taskId);
+            return Ok(new { approvalStatus = task.ApprovalStatus.ToString() });
+        }
+        catch (TaskNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
+    // Vulnerabilities #38 (missing state-machine validation) + #39 (sequence-only
+    // duplicate side effect): see TaskApprovalService.ApproveAsync's own comment.
+    [HttpPost("{taskId:int}/approve")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> Approve(int taskId)
+    {
+        try
+        {
+            var task = await _approval.ApproveAsync(taskId, CurrentUserId);
+            return Ok(new { approvalStatus = task.ApprovalStatus.ToString(), approvalCreditCount = task.ApprovalCreditCount });
+        }
+        catch (TaskNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
+    [HttpPost("{taskId:int}/reject")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> Reject(int taskId)
+    {
+        try
+        {
+            var task = await _approval.RejectAsync(taskId);
+            return Ok(new { approvalStatus = task.ApprovalStatus.ToString() });
         }
         catch (TaskNotFoundException)
         {

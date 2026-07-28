@@ -59,6 +59,13 @@ builder.Services.AddScoped<CreditsService>();
 builder.Services.AddScoped(_ => new TaskSearchService(connectionString));
 builder.Services.AddScoped(sp => new FileStorageService(sp.GetRequiredService<TeamFlowDbContext>(), storageRoot));
 builder.Services.AddHttpClient<WebhookService>(); // no domain/IP restriction configured -- see WebhookService's own comment
+builder.Services.AddScoped<TeamService>();
+builder.Services.AddScoped<InvitationService>();
+builder.Services.AddScoped<ApiKeyService>();
+builder.Services.AddScoped<PasswordResetService>();
+builder.Services.AddScoped<SubscriptionService>();
+builder.Services.AddScoped<TaskApprovalService>();
+builder.Services.AddScoped<BulkTaskService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
@@ -89,6 +96,12 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.UseAuthentication();
+
+// Alternate credential path (X-Api-Key), fallback only when JWT didn't already
+// authenticate the request -- see TeamFlow.Api/Middleware/ApiKeyAuthMiddleware.cs
+// for the full writeup, and ApiKeyService.cs for vulnerability #32 (revoked
+// keys can keep working via a stale validation cache).
+app.UseMiddleware<ApiKeyAuthMiddleware>();
 
 // Vulnerability #8 (differential auth bypass): a legacy, path-string-based gate
 // predating the rest of the API's [Authorize(Roles=...)] model -- see

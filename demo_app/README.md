@@ -22,7 +22,7 @@ application — three projects, not one flat `Program.cs`:
 demo_app/
 ├── TeamFlow.sln
 ├── src/
-│   ├── TeamFlow.Api/              ASP.NET Core Web API — 9 controllers, 26 endpoints
+│   ├── TeamFlow.Api/              ASP.NET Core Web API — 16 controllers, 57 endpoints
 │   │   ├── Controllers/
 │   │   ├── Middleware/            the legacy path-based auth gate (bug #8)
 │   │   ├── Properties/
@@ -37,14 +37,24 @@ demo_app/
 └── README.md                       this file
 ```
 
-**Domain**: Organizations → Users (role: Member/Manager/Admin) → Projects → Tasks,
-Documents, Webhooks — multi-tenancy gives natural, realistic surface for BOLA/IDOR the
-same way Bitwarden's organizations/ciphers model does (this repo's own architecture
-docs use Bitwarden as the reference example throughout).
+**Domain**: Organizations → Users (role: Member/Manager/Admin) → Teams (role:
+Member/Lead) → Projects → Tasks (with a separate approval-workflow state machine),
+Comments, Documents, Webhooks; plus org-level Invitations, per-user API Keys and
+Notifications, password-reset tokens, and a Subscription/quota model per organization
+— multi-tenancy gives natural, realistic surface for BOLA/IDOR the same way
+Bitwarden's organizations/ciphers model does (this repo's own architecture docs use
+Bitwarden as the reference example throughout), and the invitation/approval/API-key/
+password-reset flows exist specifically to give **multi-step, sequence-only**
+vulnerabilities (findable only through a real POST→PUT→POST-shaped chain, never a
+single request) a realistic home alongside the original single-request bug classes.
 
-**Seed data** (auto-created on first run, no migration step): two organizations —
-Acme Corp (id 1) and Globex Inc (id 2) — and five users, all with password
-`Passw0rd!23`:
+**Seed data** (auto-created on first run, no migration step): **4 organizations**, **24
+users**, **8 teams**, **12 projects**, **~76 tasks**, plus comments, notifications,
+invitations, API keys, and one subscription per organization — enough real volume for
+list/search/BOLA-enumeration endpoints to have something substantial to return, not
+just illustrative examples. The original 5 identities are preserved exactly as
+before (same ids, same roles, same organizations) since `auth.identities.example.json`
+and the rest of this README reference them by name — everything else is new:
 
 | Email | Org | Role |
 |---|---|---|
@@ -53,9 +63,15 @@ Acme Corp (id 1) and Globex Inc (id 2) — and five users, all with password
 | `carol@acme.test` | Acme (1) | Member |
 | `dave@globex.test` | Globex (2) | Admin |
 | `erin@globex.test` | Globex (2) | Member |
+| `admin@initech.test` / `manager@initech.test` / `member{1..4}@initech.test` | Initech LLC (3) | Admin / Manager / Member |
+| `admin@umbrella.test` / `manager@umbrella.test` / `member{1..4}@umbrella.test` | Umbrella Group (4) | Admin / Manager / Member |
 
-Plus 2-3 projects with tasks and a document per organization — real cross-tenant data
-for BOLA probes to actually have something to steal.
+Every seeded user shares password `Passw0rd!23`. Each organization also gets 2 teams
+(Engineering/Design) with memberships, 3 projects with 6 tasks each (plus the original
+projects/tasks under Acme/Globex), a Free/Pro/Enterprise subscription, one Pending and
+one Revoked invitation, and API keys for its first two users — real cross-tenant data
+for BOLA probes to actually have something to steal, at a scale meant for honest
+fuzzer-vs-fuzzer comparison rather than a handful of illustrative rows.
 
 **Instrumentation-compatibility choices**, applied deliberately from lessons learned
 building and fuzzing real targets this project has already been run against:
@@ -328,9 +344,13 @@ See [docs/CLI.md](../docs/CLI.md) for the full subcommand reference and the zero
 
 ## Full vulnerability catalog
 
-24 planted bugs across 26 endpoints, mapped to the exact oracle/mechanism that finds
+42 planted bugs across 57 endpoints, mapped to the exact oracle/mechanism that finds
 each one. `#` matches the inline `// Vulnerability #N` comment at each bug's actual
-implementation.
+implementation. Bugs #24 onward were added specifically to grow the sequence-only
+category (a chain of 2-4 requests where no single request in isolation demonstrates
+anything wrong) beyond the original #16 — see "Sequence-only vulnerabilities" below the
+table for the full list and why each one requires real multi-step chaining, not just
+single-request mutation.
 
 | # | Endpoint | Bug | Oracle / mechanism |
 |---|---|---|---|
@@ -358,10 +378,49 @@ implementation.
 | 22 | `POST /api/import/legacy` | **.NET deserialization gadget surface** — `Newtonsoft.Json` with `TypeNameHandling.Objects` | `json_dotnet_deser` mutation category; surfaces as a real `JsonSerializationException` crash, not claimed as a full RCE chain |
 | 23 | `POST /api/organizations/{id}/credits/withdraw` | **Race condition** — check-then-act balance deduction, no locking, artificial 150ms window | `-race-mode` burst probing |
 | — | `GET /api/projects/{id}/tasks/stats?bucketSize=` | **Baseline crash** — divide-by-zero at `bucketSize=0`, no sequencing needed | plain crash/triage, the simplest case in the catalog (mirrors `fixtures/planted-bug-api`'s own planted bug) |
+| 24 | `POST /api/teams/{id}/members` | **BOLA + missing self-role-check** — target `userId` isn't checked against the team's own organization, and the caller isn't checked to already hold `Lead` before granting `Lead` to someone else | BOLA + privilege-escalation |
+| 25 | `PUT /api/teams/memberships/{membershipId}` | **Self-role-escalation** — a Member can PUT their own membership row to `Lead`, no check of the caller's current role at all | BOLA + privilege-escalation |
+| 26 | `POST /api/invitations/{token}/accept` | **BOLA** — no check that the accepting caller's own email matches the invitation's `email`; anyone can accept anyone's pending invitation | BOLA |
+| 27 | `PUT /api/invitations/{id}` | **Privilege escalation, ⛓ sequence-only** — a still-Pending invitation's `role` can be raised with no check against the caller's own role; only observable 3 requests later via invite→update-role→accept | producer/consumer sequence chaining, `-sequence-prob` |
+| 28 | `POST /api/invitations/{token}/accept` | **Race condition, ⛓ sequence-only** — check-then-act `Status` transition, no lock; two concurrent accepts of one invitation can both succeed, creating duplicate accounts | `-race-mode` burst probing, only reachable via invite→accept×2 |
+| 29 | `POST /api/tasks/{taskId}/comments` | **Mass assignment** — `authorUserId` bound straight from client JSON | mass-assignment oracle |
+| 30 | `PUT /api/comments/{id}` / `DELETE /api/comments/{id}` | **BOLA** — no ownership check before editing/deleting another user's comment | BOLA |
+| 31 | `GET /api/users/{userId}/notifications` | **BOLA** — no self-check; any authenticated user can read any other user's notification feed | BOLA |
+| 32 | `POST /api/api-keys/{id}/revoke` | **Stale-cache bypass, ⛓ sequence-only** — a process-wide "already validated" cache is populated on first use and never invalidated on revoke; only observable via create→use→revoke→use | producer/consumer sequence chaining against a stateful credential |
+| 33 | `GET /api/users/{userId}/api-keys` | **BOLA** — no self-check; any authenticated user can list any other user's API-key metadata | BOLA |
+| 34 | `POST /api/auth/reset-password` | **Token replay, ⛓ sequence-only** — `UsedAt` is set but never checked; the same reset token works forever until it expires. Only observable via forgot→reset→reset-again (same token) | producer/consumer sequence chaining |
+| 35 | `POST /api/auth/forgot-password` | **BOLA + account takeover, ⛓ sequence-only** — the reset token is returned directly in the response (no mail server in this demo) with no proof the caller owns the email; a 2-step forgot→reset chain against any known email is a full account takeover | producer/consumer sequence chaining, response-value reuse |
+| 36 | `POST /api/organizations/{id}/subscription/change-plan` | **Business-logic flaw** — downgrading never reconciles `usedQuota` against the new (smaller) `quota`, leaving the subscription permanently over quota | business-logic / state-consistency oracle |
+| 37 | `POST /api/organizations/{id}/subscription/consume` | **Race condition** — check-then-act quota consumption, no lock, artificial 150ms window (identical shape to #23) | `-race-mode` burst probing |
+| 38 | `POST /api/tasks/{taskId}/approve` | **Missing state-machine validation** — Approve never checks `ApprovalStatus == PendingReview` first; a task can be approved without ever being submitted | business-logic / state-consistency oracle |
+| 39 | `POST /api/tasks/{taskId}/approve` | **Duplicate side effect, ⛓ sequence-only** — the same missing check lets Approve run twice, crediting the organization's balance a second time for work approved only once. Only observable via submit→approve→approve-again | producer/consumer sequence chaining, before/after balance comparison |
+| 40 | `POST /api/projects/{id}/tasks/bulk-update` | **Mass assignment** — each item's `assignedUserId` isn't checked against the target project's own organization; a single call can hand tasks to a user in a different tenant | mass-assignment oracle |
+| 41 | `POST /api/projects/{id}/tasks/bulk-delete` | **BOLA** — `taskIds` aren't filtered by the route's own `{id}` project; any task id from any project/organization deletes successfully | BOLA |
 
 Every row above was manually curled against a real running instance while building
 this demo and genuinely reproduces (see git history for the exact verification
 transcript) — not just plausible-looking.
+
+### Sequence-only vulnerabilities (⛓): the honest test for a *stateful* fuzzer
+
+A single-request, black-box mutation fuzzer cannot find any of the six bugs marked ⛓
+above by construction — each one requires binding a value produced by one response
+into a *later*, different request, in the correct order, sometimes with real
+concurrency. This is the same producer→consumer chaining
+`void/go/sequence.go`/`resource_graph.go`'s resource-state-graph is built around
+(see `docs/resource-state-graph-report.md`), and the same shape RESTler's own
+dependency-inference targets — which makes this set a genuinely fair, apples-to-apples
+comparison point between the two:
+
+- **#16** (original) — create → archive (via generic status update) → restore.
+- **#27** — invite (role=Member) → update role (role=Admin) → accept.
+- **#28** — invite → accept **concurrently, twice** (race, not just ordering).
+- **#32** — create API key → use it → revoke it → use it again.
+- **#34** — forgot-password → reset-password → reset-password again (same token).
+- **#35** — forgot-password (response leaks the token) → reset-password (using that
+  token) — the account-takeover only exists across these two specific requests.
+- **#39** — submit-for-review → approve → approve again (duplicate credit, only
+  visible by diffing organization balance before/after the *second* call).
 
 ### Honest caveats, found while verifying this demo
 
@@ -558,6 +617,14 @@ and all worth knowing about since none are specific to TeamFlow:
    dropped a real stage name for.
 
 ## Expected results (from an actual verification run)
+
+> **Predates the 2026-07-28 expansion.** The run below was against the original
+> 26-endpoint/24-bug app (2 organizations, 5 users). The catalog above now covers 57
+> endpoints and 42 bugs across 4 organizations — a fresh verification run against the
+> current app would show materially different absolute numbers (more endpoints to
+> reach, more sequence-only bugs to chain into), though the same mechanisms apply.
+> Left here as-is rather than rewritten, since it's a real, honestly-reproduced past
+> run, not a projection.
 
 The numbers below are from the exact `docker run void-fuzzer ... -direct-shm
 -shm-path /coverage_shm/bitmap -profile security -time-budget 3` command in "Run the

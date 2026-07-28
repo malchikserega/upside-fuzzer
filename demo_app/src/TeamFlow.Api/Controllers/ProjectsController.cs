@@ -15,11 +15,13 @@ public class ProjectsController : ControllerBase
 {
     private readonly TeamFlowDbContext _db;
     private readonly TaskSearchService _search;
+    private readonly BulkTaskService _bulk;
 
-    public ProjectsController(TeamFlowDbContext db, TaskSearchService search)
+    public ProjectsController(TeamFlowDbContext db, TaskSearchService search, BulkTaskService bulk)
     {
         _db = db;
         _search = search;
+        _bulk = bulk;
     }
 
     // Vulnerability #9 (BOLA): any authenticated user can read any project's
@@ -91,5 +93,32 @@ public class ProjectsController : ControllerBase
         var count = await _db.ProjectTasks.CountAsync(t => t.ProjectId == id);
         var buckets = count / bucketSize; // <-- the bug: bucketSize=0 throws
         return Ok(new { totalTasks = count, bucketSize, buckets });
+    }
+
+    // Vulnerability #40 (mass assignment): see BulkTaskService.BulkUpdateAsync's
+    // own comment.
+    [HttpPost("{id:int}/tasks/bulk-update")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> BulkUpdate(int id, BulkUpdateTasksRequest request)
+    {
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+        var updated = await _bulk.BulkUpdateAsync(id, request.Items);
+        return Ok(new { updated });
+    }
+
+    // Vulnerability #41 (BOLA): see BulkTaskService.BulkDeleteAsync's own comment.
+    [HttpPost("{id:int}/tasks/bulk-delete")]
+    [ProducesResponseType(200)]
+    public async Task<IActionResult> BulkDelete(int id, BulkDeleteTasksRequest request)
+    {
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+        var deleted = await _bulk.BulkDeleteAsync(id, request.TaskIds);
+        return Ok(new { deleted });
     }
 }
