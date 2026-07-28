@@ -4,6 +4,47 @@ This project did not previously keep a changelog; this file starts with the opti
 pass below. Entries are grouped by change, newest first. Full detail for the pass below is in
 [`docs/optimization-report.md`](docs/optimization-report.md).
 
+## Typed resource state graph & generalized entity extraction (2026-07-27)
+
+Replaced the sequence engine's coarse per-chain shape signature and id-name-centric extraction with a
+typed, bounded resource-lifecycle graph, a layered generalized extraction pipeline (structural shape
+detection, headers, HAL, JSON:API, route-template-aware URI matching), and coverage-directed consumer
+scheduling — all integrated directly into the real execution path (`sequence.go`), gated by
+`-resource-graph` (default **on**; `false` reproduces the prior behavior exactly). Full detail, design
+rationale, and measured results: [`docs/resource-state-graph-plan.md`](docs/resource-state-graph-plan.md) /
+[`docs/resource-state-graph-report.md`](docs/resource-state-graph-report.md).
+
+### Added
+- `void/go/resource_graph.go`: typed `ResourceIdentity`/`ResourceInstance`/`ResourceTransition` model,
+  explicit `LifecycleState` (Discovered/Created/Readable/Modified/Deleted/Invalidated/Stale/...), bounded
+  per-type/alias/transition growth with eviction.
+- `void/go/resource_extraction.go`: generalized candidate extraction — value-shape detection (GUID/hex/
+  slug/opaque, any field name), `Location`/`Content-Location`/`Link` header parsing, HAL `_links`,
+  JSON:API `data`/`relationships`, and route-template-typed URI matching (a typed candidate per
+  path-placeholder position, from both response-derived URIs and the request's own path).
+- `void/go/resource_scheduling.go`: `deriveLifecycleTransition` (method + status + prior state, never
+  method alone) and `scoreConsumer`/`rankConsumersCoverageDirected`, replacing the purely-static
+  verb-affinity sort with a blended score (historical coverage yield, never-reached bonus, failure
+  penalty, bounded epsilon-exploration against starvation).
+- 11 new CLI flags (`-resource-graph`, `-resource-graph-max-per-type`, `-resource-graph-max-aliases`,
+  `-resource-graph-max-transitions`, `-resource-graph-explore-rate`, `-resource-graph-min-confidence`,
+  `-resource-graph-unreached-weight`, `-resource-graph-yield-weight`, `-resource-graph-failure-penalty`,
+  `-resource-graph-stale-explore-prob`), documented in `void/README.md`.
+- 4 new test files (~56 tests: unit, regression, lifecycle-transition, scheduling, and integration tests
+  against a real `httptest` fixture server) plus a benchmark/comparison file. `void/go` statement
+  coverage 32.7–32.8% → 37.8%; 156 → 212 total test cases, 0 failures, race-clean.
+- `SequenceState` gained optional `resources`/`transitions` fields (persisted workflow JSON) — additive,
+  `omitempty`, fully backward-compatible.
+
+### Measured
+On a representative 7-body corpus (plain id, GUID, slug, HAL, JSON:API, nested composite,
+domain-specific-no-"id"-substring field), the old extraction found **1** candidate total; the new
+pipeline found **11**. New scheduling adds ~40–60ns/op over the old static sort at a 12-candidate list
+size — a per-sequence-step (not per-request) cost.
+
+No public interface, CLI flag semantics (beyond the additive new flags), on-disk grammar contract, or
+`/shm/*` HTTP contract changed. No dependencies were added or removed.
+
 ## Optimization & modernization pass (2026-07-27)
 
 A verification-first pass across the whole repo (Go engine, two Python packages, two C# tools):

@@ -698,8 +698,110 @@ of equivalent workflows" gap. `printFinalReport` surfaces both counters:
 `Sequence engine: new_states_found=N unique_workflows_persisted=M`.
 
 This is explicitly a *coarse* state-reward mechanism, not the full typed
-state-graph / coverage-directed-fanout search DeepREST/EvoMaster implement —
-see `ARCHITECTURE_REVIEW.md` §5 for what remains open.
+state-graph / coverage-directed-fanout search DeepREST/EvoMaster implement.
+The typed resource-lifecycle model and generalized extraction pipeline
+described in the next section are layered directly on top of it (both
+mechanisms run together; the shape signature above is not replaced) and close
+a real, previously-open part of that gap — see
+`docs/resource-state-graph-plan.md`/`resource-state-graph-report.md` for the
+full design and measured results, and `ARCHITECTURE_REVIEW.md` §5 for what
+still remains open (a full learned state-space search, general composite-key
+synthesis).
+
+### Typed Resource State Graph & Generalized Extraction (`resource_graph.go`, `resource_extraction.go`, `resource_scheduling.go`)
+
+Layered on top of the shape-signature mechanism above, `enqueueSequenceFollowups`
+also maintains a bounded, typed **resource-lifecycle graph** (`ResourceGraph`,
+`resource_graph.go`) — replacing `extractEntityIDs`'s fixed
+`id`/`Id`/`data[].id`/Location-last-segment field-name list with a layered
+extraction pipeline (`resource_extraction.go`) that finds candidate resource
+references by *structure* and *value shape*, not primarily by field name:
+
+```mermaid
+flowchart LR
+    A["HTTP response\n(body + headers)"] --> B["Structural extraction\n(UUID/hex/slug/opaque\nshape, any field name)"]
+    A --> C["Header extraction\n(Location/Content-Location/Link)"]
+    A --> D["HAL extraction\n(_links.rel.href)"]
+    A --> E["JSON:API extraction\n(data.type/id, relationships)"]
+    Req["Request's own path"] --> F["Route-template matching\n(vs. known template Norms)"]
+    C --> F
+    D --> F
+    E --> F
+    B --> G["Identity normalization\n(typed, namespaced by\nresource type)"]
+    F --> G
+    G --> H["Typed Resource\nState Graph"]
+    H --> I["Lifecycle transition\nderivation (method + status\n+ prior state)"]
+    H --> J["Coverage-directed\nconsumer scoring"]
+    I --> J
+    J --> K["Next sequence\nfollow-up request"]
+    K --> A
+```
+
+Concretely:
+
+- **Structural extraction** reuses the shape-detection regexes this codebase
+  already has for BOLA/minimize purposes (`reUUIDLike`/`reHexLong`/
+  `reBizIDLike`/`reAllDigits`, `utils.go`) so a GUID under `reference`, a slug
+  under `slug`, or a domain-specific field like `resourceRef` (zero `"id"`
+  substring) are all extractable, corroborated by a name hint when one exists
+  but never gated on one.
+- **Header, HAL, and JSON:API extraction** parse `Location`/`Content-Location`/
+  `Link` headers, HAL `_links.<rel>.href` (single or array form), and JSON:API
+  `data.type`/`id` + `relationships.<rel>.data` structurally.
+- **Route-template matching** (`matchRouteTemplateCandidates`) matches any URI
+  found above — *and the current request's own path* (needed for e.g. a
+  `DELETE` returning an empty 204 body, whose target identity exists only in
+  the request path, not the response) — against every known template's
+  already-shape-normalized route (`f.meta[tid].Norm`, from
+  `normalizeEndpointPath`), extracting a **typed candidate per placeholder
+  position** from the *preceding static segment*, not just the URI's final
+  segment — so `/organizations/{orgId}/projects/{projectSlug}` yields two
+  distinct typed candidates (`organization`, `project`), and consecutive
+  candidates from one multi-segment match are linked parent→child in the
+  graph.
+- Every candidate carries **provenance and a confidence score** (`Strategy`,
+  `JSONPath`/`HeaderName`/`LinkRelation`, `Confidence`) — nothing is silently
+  assumed to be an identifier; a `-resource-graph-min-confidence` floor gates
+  what actually enters the graph.
+
+**Lifecycle** (`LifecycleState`: `Unknown/Discovered/Created/Readable/Modified/
+Deleted/Invalidated/FailedCreation/FailedModification/FailedDeletion/Stale`) is
+derived from a *combination* of the request method, the response status class,
+and the resource's own *prior* recorded state (`deriveLifecycleTransition`,
+`resource_scheduling.go`) — e.g. a `GET` immediately following a `Deleted`
+state that returns 404 confirms the deletion (`Deleted`, `valid`); the same
+`GET` returning 200 is a `Stale`, `invalid` observation; a `PUT`/`PATCH` that
+"succeeds" against a `Deleted` resource is `Invalidated`, `invalid`. Every
+transition is recorded (ring-bounded) with its `(from, to, consumerOp)`
+signature checked for novelty — reaching a never-seen transition earns the same
+kind of fanout-widening bonus the shape signature above already does.
+
+**Coverage-directed scheduling** (`scoreConsumer`/`rankConsumersCoverageDirected`,
+`resource_scheduling.go`) replaces `findFollowups`'s purely-static
+`followupPriority` sort with a blended score: the static verb-affinity table as
+one input (down-weighted, not removed), a large bonus for a consumer template
+never yet reached via a sequence follow-up, the consumer's own endpoint's
+*historical coverage yield* (`f.endpointStats[...].NewEdges` — already tracked
+for an unrelated purpose, reused here rather than duplicating tracking), and a
+penalty scaled by recent consecutive failures at that consumer. A bounded,
+seeded-deterministic epsilon-exploration term (`-resource-graph-explore-rate`)
+promotes a lower-scored candidate occasionally so nothing is *permanently*
+starved. `-resource-graph=false` disables all of the above and reproduces the
+exact prior static-sort ordering and name-only extraction, for rollback or
+comparison.
+
+**Deliberate invalid-transition exploration** (Phase 7 of the design):
+`enqueueSequenceFollowups` will, with probability
+`-resource-graph-stale-explore-prob`, deliberately bind a follow-up request to
+a resource already known to be `Deleted`/`Invalidated` (via
+`findCompatibleResources`) instead of a freshly-created one — the concrete
+mechanism that produces `create → delete → read`, `update-after-delete`, and
+similar workflows deliberately, rather than only ever continuing a valid one.
+
+See `docs/resource-state-graph-plan.md` for the full design rationale and
+`docs/resource-state-graph-report.md` for measured results (on a representative
+7-body corpus, the old pipeline found 1 candidate total; the new pipeline
+found 11).
 
 ### Self-verifying, fail-closed instrumentation (Top-20 #4)
 
@@ -1026,6 +1128,9 @@ upside-fuzzer/
 │   │   ├── worker.go           Core HTTP fuzzing loop and coverage tracking
 │   │   ├── coverage.go         SHM bitmap parsing and HTTP coverage reader
 │   │   ├── sequence.go         Stateful producer/consumer chains
+│   │   ├── resource_graph.go       Typed resource-lifecycle state graph
+│   │   ├── resource_extraction.go  Generalized (HAL/JSON:API/header/shape) entity extraction
+│   │   ├── resource_scheduling.go  Lifecycle derivation + coverage-directed consumer scoring
 │   │   ├── template.go         templates.export.json parsing and rendering
 │   │   ├── store.go            Runtime value harvesting and deduplication
 │   │   ├── mutation_engine.go  MOpt-style mutation scheduler
@@ -1152,3 +1257,21 @@ Writing this test suite directly found two more real, previously-unknown bugs:
 handling the bare `Tests`/`test` forms, and `grammarc/oas.py` never handled Swagger
 2.0's `in: body` parameter convention at all (only OpenAPI 3.x's `requestBody` was
 handled — every v2 spec's request body was silently dropped).
+
+### Resource state graph test coverage (2026-07-27)
+
+The typed resource state graph / generalized extraction / coverage-directed
+scheduling work (§ above, `resource_graph.go`/`resource_extraction.go`/
+`resource_scheduling.go`) added 4 new test files and raised `void/go`'s
+statement coverage from 32.7–32.8% to **37.8%**: `resource_graph_test.go` (13
+tests, including a `-race`-verified adversarial concurrent-caller test),
+`resource_extraction_test.go` (20 tests, 9 of them regression tests each
+proving `extractEntityIDs` blind and the new pipeline not, for GUID/slug/HAL/
+JSON:API/nested-composite/no-"id"-substring shapes), `resource_scheduling_test.go`
+(18 tests covering lifecycle-transition classification and coverage-directed
+scheduling, including determinism under a fixed seed and a 50-trial
+starvation-prevention check), and `resource_integration_test.go` (3 tests
+driving the pipeline against a real `httptest` fixture server). Writing the
+integration test directly found and fixed two real bugs before they shipped —
+see `docs/resource-state-graph-report.md`'s "Defects found and fixed during
+this pass" for detail.

@@ -16,7 +16,7 @@
 | #9 | First-party OpenAPI→grammar compiler (`grammarc/`), RESTler retired | #21 | CmpLog/RedQueen live comparison-operand harvesting |
 | #10 | Real Roslyn syntax-tree analyzer (`dotnet/analyzer/`) | #22 | Static constant/string extraction at instrument time |
 | #11 | CMPLOG-lite / 400-body validation-error mining | #23 | Response-schema conformance oracle |
-| #12 | State-reward stateful sequence search (coarse; see P1 #6 below for the open remainder) | #25 | Global `-seed` (partial — no byte-exact replay tool yet, see P1 #14 below) |
+| #12 | State-reward stateful sequence search (typed resource-lifecycle graph + generalized extraction + coverage-directed fanout added on top, 2026-07-27; full learned state-space search still open — see §5) | #25 | Global `-seed` (partial — no byte-exact replay tool yet, see P1 #13 below) |
 | #14 | Constraint-aware boundary mutation (partial; see P1 #4/#5 below for the open remainder) | #16 | SARIF findings export (HTML dashboard still open, see P2 #18 below) |
 
 New work should reference this document's actual section names, not a new numbered ID — the point of this refresh is to stop accumulating IDs that need remembering.
@@ -164,19 +164,24 @@ Persist the corpus + coverage frontier to disk (a `corpus/` directory keyed by t
 ## 5. Stateful Sequences & Entity Harvesting
 
 ### Current architecture
-On a successful write, `enqueueSequenceFollowups` extracts entity IDs, binds them into a `SequenceState`, finds consumers via a dependency index plus same-family path matching, and fans out follow-up requests (POST→GET→PUT→DELETE priority), cloning state per branch. A coarse workflow-*shape* signature (`sequenceStateSignature`: ordered method/normalized-path/status-class triples, deliberately collapsing concrete IDs and exact status codes) rewards reaching a never-before-seen shape with an energy bonus and extra search fanout — the concrete mechanism that lets a 2-3 step producer→consumer chain (e.g. create → archive → restore) get discovered and explored, verified end-to-end on `demo_app/`'s own stateful-crash bug. Persisted workflow reports are deduped by final shape.
+On a successful write, `enqueueSequenceFollowups` extracts entity IDs, binds them into a `SequenceState`, finds consumers via a dependency index plus same-family path matching, and fans out follow-up requests, cloning state per branch. A coarse workflow-*shape* signature (`sequenceStateSignature`) still rewards reaching a never-before-seen shape with an energy bonus and extra search fanout. Layered directly on top of that (not a replacement — both run together): a typed, bounded **resource-lifecycle state graph** (`resource_graph.go`) tracks explicit lifecycle states (`Created`/`Readable`/`Modified`/`Deleted`/`Invalidated`/`Stale`/...) derived from method+status+prior-state; a **generalized extraction pipeline** (`resource_extraction.go`) replaces the old `id`/`Id`/`data[].id`-only extraction with structural shape detection (GUID/hex/slug/opaque, any field name), HTTP header parsing (`Location`/`Content-Location`/`Link`), HAL `_links`, JSON:API `relationships`, and route-template-typed URI matching (extracting a typed candidate per path-placeholder position, not just the final segment); and **coverage-directed consumer scheduling** (`resource_scheduling.go`) replaces the purely-static verb-affinity sort with a blended score (historical per-endpoint coverage yield, a never-reached bonus, a repeated-failure penalty, bounded epsilon-exploration against starvation). `-resource-graph=false` reproduces the prior extraction/fanout behavior exactly. See `docs/resource-state-graph-plan.md`/`resource-state-graph-report.md` for the full design and measured results (on a representative 7-body corpus, the old extraction found 1 candidate total; the new pipeline found 11).
 
 ### Strengths
 - Real runtime value harvesting + producer→consumer chaining, with per-branch state cloning, provenance, and workflow persistence (repro scripts), is a solid working implementation of exactly what separates a stateful API fuzzer from a dumb one.
 - Rewarding new *workflow shapes*, not just new coverage edges, is the concrete mechanism that makes multi-step business-logic bugs (which look identical to a coverage bitmap on the 3rd identical follow-up) discoverable at all.
+- **Entity extraction is no longer id-name-centric.** GUIDs/slugs/references/HAL links/JSON:API relationships under any field name are now extractable, each with provenance and a confidence score, verified by 9 regression tests each proving the old pipeline blind on a shape the new one finds, plus 3 integration tests against a real `httptest` server (not synthetic strings).
+- **An explicit, typed lifecycle model now exists**, distinguishing e.g. a stale post-deletion read (`Stale`, invalid) from an ordinary successful read (`Readable`, valid) — something the shape signature alone structurally cannot express, since both look identical to it.
+- **Fanout is now coverage-directed**, not purely static: a never-reached consumer and one with real historical coverage yield are prioritized over the old verb-affinity-only ordering, with a verified (50-trial) starvation-prevention mechanism and verified determinism under a fixed seed.
 
 ### Currently open weaknesses
-1. **[HIGH] Still a coarse shape signature, not a full resource-lifecycle/typed state graph.** There's no explicit model of "this resource was created, then modified, then deleted, then referenced again" as distinct states beyond the shape signature, and fanout is not yet coverage-directed toward specifically *unreached* consumers — it's breadth-first by static priority.
-2. **[MED] Entity-ID extraction is still `id`-name-centric** (`id`/`Id`/`data[].id`). APIs returning `guid`/`slug`/`reference`/HAL `_links` under other names still break chains.
-3. **[LOW] Sequence depth capped at 3** — many real workflows (checkout, KYC, multi-approval) are longer.
+1. **[MED] Still not a full learned state-space search.** The resource graph is a real typed model with real lifecycle transitions, but exploration is score-based, not the reinforcement-learned search DeepREST/EvoMaster implement over the full state space — this pass built the prerequisite typed model and coverage-directed scoring, not that search algorithm itself.
+2. **[MED] Composite identities are recognized only when pre-composed** (a JSON:API compound id, a nested single-field object) — synthesizing a composite key by correlating unrelated sibling fields (e.g. inferring `{tenant, user}` together identify one resource) is not attempted.
+3. **[LOW] Alias detection is same-step-only.** Two independently-discovered instances that are actually the same resource, observed at different times under different representations, are not retroactively merged.
+4. **[LOW] Sequence depth capped at 3** — many real workflows (checkout, KYC, multi-approval) are longer.
+5. **[LOW] No live end-to-end throughput comparison** for the coverage-directed scheduler specifically — its own per-call overhead is measured (~40–60ns more than the old static sort at a 12-candidate list size) but a full-run req/s comparison with `-resource-graph` on vs. off has not been done.
 
 ### Recommended next step
-Coverage-directed fanout — prioritize consumers whose edges are still unreached, rather than static priority order — is the next concrete step toward the full state-graph search DeepREST/EvoMaster implement, buildable incrementally on the shape-signature mechanism already in place.
+Coverage-directed *sequence fanout depth* — using `findCompatibleResources` to prioritize which already-known resource instance to bind into a deeper follow-up based on which of its lifecycle transitions are still unexplored — is the natural next increment on top of the typed model and scoring now in place, and the more direct remaining step toward the full state-graph search DeepREST/EvoMaster implement.
 
 **Complexity:** Medium–High. **Priority: P1.**
 
@@ -329,16 +334,16 @@ Ordering rationale: OAST and ownership-matrix BOLA are the cheapest large jumps 
 |---|---|---|---|---|
 | 4 | **Typed request-body model reaching mutation** (move mutation above the template-flattening step) | High | 4–6 wk | Unlocks deserialization/polymorphism-class bugs; shared dependency for #5 below |
 | 5 | **Structure-aware, constraint-derived mutation** over that typed model | Med | 2–3 wk | Depends on #4; per-field boundary walks instead of blended-into-generic-pool |
-| 6 | **Coverage-directed sequence fanout** (prioritize consumers with unreached edges; move toward a real resource-lifecycle state graph) | Med–High | 3 wk | Builds incrementally on the existing shape-signature state-reward mechanism |
-| 7 | **Credential-based auto-login + OAuth2/OIDC per identity**, with automatic refresh | Med | 2 wk | Removes the token-file friction JWT-expiry warnings only made visible, not fixed |
-| 8 | **Persistent, resumable corpus** (`corpus/` directory keyed by target) | Low–Med | 1 wk | Warm restarts; real reproducibility and researcher-productivity win, independent of everything else here |
-| 9 | **JWT/session-lifecycle oracle** (`alg=none`, `kid` injection, tampered/expired token replay, replay after logout, mid-session privilege change) | Med | 2 wk | High-value, .NET-native; reuses existing `identity.go`/`auth.go` |
-| 10 | **Sensitive-data/PII exposure oracle** (emails/tokens/PANs/connection strings/stack traces in 2xx bodies) | Low | 1 wk | Real finding class independent of 500s; regex over bodies already collected |
-| 11 | **Taint-marking of injected values** (tag fuzzer payloads, detect where they resurface in responses/SQL errors/file paths) | Med | 1–2 wk | Sharpens injection-oracle precision, finds reflected sinks, cuts false positives |
-| 12 | **Regression/diff-guided fuzzing** (fuzz only code changed between two commits) | Med | 2 wk | CI-friendly "fuzz just this PR in 5 minutes" — nothing in the .NET space does this out of the box |
-| 13 | **Readiness-gated startup + DB-seeding harness** (poll readiness instead of a fixed sleep; seed known per-identity objects) | Low | 1 wk | Removes startup flakiness; also provides ground truth for ownership-matrix BOLA (#3) |
-| 14 | **Request-journal replay tool** for byte-exact reproducibility (seeding alone isn't bit-for-bit under concurrency) | Med | 2 wk | The remaining piece of "a specific finding is mechanically replayable," not just re-approximated |
-| 15 | **Boolean/error-based injection differentials** (beyond time-based SQLi/SSTI-arithmetic) | Med | 1–2 wk | Widens injection-oracle coverage without needing OAST |
+| 6 | **Credential-based auto-login + OAuth2/OIDC per identity**, with automatic refresh | Med | 2 wk | Removes the token-file friction JWT-expiry warnings only made visible, not fixed |
+| 7 | **Persistent, resumable corpus** (`corpus/` directory keyed by target) | Low–Med | 1 wk | Warm restarts; real reproducibility and researcher-productivity win, independent of everything else here |
+| 8 | **JWT/session-lifecycle oracle** (`alg=none`, `kid` injection, tampered/expired token replay, replay after logout, mid-session privilege change) | Med | 2 wk | High-value, .NET-native; reuses existing `identity.go`/`auth.go` |
+| 9 | **Sensitive-data/PII exposure oracle** (emails/tokens/PANs/connection strings/stack traces in 2xx bodies) | Low | 1 wk | Real finding class independent of 500s; regex over bodies already collected |
+| 10 | **Taint-marking of injected values** (tag fuzzer payloads, detect where they resurface in responses/SQL errors/file paths) | Med | 1–2 wk | Sharpens injection-oracle precision, finds reflected sinks, cuts false positives |
+| 11 | **Regression/diff-guided fuzzing** (fuzz only code changed between two commits) | Med | 2 wk | CI-friendly "fuzz just this PR in 5 minutes" — nothing in the .NET space does this out of the box |
+| 12 | **Readiness-gated startup + DB-seeding harness** (poll readiness instead of a fixed sleep; seed known per-identity objects) | Low | 1 wk | Removes startup flakiness; also provides ground truth for ownership-matrix BOLA (#3) |
+| 13 | **Request-journal replay tool** for byte-exact reproducibility (seeding alone isn't bit-for-bit under concurrency) | Med | 2 wk | The remaining piece of "a specific finding is mechanically replayable," not just re-approximated |
+| 14 | **Boolean/error-based injection differentials** (beyond time-based SQLi/SSTI-arithmetic) | Med | 1–2 wk | Widens injection-oracle coverage without needing OAST |
+| 15 | **Coverage-directed sequence fanout *depth*** (prioritize which known resource instance to bind into a deeper follow-up based on unexplored lifecycle transitions, via `findCompatibleResources`) | Med | 2 wk | Builds on the typed resource-lifecycle graph + coverage-directed consumer scoring added 2026-07-27 (see §5); the natural next increment toward the full state-graph search DeepREST/EvoMaster implement |
 
 ## P2 — real value, lower urgency
 
@@ -349,7 +354,7 @@ Ordering rationale: OAST and ownership-matrix BOLA are the cheapest large jumps 
 | 18 | **HTML findings dashboard** (SARIF export already exists for CI/scanner integration; a live web dashboard now also exists via `-web-ui`, but it's a live-run view, not a persisted HTML report) | Low | 3–5 d | Human-browsable report for quick manual review |
 | 19 | **Non-REST surfaces**: gRPC, GraphQL (HotChocolate), SignalR/WebSocket | High | 4–6 wk | Large real .NET surface outside the current REST-only model; GraphQL brings its own oracle class |
 | 20 | **Algorithmic-complexity / ReDoS / resource-exhaustion oracle** | Med | 2 wk | DoS class on top of the existing latency baseline |
-| 21 | **Distributed parallel fuzzing + corpus sync** across target replicas | High | 3 wk | Scale on large apps; synergizes with persistent corpus (#8) |
+| 21 | **Distributed parallel fuzzing + corpus sync** across target replicas | High | 3 wk | Scale on large apps; synergizes with persistent corpus (#7) |
 | 22 | **Versioned releases/packaging** (`dotnet tool`, registry container, brew/binary release) | Med | 2 wk | Adoption; no longer requires cloning + reading runbooks |
 | 23 | **CI coverage for `demo_app/`** (a second E2E-style gate checking a handful of its planted bugs stay findable) | Low–Med | 3–5 d | `demo_app/`'s 24-bug catalog is currently verified by hand only |
 

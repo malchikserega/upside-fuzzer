@@ -212,6 +212,23 @@ Generated PoC scripts and structured reports redact sensitive auth headers. If a
 
 **State-reward search (Top-20 #12):** a sequence step reaching a workflow *shape* (ordered method+normpath+status-class, concrete IDs collapsed) never seen this run earns a state-novelty energy bonus and one extra fanout branch — rewarding new *states*, not just new coverage edges. `printFinalReport` shows `Sequence engine: new_states_found=N unique_workflows_persisted=M`; the latter also dedups the on-disk workflow reports (`workflows/*.json`+`.sh`) by final shape so equivalent workflows aren't all dumped to disk.
 
+**Typed resource state graph** (see `docs/resource-state-graph-plan.md`):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-resource-graph` | **true** | Typed resource-lifecycle tracking + generalized (HAL/JSON:API/header/shape) extraction + coverage-directed consumer scheduling. `false` reproduces the exact prior name-based extraction and static verb-affinity fanout ordering |
+| `-resource-graph-max-per-type` | `500` | Max tracked resource instances per resource type (oldest/lowest-confidence evicted first) |
+| `-resource-graph-max-aliases` | `16` | Max alternative identities tracked per resource instance |
+| `-resource-graph-max-transitions` | `5000` | Max lifecycle transitions retained (ring-bounded) |
+| `-resource-graph-explore-rate` | `0.10` | Probability of promoting a lower-scored sequence consumer ahead of the coverage-directed ranking, so it's never permanently starved |
+| `-resource-graph-min-confidence` | `0.30` | Minimum extraction confidence for a candidate to be recorded in the graph |
+| `-resource-graph-unreached-weight` | `40.0` | Scoring bonus for a consumer never yet reached |
+| `-resource-graph-yield-weight` | `2.0` | Scoring weight per historical new-edge discovered at a consumer's endpoint |
+| `-resource-graph-failure-penalty` | `5.0` | Scoring penalty per consecutive failed attempt at a consumer |
+| `-resource-graph-stale-explore-prob` | `0.15` | Probability of deliberately binding a follow-up to a DELETED/INVALIDATED resource, to exercise stale-read/update-after-delete workflows rather than only valid ones |
+
+Lifecycle states (`Unknown`/`Discovered`/`Created`/`Readable`/`Modified`/`Deleted`/`Invalidated`/`FailedCreation`/`FailedModification`/`FailedDeletion`/`Stale`) are derived from method+status+prior-state, never method alone — e.g. a `GET` returning 200 against a resource this run already deleted is `Stale`/`invalid`, not `Readable`. Persisted workflow JSON (`workflows/*.json`) gains optional `resources`/`transitions` fields with the graph's own snapshot for that sequence.
+
 ### Crash Analysis (all ON by default)
 
 | Flag | Default | Description |
@@ -343,6 +360,9 @@ The fuzzer engine has been designed around distinct, cohesive files for maintain
 - **`template.go`**: Parsing of `templates.export.json` and rendering API request structures into raw HTTP bytes.
 - **`worker.go`**: Core fuzzing loop, concurrency management, and worker thread synchronization (`sync.WaitGroup`).
 - **`sequence.go`**: Stateful multi-step chains (e.g., CREATE $\rightarrow$ READ $\rightarrow$ UPDATE $\rightarrow$ DELETE), matching producer/consumer followup endpoints.
+- **`resource_graph.go`**: Typed, bounded resource-lifecycle state graph (identities, aliases, lifecycle transitions) layered on top of the sequence engine.
+- **`resource_extraction.go`**: Generalized entity/reference extraction (HAL `_links`, JSON:API relationships, headers, route-template-typed URI segments, value-shape detection) replacing id-name-centric extraction.
+- **`resource_scheduling.go`**: Lifecycle-transition derivation and coverage-directed consumer scoring/ranking, replacing the purely-static verb-affinity fanout sort.
 - **`triage.go`**: Source-aware priority and routing of crash severity scores.
 - **`cluster.go`**: Root-cause clustering — collapses many per-payload crash signatures into distinct bugs via normalized exception message + top application stack frame.
 - **`oracle.go`**: Vulnerability oracles beyond HTTP 500 — BOLA/IDOR and broken-auth via cross-identity/no-credential replay, mass assignment, plus positive injection detection (time-based SQLi, evaluated SSTI, reflected XSS).
