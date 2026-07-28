@@ -374,7 +374,12 @@ func (f *Fuzzer) pickIdentityForEndpoint(method, path string) string {
 	case "random":
 		return f.identities[rand.Intn(len(f.identities))].Name
 	default:
-		weights := make([]float64, 0, len(f.identities))
+		// Reuse f.idWeightsBuf across calls (the same buffer-reuse pattern worker.go's
+		// weightsBuf/tidsBuf already use for template selection) instead of allocating a
+		// fresh slice every request -- this function runs on the single work-item-
+		// building goroutine (buildWorkItem -> decorateWorkItem), never concurrently,
+		// so reuse here is safe.
+		weights := f.idWeightsBuf[:0]
 		for _, id := range f.identities {
 			w := math.Max(0.01, id.Weight)
 			nameLow := strings.ToLower(id.Name)
@@ -399,6 +404,7 @@ func (f *Fuzzer) pickIdentityForEndpoint(method, path string) string {
 			}
 			weights = append(weights, w)
 		}
+		f.idWeightsBuf = weights // capture growth so a later call can reuse the larger backing array
 		idx := weightedPick(weights)
 		if idx < 0 || idx >= len(f.identities) {
 			idx = rand.Intn(len(f.identities))

@@ -272,10 +272,7 @@ func (f *Fuzzer) renderUI(epochName string, epochIdx int, inFlight int) {
 				TimeRemaining:    timeRem,
 			}
 
-			select {
-			case f.WebUIStatsCh <- stats:
-			default:
-			}
+			f.WebUIHub.broadcast(stats)
 		}
 		if f.cfg.NoUI {
 			return
@@ -738,25 +735,37 @@ func (f *Fuzzer) printFinalReport() {
 		"triage_summary":              triageSummary,
 		"top_findings":                topFindings,
 	}
-	_ = os.MkdirAll(filepath.Dir(f.cfg.SummaryFile), 0o755)
-	if b, err := json.MarshalIndent(summary, "", "  "); err == nil {
-		_ = os.WriteFile(f.cfg.SummaryFile, append(b, '\n'), 0o644)
-	}
+	writeJSONReport(f.cfg.SummaryFile, "Summary", summary)
 	report := f.buildStructuredCrashReport(triageSummary)
-	_ = os.MkdirAll(filepath.Dir(f.cfg.ReportFile), 0o755)
-	if b, err := json.MarshalIndent(report, "", "  "); err == nil {
-		_ = os.WriteFile(f.cfg.ReportFile, append(b, '\n'), 0o644)
-	}
+	writeJSONReport(f.cfg.ReportFile, "Report", report)
 	fmt.Printf("Crash log file: %s\n", f.cfg.CrashFile)
 	fmt.Printf("Unique crash file: %s\n", f.cfg.UniqueCrashFile)
 	fmt.Printf("Summary file: %s\n", f.cfg.SummaryFile)
 	fmt.Printf("Report file: %s\n", f.cfg.ReportFile)
 	if strings.TrimSpace(f.cfg.SARIFFile) != "" {
 		sarif := f.buildSARIFReport()
-		_ = os.MkdirAll(filepath.Dir(f.cfg.SARIFFile), 0o755)
-		if b, err := json.MarshalIndent(sarif, "", "  "); err == nil {
-			_ = os.WriteFile(f.cfg.SARIFFile, append(b, '\n'), 0o644)
-		}
+		writeJSONReport(f.cfg.SARIFFile, "SARIF", sarif)
 		fmt.Printf("SARIF file: %s\n", f.cfg.SARIFFile)
+	}
+}
+
+// writeJSONReport marshals v as indented JSON and writes it to path, printing a loud
+// WARNING (not silently discarding the error) if either the marshal or the write
+// fails. A crash-finding report failing to write -- a full disk, a bad path, a
+// permission error -- used to be swallowed here (`_ = os.WriteFile(...)`), so a run
+// could finish, print "Summary file: <path>" as if it had succeeded, and leave the
+// operator believing their findings were saved when the file was never written.
+func writeJSONReport(path string, kind string, v any) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Printf("WARNING: could not create directory for %s file %q: %v\n", kind, path, err)
+		return
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Printf("WARNING: could not encode %s file %q: %v\n", kind, path, err)
+		return
+	}
+	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		fmt.Printf("WARNING: could not write %s file %q: %v\n", kind, path, err)
 	}
 }

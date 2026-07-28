@@ -121,7 +121,7 @@ type Config struct {
 	// on any endpoint whose grammar carries no response_schemas data.
 	SchemaConformance    bool
 	SQLiTimeThresholdSec float64
-	Profile                   string
+	Profile              string
 	// CmpLog (Top-20+ #21): poll /shm/cmplog for comparison operands harvested from
 	// the target's own IL and blend them into string/int mutation. No-ops cleanly
 	// (empty pool) against a target built without --cmplog, or in --inject-mode source.
@@ -262,8 +262,6 @@ func NewFenwickSampler() *FenwickSampler {
 		weights: []float64{},
 	}
 }
-
-func (f *FenwickSampler) Len() int { return len(f.weights) }
 
 func (f *FenwickSampler) add(i int, delta float64) {
 	for i < len(f.tree) {

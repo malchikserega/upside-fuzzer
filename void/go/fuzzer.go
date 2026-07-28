@@ -175,11 +175,12 @@ type Fuzzer struct {
 	cmpLogPollErrs int
 
 	// Reusable buffers for weighted template selection to avoid per-call allocations.
-	weightsBuf []float64
-	tidsBuf    []int
+	weightsBuf   []float64
+	tidsBuf      []int
+	idWeightsBuf []float64
 
-	// Channel for asynchronously pushing UI states to Web UI
-	WebUIStatsCh chan WebUIStats
+	// Hub for asynchronously broadcasting UI state to every connected Web UI client.
+	WebUIHub *webUIHub
 }
 
 func NewFuzzer(cfg Config) (*Fuzzer, error) {
@@ -338,7 +339,7 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		uiInline:       isTerminal(os.Stdout),
 		eventLog:       make([]string, 0, 8),
 		requestSamples: make([]string, 0, 8),
-		WebUIStatsCh:   make(chan WebUIStats, 2),
+		WebUIHub:       newWebUIHub(),
 		uiWidthLocked:  0,
 	}
 	for i := range f.templates {

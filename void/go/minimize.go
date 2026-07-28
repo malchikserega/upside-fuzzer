@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-
 // minimize.go — Crash minimization (binary field removal) and repro verification.
 
 func (f *Fuzzer) reproCheckCrash(item WorkItem, status int) map[string]any {
@@ -56,7 +55,6 @@ func (f *Fuzzer) reproCheckCrash(item WorkItem, status int) map[string]any {
 func formatPct(pct float64) string {
 	return fmt.Sprintf("%.1f", pct)
 }
-
 
 func (f *Fuzzer) minimizeCrashCandidate(item WorkItem, status int) (WorkItem, bool, int) {
 	maxProbes := maxInt(0, f.cfg.MinimizeMaxProbes)

@@ -136,13 +136,14 @@ func (d *DictStore) allIDLikeValues() []string {
 	}
 	return uniqStrings(filterUsefulStrings(out))
 }
+
 type RuntimeStore struct {
-	mu        sync.RWMutex
-	values    map[string][]string
+	mu     sync.RWMutex
+	values map[string][]string
 	// valueSeen is a parallel set for O(1) dedup in addValue, avoiding O(n) linear scan.
 	valueSeen map[string]map[string]struct{}
 	relations map[string][][2]string
-	depValues    map[string][]string
+	depValues map[string][]string
 	// depValueSeen is a parallel set for O(1) dedup in addDepValue.
 	depValueSeen map[string]map[string]struct{}
 }
@@ -361,10 +362,15 @@ func (r *RuntimeStore) customPayloadCandidates(key string, dict *DictStore) []st
 	out = append(out, dict.candidatesForKey(keyNorm)...)
 
 	if strings.HasSuffix(keyCanon, "id") {
-		out = append(out, r.allIDLikeValues()...)
+		// r.allIDLikeValues() takes an RLock and rebuilds a deduplicated slice from
+		// the whole values map -- compute it once and reuse it below instead of
+		// re-scanning on every one of the 3 mutateBusinessID calls (same value each
+		// time within this single customPayloadCandidates call).
+		idVals := r.allIDLikeValues()
+		out = append(out, idVals...)
 		out = append(out, dict.allIDLikeValues()...)
 		for i := 0; i < 3; i++ {
-			out = append(out, mutateBusinessID(r.allIDLikeValues()))
+			out = append(out, mutateBusinessID(idVals))
 		}
 	}
 	out = filterUsefulStrings(out)

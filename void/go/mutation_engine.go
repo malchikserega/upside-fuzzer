@@ -287,11 +287,6 @@ func fieldConstraintStringCandidates(v string, hint *Segment) []string {
 	return cands
 }
 
-func mutateString(v string) string {
-	val, _ := mutateStringCategorized(v, nil)
-	return val
-}
-
 func max0(n int) int {
 	if n < 0 {
 		return 0

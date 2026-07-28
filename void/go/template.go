@@ -381,7 +381,7 @@ func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocD
 					}
 				}
 			}
-			
+
 			if seqVal != "" {
 				val = seqVal
 				mutParts = append(mutParts, "seq_"+s.PayloadKey)
@@ -446,7 +446,7 @@ func (f *Fuzzer) renderTemplateContext(templateID int, mutateMode string, havocD
 					}
 				}
 			}
-			
+
 			if seqVal != "" {
 				b.WriteString(seqVal)
 				mutParts = append(mutParts, "seq_dyn")

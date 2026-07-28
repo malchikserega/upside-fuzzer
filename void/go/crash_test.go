@@ -188,10 +188,10 @@ func TestNormalizeCrashMutationLabelCategorizes(t *testing.T) {
 
 func TestExtractExceptionTypeParsesDotNetExceptionNames(t *testing.T) {
 	cases := map[string]string{
-		"System.ArgumentException: Value cannot be null":     "ArgumentException",
-		"Nop.Core.NopException: something broke":             "NopException",
-		"no exception marker here at all":                    "",
-		"":                                                   "",
+		"System.ArgumentException: Value cannot be null": "ArgumentException",
+		"Nop.Core.NopException: something broke":         "NopException",
+		"no exception marker here at all":                "",
+		"":                                               "",
 	}
 	for body, want := range cases {
 		got := extractExceptionType(body)

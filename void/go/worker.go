@@ -76,10 +76,8 @@ func (f *Fuzzer) mainLoop() error {
 		select {
 		case <-stopCh:
 			markStopped("input command")
-			break
 		case <-sigCh:
 			markStopped("signal")
-			break
 		default:
 		}
 
@@ -171,6 +169,11 @@ func (f *Fuzzer) mainLoop() error {
 			continue
 		}
 
+		// A single blocking select (no `default`) over these four cases is already
+		// exactly what this needs: it returns immediately if any case is already
+		// ready, and blocks only when none are -- behaviorally identical to (and
+		// simpler than) a non-blocking select-with-default whose default branch
+		// falls through to an identical blocking select over the same cases.
 		select {
 		case <-stopCh:
 			markStopped("input command")
@@ -180,25 +183,20 @@ func (f *Fuzzer) mainLoop() error {
 			pending--
 			f.handleResult(res)
 		case <-tick.C:
-		default:
-			select {
-			case <-stopCh:
-				markStopped("input command")
-			case <-sigCh:
-				markStopped("signal")
-			case res := <-resultCh:
-				pending--
-				f.handleResult(res)
-			case <-tick.C:
-			}
 		}
 
 		f.renderUI(ep.Name, epIdx, pending)
 		f.tuneConcurrency()
 	}
 
-	// Drain a short tail.
-	drainDeadline := time.Now().Add(2 * time.Second)
+	// Drain the tail of in-flight requests. The deadline must be at least the
+	// configured per-request timeout (default 5s) plus a small margin -- a fixed
+	// 2s deadline here was shorter than the default -request-timeout, so any
+	// request still legitimately in flight at shutdown (not stuck, just slower
+	// than 2s) had its result silently dropped from the final report, and its
+	// worker goroutine kept running past printFinalReport() until the request's
+	// own timeout eventually fired.
+	drainDeadline := time.Now().Add(time.Duration(math.Max(2.0, f.cfg.RequestTimeoutSec)*float64(time.Second) + float64(time.Second)))
 	for pending > 0 && time.Now().Before(drainDeadline) {
 		select {
 		case <-stopCh:
@@ -307,6 +305,18 @@ func (f *Fuzzer) sendOneWithClient(item WorkItem, httpClient *http.Client) SendR
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 		body = sanitizeText(string(buf), maxInt(1024, f.cfg.MaxResponseBytes))
 	}
+	// Drain (bounded) any remaining, unread body before Close(). Per net/http's own
+	// docs, the Transport only returns a connection to its idle pool for HTTP/1.x
+	// keep-alive reuse once the body is read to EOF -- an early Close() on a
+	// partially-read body forces the Transport to tear the connection down instead,
+	// which at this project's target throughput (1000+ req/s) meant every truncated
+	// response (any 2xx/4xx/5xx body bigger than maxBytes, and every 1xx/3xx, which
+	// previously read nothing at all) silently defeated the MaxIdleConnsPerHost
+	// tuning in fuzzer.go and forced a fresh TCP/TLS handshake per request. The 8MB
+	// cap keeps this bounded against a pathological/adversarial target that streams
+	// an unbounded or extremely large body -- draining is best-effort, not a
+	// guarantee, for bodies beyond that.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainRemainderCap))
 	headers := map[string]string{}
 	for k, vals := range resp.Header {
 		if len(vals) > 0 {

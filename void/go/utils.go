@@ -20,7 +20,6 @@ import (
 // utils.go — Generic utilities: string helpers, path normalization,
 // value filtering, file I/O helpers, endpoint key derivation, regexps.
 
-
 const (
 	maxRuntimeValuesPerKey   = 200
 	maxRuntimeRelationsPerKV = 500
@@ -29,6 +28,11 @@ const (
 	traceDepthMax            = 4
 	minSHMBitmapSize         = 65536
 	defaultSHMBitmapSize     = 262144
+	// drainRemainderCap bounds the best-effort HTTP response-body drain in
+	// worker.go::sendOneWithClient (reads to EOF, up to this cap, so the
+	// Transport can reuse the connection) against a pathological/adversarial
+	// target streaming an unbounded body.
+	drainRemainderCap = 8 << 20 // 8MB
 )
 
 var (
@@ -385,28 +389,6 @@ func isFormLikeContentType(ct string) bool {
 	return strings.Contains(low, "application/x-www-form-urlencoded") || strings.Contains(low, "multipart/form-data")
 }
 
-func extractCookieValue(cookieHeader, name string) string {
-	if strings.TrimSpace(cookieHeader) == "" || strings.TrimSpace(name) == "" {
-		return ""
-	}
-	for _, part := range strings.Split(cookieHeader, ";") {
-		p := strings.TrimSpace(part)
-		if p == "" {
-			continue
-		}
-		idx := strings.Index(p, "=")
-		if idx <= 0 {
-			continue
-		}
-		k := strings.TrimSpace(p[:idx])
-		v := strings.TrimSpace(p[idx+1:])
-		if strings.EqualFold(k, name) {
-			return v
-		}
-	}
-	return ""
-}
-
 func upsertFormField(body, key, value string) (string, bool) {
 	if strings.TrimSpace(key) == "" {
 		return body, false
@@ -683,15 +665,6 @@ func isIDLikeKey(k string) bool {
 	return ck == "id" || strings.HasSuffix(ck, "id")
 }
 
-func contains(slice []string, v string) bool {
-	for _, s := range slice {
-		if s == v {
-			return true
-		}
-	}
-	return false
-}
-
 func anySliceToStrings(arr []any) []string {
 	out := make([]string, 0, len(arr))
 	for _, v := range arr {
@@ -776,7 +749,6 @@ func uniqStrings(in []string) []string {
 // dedupStrings removes duplicate strings; equivalent to uniqStrings.
 // Kept for backward compatibility with callers in advanced_features.go.
 func dedupStrings(in []string) []string { return uniqStrings(in) }
-
 
 func filterUsefulStrings(in []string) []string {
 	out := make([]string, 0, len(in))
