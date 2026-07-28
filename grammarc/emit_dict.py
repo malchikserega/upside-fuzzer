@@ -17,12 +17,21 @@ from typing import Any, Dict, List
 from .common import to_scalar, uniq
 
 
-def merge_external_dict(pool: Dict[str, List[str]], external_path: Path) -> None:
+def merge_external_dict(pool: Dict[str, List[str]], external_path: Path, warn_on_parse_error: bool = False) -> None:
     if not external_path.exists():
         return
     try:
         data = json.loads(external_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        # warn_on_parse_error is False for the always-on dict.custom.json convention
+        # merge (emit_dict.py's own scaffold_custom_dict_if_missing call below) --
+        # that file may legitimately not exist yet or be mid-edit, and staying silent
+        # there is by design. It's True for an explicit, user-supplied `--dict <path>`
+        # (cli.py): a user who deliberately pointed at a dictionary file that fails to
+        # parse deserves to know why their values never showed up, the same way every
+        # other cli.py error path already prints a `[grammarc] WARNING: ...` line.
+        if warn_on_parse_error:
+            print(f"[grammarc] WARNING: could not parse --dict file {external_path}: {e}")
         return
     if isinstance(data, dict) and isinstance(data.get("dictionaries"), dict):
         data = data["dictionaries"]

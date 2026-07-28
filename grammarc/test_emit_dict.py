@@ -6,6 +6,8 @@ Stdlib-only, matching the rest of grammarc -- no pip install needed.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -14,6 +16,7 @@ from pathlib import Path
 from .emit_dict import (
     CUSTOM_DICT_FILENAME,
     merge_custom_dict_convention,
+    merge_external_dict,
     scaffold_custom_dict_if_missing,
     write_dict,
 )
@@ -120,6 +123,49 @@ class MergeCustomDictConventionTests(unittest.TestCase):
                 json.loads(custom_path.read_text(encoding="utf-8"))["tenantId"],
                 ["acme-corp", "globex-inc"],
             )
+
+
+class MergeExternalDictWarningTests(unittest.TestCase):
+    """merge_external_dict's JSON-parse-failure path used to be completely
+    silent for both of its callers. That's still correct for the always-on
+    dict.custom.json convention merge (a file that may legitimately not exist
+    or be mid-edit) -- but an explicit, user-supplied `--dict <path>` deserves
+    a warning when it fails to parse, the same way every other compile-grammar
+    error path already prints one. warn_on_parse_error controls this."""
+
+    def test_malformed_dict_silent_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_path = Path(tmp) / "bad.json"
+            bad_path.write_text("{not valid json", encoding="utf-8")
+            pool: dict = {}
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                merge_external_dict(pool, bad_path)  # warn_on_parse_error defaults False
+            self.assertEqual(pool, {})
+            self.assertEqual(buf.getvalue(), "")
+
+    def test_malformed_dict_warns_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_path = Path(tmp) / "bad.json"
+            bad_path.write_text("{not valid json", encoding="utf-8")
+            pool: dict = {}
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                merge_external_dict(pool, bad_path, warn_on_parse_error=True)
+            self.assertEqual(pool, {})
+            self.assertIn("WARNING", buf.getvalue())
+            self.assertIn(str(bad_path), buf.getvalue())
+
+    def test_valid_dict_never_warns_either_way(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            good_path = Path(tmp) / "good.json"
+            good_path.write_text(json.dumps({"currencyCode": ["USD"]}), encoding="utf-8")
+            pool: dict = {}
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                merge_external_dict(pool, good_path, warn_on_parse_error=True)
+            self.assertEqual(pool, {"currencyCode": ["USD"]})
+            self.assertEqual(buf.getvalue(), "")
 
 
 if __name__ == "__main__":

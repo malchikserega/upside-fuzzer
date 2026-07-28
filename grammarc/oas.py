@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from .common import safe_float, safe_int, to_scalar, uniq
+from .common import canonical_key, safe_float, safe_int, to_scalar, uniq
 
 
 @dataclass
@@ -352,21 +352,6 @@ class OASParser:
             operations.append(operation)
         return operations
 
-    def all_fields(self, operations: List[Operation]) -> List[FieldHint]:
-        """Flattened field list across every operation's request+response body, for
-        boundary.py's dictionary-wide value synthesis (mirrors what
-        enhance-grammar.py::OpenAPIExtractor.extract()'s flat list fed DictionaryEnhancer)."""
-        out: List[FieldHint] = []
-        for op in operations:
-            out.extend(op.path_params)
-            out.extend(op.query_params)
-            out.extend(op.header_params)
-            if op.request_schema:
-                out.extend(self._collect_schema_fields(op.request_schema))
-            if op.response_schema:
-                out.extend(self._collect_schema_fields(op.response_schema))
-        return out
-
     def multipart_endpoints(self, operations: List[Operation]) -> List[MultipartEndpoint]:
         out: List[MultipartEndpoint] = []
         for op in operations:
@@ -374,7 +359,6 @@ class OASParser:
                 seen: Set[str] = set()
                 deduped: List[FieldHint] = []
                 for f in op.multipart_fields:
-                    from .common import canonical_key
                     ck = canonical_key(f.name)
                     if ck in seen:
                         continue

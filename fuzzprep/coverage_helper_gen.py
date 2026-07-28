@@ -645,13 +645,8 @@ namespace {ns_prefix}.{subdir_name}
     }}
 }}
 """
-    # Prefer Utilities/ (most ASP.NET projects use this convention); fall back to Helpers/.
-    utilities_dir = output_path / main_proj.path / "Utilities"
-    helpers_dir = output_path / main_proj.path / "Helpers"
-    if utilities_dir.exists():
-        target_dir = utilities_dir
-    else:
-        target_dir = helpers_dir
+    # Reuse the subdir_name decided above -- avoids re-stat'ing the same two paths.
+    target_dir = utilities_dir if subdir_name == "Utilities" else helpers_dir
     target_dir.mkdir(parents=True, exist_ok=True)
     (target_dir / "CoverageExtensions.cs").write_text(code)
     print(f"  Generated Coverage Extensions in {main_proj.name}/{target_dir.name}/")

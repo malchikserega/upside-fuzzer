@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set
 
 from .boundary import is_dictionary_worthy
-from .common import canonical_key
+from .common import canonical_key, safe_float, safe_int, to_scalar, uniq
 from .dependencies import DependencyPlan
 from .oas import FieldHint, OASParser
 
@@ -88,7 +88,6 @@ def _is_quoted(type_name: str) -> bool:
 
 
 def _field_hint_from_schema(name: str, rs: Dict[str, Any], required: bool = False) -> FieldHint:
-    from .common import safe_float, safe_int, to_scalar, uniq
     p_type = str(rs.get("type", "string"))
     p_fmt = str(rs.get("format", ""))
     p_enum = [str(v) for v in rs.get("enum", [])] if isinstance(rs.get("enum"), list) else []

@@ -7,7 +7,7 @@ to consume.
 import re
 import json
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .models import ProjectInfo, MultiAnalysisResult, _collides_with_framework_denylist
 
@@ -60,6 +60,11 @@ class MultiProjectAnalyzer:
     def __init__(self, src_path: str, verbose: bool = True):
         self.src_path = Path(src_path)
         self.verbose = verbose
+        # Set by cli.py from --exclude-namespaces when provided; declared here (rather
+        # than only monkey-patched from outside via `analyzer.exclude_namespaces = [...]`)
+        # so the attribute is discoverable/typed instead of needing a defensive getattr
+        # fallback wherever it's read.
+        self.exclude_namespaces: List[str] = []
 
     def log(self, message: str):
         if self.verbose:
@@ -222,7 +227,13 @@ class MultiProjectAnalyzer:
                     m = re.search(r'^[ \t]*namespace\s+([\w][\w.]*)\s*[{;]', txt, re.MULTILINE)
                     if m:
                         ns = m.group(1)
-                except Exception:
+                except Exception as e:
+                    # A read/decode failure here silently dropped the file from
+                    # business_files with zero diagnostic output -- inconsistent with
+                    # this module's own habit of logging every other detection edge
+                    # case it hits (see the comment above about the Bitwarden
+                    # namespace-detection bug this same try/except guards against).
+                    self.log(f"  ! Could not read {cs}: {e}")
                     continue
 
                 if self._is_business_logic(cs, project_dir):
@@ -261,7 +272,7 @@ class MultiProjectAnalyzer:
         if not main_project_name and projects:
             main_project_name = projects[0].name
 
-        exclude_namespaces = getattr(self, 'exclude_namespaces', [])
+        exclude_namespaces = self.exclude_namespaces
 
         # --instrument-all-user-code is strictly more complete than the namespace
         # allowlist (no BUSINESS_PATTERNS/BUSINESS_DIRECTORIES naming-convention gaps —

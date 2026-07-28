@@ -55,9 +55,10 @@ def _build_dict_pool(operations, parser: OASParser, roslyn_idx, dep_plan) -> Dic
             add(canonical_key(p.name), values_from_constraints(p))
 
         if op.request_schema:
-            top_level = {f.name: f for f in parser._collect_schema_fields(op.request_schema) if "." not in f.name}
+            all_request_fields = parser._collect_schema_fields(op.request_schema)
+            top_level = {f.name: f for f in all_request_fields if "." not in f.name}
             merged_top = merge_operation_fields(op, roslyn_idx, top_level)
-            for f in parser._collect_schema_fields(op.request_schema):
+            for f in all_request_fields:
                 tail = f.name.split(".")[-1]
                 if "." not in f.name:
                     hint = merged_top.get(f.name, f)
@@ -127,7 +128,7 @@ def compile_grammar(swagger_path: Path, out_dir: Path, roslyn_path: Path | None,
         for k, vs in multipart_dict_seeds(ep).items():
             pool.setdefault(k, []).extend(vs)
     if external_dict_path:
-        merge_external_dict(pool, external_dict_path)
+        merge_external_dict(pool, external_dict_path, warn_on_parse_error=True)
 
     # Custom dictionary convention: scaffold a starter dict.custom.json the first
     # time this --out directory is compiled (never overwritten once it exists),

@@ -78,10 +78,3 @@ def singularize(word: str) -> str:
     if w.endswith("s") and not w.endswith("ss") and len(w) > 1:
         return w[:-1]
     return w
-
-
-def canonicalize_payload_key(name: str) -> str:
-    """Payload/dependency-variable key convention used across grammarc + Go engine
-    (store.go's DictStore/canonicalKey do their own case-insensitive matching, so this
-    just needs to be stable and readable, not any particular casing)."""
-    return canonical_key(name)
