@@ -20,7 +20,6 @@ instrumentor <path-to-dll> --config /path/to/ns.json   # explicit config file pa
 | File | Purpose |
 |---|---|
 | `Program.cs` | Everything: CLI parsing, `NamespaceMatcher`/`InstrumentationFilter` (type-selection logic), SharpFuzz's basic-block coverage rewrite, `CmpLogInstrumentor` (records live string/int comparison operands — CmpLog/RedQueen, see `docs/ARCHITECTURE.md` §"CmpLog/RedQueen"), and `ConstantExtractor` (read-only harvest of string/int literals at instrument time). |
-| `Program.Generated.cs` | **Dead code, not used.** Left in place as a marker pointing back to `Program.cs`; nothing in the build references it. |
 | `instrument.sh` | Standalone manual-run helper script (progress output around a single `instrumentor <dll>` invocation) — not part of the generated-Dockerfile pipeline. |
 
 `instrumentor_gen.py`/`coverage_helper_gen.py` in `fuzzprep/` are what actually copy this

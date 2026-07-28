@@ -1,10 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Lets the test host launch on dev machines that only have newer runtimes
+         installed (e.g. 9.0/10.0, no 8.0): a harmless no-op wherever net8.0 is
+         actually present, which CI's dotnet-sdk 8.x setup already guarantees.
+         Matches dotnet/instrumentor.Tests/instrumentor.Tests.csproj's setting. -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

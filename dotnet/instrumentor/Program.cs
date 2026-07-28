@@ -212,9 +212,8 @@ try
     try
     {
         var metaPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dllPath)) ?? ".", ".upsidefuzz_instrumented.jsonl");
-        var line = "{\"assembly\":\"" + Path.GetFileName(dllPath).Replace("\"", "") +
-                   "\",\"instrumented_types\":" + instrumentedCount + "}";
-        File.AppendAllText(metaPath, line + "\n");
+        var record = new { assembly = Path.GetFileName(dllPath), instrumented_types = instrumentedCount };
+        File.AppendAllText(metaPath, JsonSerializer.Serialize(record) + "\n");
     }
     catch (Exception ex)
     {
@@ -279,6 +278,20 @@ if (cmpLogEnabled)
 // existing branch targets and exception-handler regions stay valid without needing
 // offset recalculation (Cecil resolves branches by Instruction object, not raw
 // offset, until AssemblyDefinition.Write() runs).
+// Shared by CmpLogInstrumentor and ConstantExtractor -- both need to walk every
+// (possibly nested) type in a module, and previously each defined an identical
+// private copy of this method.
+internal static class IlUtil
+{
+    internal static IEnumerable<TypeDefinition> FlattenNestedTypes(TypeDefinition t)
+    {
+        yield return t;
+        foreach (var nested in t.NestedTypes)
+            foreach (var n in FlattenNestedTypes(nested))
+                yield return n;
+    }
+}
+
 public static class CmpLogInstrumentor
 {
     public static void Run(string dllPath, Func<string, bool> shouldInstrument)
@@ -317,7 +330,7 @@ public static class CmpLogInstrumentor
 
         int stringSites = 0, intSites = 0;
 
-        foreach (var type in module.Types.SelectMany(FlattenNestedTypes))
+        foreach (var type in module.Types.SelectMany(IlUtil.FlattenNestedTypes))
         {
             if (!shouldInstrument(type.FullName)) continue;
             foreach (var method in type.Methods)
@@ -350,14 +363,6 @@ public static class CmpLogInstrumentor
         {
             Console.WriteLine($"[instrumentor] CmpLog: no eligible comparison sites found in {Path.GetFileName(dllPath)}");
         }
-    }
-
-    static IEnumerable<TypeDefinition> FlattenNestedTypes(TypeDefinition t)
-    {
-        yield return t;
-        foreach (var nested in t.NestedTypes)
-            foreach (var n in FlattenNestedTypes(nested))
-                yield return n;
     }
 
     internal static bool IsExceptionBoundary(MethodBody body, Instruction instr)
@@ -513,7 +518,7 @@ public static class ConstantExtractor
         var ints = new List<long>();
         var intSeen = new HashSet<long>();
 
-        foreach (var type in module.Types.SelectMany(FlattenNestedTypes))
+        foreach (var type in module.Types.SelectMany(IlUtil.FlattenNestedTypes))
         {
             if (strings.Count >= MaxStrings && ints.Count >= MaxInts) break;
             if (!shouldInstrument(type.FullName)) continue;
@@ -593,14 +598,6 @@ public static class ConstantExtractor
         if (instr.OpCode == OpCodes.Ldc_I8 && instr.Operand is long i8) { value = i8; return true; }
         value = 0;
         return false;
-    }
-
-    static IEnumerable<TypeDefinition> FlattenNestedTypes(TypeDefinition t)
-    {
-        yield return t;
-        foreach (var nested in t.NestedTypes)
-            foreach (var n in FlattenNestedTypes(nested))
-                yield return n;
     }
 }
 
