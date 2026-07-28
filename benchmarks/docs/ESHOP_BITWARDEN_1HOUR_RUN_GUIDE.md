@@ -9,7 +9,18 @@ docs/QUICKSTART_BITWARDEN.md for bring-up from scratch.
 
 Both commands use **direct-shm** mode (`void-fuzzer` as a sidecar container
 on the target's own Docker network, reading the coverage bitmap via a shared
-tmpfs volume) -- faster than HTTP coverage polling, no per-request round trip.
+tmpfs volume) -- no per-request HTTP round trip for coverage.
+
+> **⚠️ Both commands below must use `-shm-read-mode mmap`, not `file`.** `mmap` only
+> activates on Linux (`shouldUseMmap()`, `void/go/coverage.go`) -- which this container
+> is. Without it, every coverage check re-reads *and re-scans* the **entire** multi-MB
+> bitmap file from scratch via a fresh syscall, called ~2x per request. Measured on a
+> real target: `file` mode was actually **slower overall (229 req/s) than plain
+> HTTP-mode coverage polling (266--302 req/s)**, since HTTP mode fetches one
+> pre-computed integer from the target instead of re-reading/re-scanning a multi-MB
+> buffer in Go on every call. `mmap` gives a persistent zero-copy view with no such
+> per-call cost -- it's the entire reason to use direct-shm at all for a long session
+> like this one.
 
 ## eShopOnWeb, 1 hour
 
@@ -32,7 +43,7 @@ docker run --rm \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -skip-endpoint-on-500 \
   -time-budget 60 \
   -concurrency 16 \
@@ -72,7 +83,7 @@ docker run --rm \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -skip-endpoint-on-500 \
   -time-budget 60 \
   -concurrency 16 \

@@ -486,6 +486,16 @@ docker compose --profile fuzz-go run --rm void
 
 You can run the fuzzer container with plain `docker run` as long as (1) the **target stack is already up**, (2) the container joins the **same Docker network** as the API (so `http://api:8080` or your service hostname resolves), and (3) the **same `coverage_shm` volume** is mounted at the path Void uses (`-shm-path`, e.g. `/coverage_shm/bitmap`) **and** is attached to the instrumented API the same way as in Compose.
 
+> **⚠️ Pass `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `void/go/coverage.go`) — which this container is. Without it, every
+> coverage check re-reads *and re-scans* the **entire** multi-MB bitmap file from scratch
+> via a fresh syscall, called ~2x per request. Measured on a real target: `file` mode was
+> actually **slower overall (229 req/s) than plain HTTP-mode coverage polling (266–302
+> req/s)**, since HTTP mode fetches one pre-computed integer from the target instead of
+> re-reading/re-scanning a multi-MB buffer in Go on every call. `mmap` gives a persistent
+> zero-copy view with no such per-call cost — it's the entire reason to use `-direct-shm`
+> at all.
+
 ```bash
 REPO=/absolute/path/to/upside-fuzzer
 
@@ -500,7 +510,7 @@ docker run --rm -it \
   -v "$REPO/my-target/src:/src:ro" \
   void-fuzzer:latest \
   -grammar /grammar -templates-json /grammar/templates.export.json \
-  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode file \
+  -direct-shm -shm-path /coverage_shm/bitmap -coverage-bitmap-size 1048576 -shm-read-mode mmap \
   -time-budget 7 -concurrency 16 -adaptive-concurrency -coverage-interval 4 \
   -sequence-prob 0.35 -sequence-max-depth 4 -sequence-fanout 8 \
   -src /src

@@ -146,6 +146,18 @@ docker build -t void-fuzzer -f void/Dockerfile.go void/
 
 ## Step 7: Run the fuzzer (Direct SHM mode)
 
+> **⚠️ Use `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `void/go/coverage.go`) — which this container is, being built from
+> `golang:...-alpine`. Without it, every coverage check re-reads *and re-scans* the
+> **entire** multi-MB bitmap file from scratch via a fresh syscall, called ~2x per
+> request. Measured on a real target: `-shm-read-mode file` was actually **slower
+> overall (229 req/s) than plain HTTP-mode coverage polling (266–302 req/s)** — HTTP mode
+> fetches one pre-computed integer from the target, while `file` mode re-reads/re-scans a
+> multi-MB buffer in Go on every single call. `mmap` gives a persistent zero-copy view
+> with no such per-call cost; it's the entire reason to use direct-shm at all — without
+> it you get the added setup complexity with *worse* throughput than plain HTTP, not
+> better.
+
 ```bash
 mkdir -p crashes summaries
 
@@ -164,7 +176,7 @@ docker run --rm \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -skip-endpoint-on-500 \
   -time-budget 5 \
   -concurrency 10 \
@@ -180,7 +192,10 @@ docker run --rm \
   both Linux and macOS Docker Desktop, since the tmpfs is backed by the single Linux
   VM the Docker daemon runs in either way; the two containers share the same page
   cache for that volume regardless of host OS.
-- No HTTP overhead for coverage — maximum throughput.
+- No HTTP round-trip for coverage reads — but this only translates into higher actual
+  throughput with `-shm-read-mode mmap` (see warning above); `file` mode trades the HTTP
+  round-trip for a more expensive full bitmap re-read/re-scan on every call and measured
+  *slower* overall in practice.
 - Runs for 5 minutes with 10 parallel workers.
 
 ### Longer scan (recommended for thorough testing)
@@ -201,7 +216,7 @@ docker run --rm \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -skip-endpoint-on-500 \
   -time-budget 30 \
   -concurrency 16 \
@@ -327,7 +342,7 @@ despite the CLI and the target running as separate containers.
 | Verify hook | `cd .. && BASE_URL=http://localhost:5200 PROBE=/api/catalog-items ./verify-hook.sh` |
 | Grammar | `./compile-grammar.sh swagger-eshop.json --src ./esh --out grammars/eshop` (one command, no Docker/RESTler) |
 | Build fuzzer | `docker build -t void-fuzzer -f void/Dockerfile.go void/` |
-| Fuzz | `docker run --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm -v $(pwd)/grammars/eshop:/grammar:ro -v $(pwd)/crashes:/fuzzer/crashes -v $(pwd)/summaries:/fuzzer/summaries -e AUTH_URL=/api/authenticate ... void-fuzzer -grammar /grammar -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode file -time-budget 5` |
+| Fuzz | `docker run --rm --network eshprep_default -v eshprep_coverage_shm:/coverage_shm -v $(pwd)/grammars/eshop:/grammar:ro -v $(pwd)/crashes:/fuzzer/crashes -v $(pwd)/summaries:/fuzzer/summaries -e AUTH_URL=/api/authenticate ... void-fuzzer -grammar /grammar -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode mmap -time-budget 5` (use `mmap`, not `file` — see Step 7's warning) |
 | Results | `cat crashes/unique-crashes-*.jsonl \| python3 -c "..."` / `cat summaries/report-*.json` |
 | Stop | `cd eshprep && docker compose down` |
 

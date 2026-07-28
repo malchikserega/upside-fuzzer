@@ -197,6 +197,16 @@ Run it as a container attached to the target's network and its `coverage_shm` tm
 volume — `-direct-shm` reads the coverage bitmap straight from that shared file, no
 HTTP polling:
 
+> **⚠️ Pass `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `void/go/coverage.go`) — which this container is. Without it, every
+> coverage check re-reads *and re-scans* the **entire** multi-MB bitmap file from scratch
+> via a fresh syscall, called ~2x per request. Measured on a real target: `file` mode was
+> actually **slower overall (229 req/s) than plain HTTP-mode coverage polling (266–302
+> req/s)** — HTTP mode fetches one pre-computed integer from the target instead of
+> re-reading/re-scanning a multi-MB buffer in Go on every call. `mmap` gives a persistent
+> zero-copy view with no such per-call cost — without it, "no HTTP polling" above doesn't
+> actually translate into more throughput, only more setup complexity.
+
 ```bash
 mkdir -p crashes summaries
 docker run --rm \
@@ -209,7 +219,7 @@ docker run --rm \
   -e TARGET_HOST=http://teamflow:8080 \
   -e SHM_HOST=http://teamflow:8080 \
   void-fuzzer \
-  -grammar /grammar -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode file \
+  -grammar /grammar -direct-shm -shm-path /coverage_shm/bitmap -shm-read-mode mmap \
   -profile security -auth-file /auth/auth.identities.json -time-budget 30 \
   -crash-file /fuzzer/crashes/unique-crashes.jsonl \
   -summary-file /fuzzer/summaries/summary.json

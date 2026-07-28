@@ -494,6 +494,23 @@ terminal dashboard if you're piping output to a file.
 
 ### Mode B — Docker sidecar (direct-shm, fastest coverage)
 
+> **⚠️ Use `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `void/go/coverage.go`) — which is exactly what this container is,
+> since it's built from `golang:...-alpine`. Without it (i.e. leaving the `file` default),
+> every single coverage check re-reads *and re-scans* the **entire** multi-MB bitmap file
+> from scratch via a fresh syscall — called ~2x per request. Measured on a real
+> Bitwarden run: `-shm-read-mode file` (229 req/s) was actually **slower overall than
+> plain HTTP-mode coverage polling** (266–302 req/s, Mode A above), because HTTP mode
+> just fetches one pre-computed integer from the target instead of re-reading/re-scanning
+> a multi-MB buffer from Go on every call. `mmap` gives a persistent zero-copy view with
+> no such per-call cost, and is the entire reason to use Mode B at all — without it you
+> get direct-shm's added setup complexity with *worse* throughput than Mode A, not better.
+>
+> **Also set `TARGET_HOST`/`SHM_HOST` explicitly** (below) — without them the fuzzer
+> defaults to `http://localhost:5200`, which inside this container refers to the
+> container itself, not the `api` service; it must point at `api`'s own internal port
+> (`5000`, matching `ASPNETCORE_URLS` in the compose file), not the host-published one.
+
 ```bash
 cd ..  # repo root
 docker build -t void-fuzzer -f void/Dockerfile.go void/
@@ -505,12 +522,14 @@ docker run --rm \
   -v $(pwd)/grammars/bitwarden:/grammar:ro \
   -v $(pwd)/crashes:/fuzzer/crashes \
   -v $(pwd)/summaries:/fuzzer/summaries \
+  -e TARGET_HOST=http://api:5000 \
+  -e SHM_HOST=http://api:5000 \
   -e AUTH_TOKEN="$(grep AUTH_TOKEN bitwarden_prep/fuzzer.env | cut -d= -f2)" \
   void-fuzzer \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -profile security \
   -skip-endpoint-on-500 \
   -time-budget 15
@@ -520,8 +539,9 @@ docker run --rm \
 > convention — if your `bitwarden_prep/` directory has a different name, adjust
 > `bitwarden_prep_default`/`bitwarden_prep_coverage_shm` to match (check with
 > `docker network ls` / `docker volume ls`). `--network` must match so the fuzzer
-> container can resolve `api`/`mssql` by service name if needed, though this command
-> talks to the API via the host-mapped port through the shared network either way.
+> container can resolve `api` by service name — it needs to, since `TARGET_HOST`/
+> `SHM_HOST` above point at `api:5000` directly (the host-published port is irrelevant
+> to container-to-container traffic on this network).
 
 For the full security-campaign flag set (multi-identity, sequence tuning, web UI),
 add `-p 13377:13377 -v $(pwd)/bitwarden_prep/auth.identities.json:/auth/auth.identities.json:ro`

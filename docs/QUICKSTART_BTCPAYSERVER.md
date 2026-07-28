@@ -119,6 +119,17 @@ docker build -t void-fuzzer -f void/Dockerfile.go void/
 
 ## Step 8: Run the fuzzer (Direct SHM mode)
 
+> **⚠️ Use `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `void/go/coverage.go`) — which this container is, being built from
+> `golang:...-alpine`. Without it, every coverage check re-reads *and re-scans* the
+> **entire** multi-MB bitmap file from scratch via a fresh syscall, called ~2x per
+> request. Measured on a real target: `-shm-read-mode file` was actually **slower
+> overall (229 req/s) than plain HTTP-mode coverage polling (266–302 req/s)**, because
+> HTTP mode fetches one pre-computed integer from the target instead of re-reading/
+> re-scanning a multi-MB buffer in Go on every call. `mmap` gives a persistent zero-copy
+> view instead, with no such per-call cost — it's the entire reason to use direct-shm at
+> all; without it you get the added setup complexity with *worse* throughput, not better.
+
 ```bash
 mkdir -p crashes
 
@@ -134,7 +145,7 @@ docker run -it --rm \
   -grammar /grammar \
   -direct-shm \
   -shm-path /coverage_shm/bitmap \
-  -shm-read-mode file \
+  -shm-read-mode mmap \
   -skip-endpoint-on-500 \
   -time-budget 15 \
   -concurrency 10 \

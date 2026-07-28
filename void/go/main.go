@@ -47,7 +47,7 @@ func parseFlags() Config {
 	flag.IntVar(&cfg.EndpointZeroEdgeReqs, "endpoint-zero-edge-reqs", 120, "Down-weight endpoint when total requests exceed threshold but no edges found")
 	flag.BoolVar(&cfg.DirectSHM, "direct-shm", false, "Read coverage bitmap directly from SHM file")
 	flag.StringVar(&cfg.SHMPath, "shm-path", "/coverage_shm/bitmap", "Path to mmap bitmap")
-	flag.StringVar(&cfg.SHMReadMode, "shm-read-mode", "file", "Direct SHM read mode: file|mmap|auto")
+	flag.StringVar(&cfg.SHMReadMode, "shm-read-mode", "file", "Direct SHM read mode: file|mmap|auto. 'file' re-reads and re-scans the ENTIRE bitmap via a fresh syscall on every GetEdges() call (~2x per request) -- safe everywhere but can dominate runtime cost at the bitmap sizes real instrumented targets produce. 'mmap' gives a persistent zero-copy view (only on Linux -- i.e. void running inside a Linux container, which is the normal -direct-shm deployment shape) and is dramatically cheaper per call; always prefer it explicitly when running void as a Linux container against a shared-memory volume. 'file' remains the default because it is the only mode guaranteed correct on every OS/filesystem this flag might be used from")
 	flag.BoolVar(&cfg.AllowDegradedCoverage, "allow-degraded-coverage", false, "Continue even if /shm/health reports degraded instrumentation (no app assembly linked). Default: refuse to start a blind run.")
 	flag.BoolVar(&cfg.SkipOnCrash, "skip-on-crash", false, "Remove only the crashing template after any 5xx")
 	flag.BoolVar(&cfg.SkipEndpointOn500, "skip-endpoint-on-500", false, "Stop fuzzing endpoint after first HTTP 500")
