@@ -36,6 +36,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: void/go/go.sum
 
       - uses: actions/setup-python@v5
         with:
@@ -78,6 +79,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: void/go/go.sum
 
       - uses: actions/setup-python@v5
         with:

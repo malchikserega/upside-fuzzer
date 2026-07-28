@@ -995,7 +995,6 @@ upside-fuzzer/
 │   ├── analyzer.Tests/            xUnit tests for analyzer/ (added 2026-07-25, see §11)
 │   ├── instrumentor/              Reference instrumentor source + build script
 │   │   ├── Program.cs             Standalone generic config-driven instrumentor
-│   │   ├── Program.Generated.cs   Dead code, not used (see dotnet/instrumentor/README.md)
 │   │   ├── instrument.sh          Build + run script
 │   │   ├── instrumentor.csproj    Project file
 │   │   └── README.md              File map, usage, build/test

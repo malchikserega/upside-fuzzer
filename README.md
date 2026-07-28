@@ -399,6 +399,7 @@ Access-control findings additionally carry an `access_control: true` field with 
 | Document | Description |
 |----------|-------------|
 | **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** | Start here if you're new: the problem this solves, why grey-box + oracles beat black-box fuzzing, plain-language explainers of instrumentation/grammar/sequences/scheduling, and the BOLA/mass-assignment/injection/differential-auth-bypass oracles |
+| **[docs/WHITEPAPER.md](docs/WHITEPAPER.md)** | The full whitepaper: builds fuzzing and coverage-guided fuzzing from zero, then walks the entire architecture and the engineering decisions behind it, diagrams included — the single best document to hand someone who wants to understand the whole project |
 | **[INSTRUCTIONS.md](docs/INSTRUCTIONS.md)** | Complete runbook: prerequisites, instrumentation, grammar generation, all run profiles, CLI reference, dictionary format, quality gates, troubleshooting |
 | **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Platform internals: SHM design, instrumentation pipeline, Go fuzzer components, epoch scheduling, mutation engine |
 | **[ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md)** | Candid engineering self-review: subsystem-by-subsystem strengths/weaknesses, comparison to RESTler/EvoMaster/Schemathesis, and the prioritized roadmap |
