@@ -181,6 +181,12 @@ type Fuzzer struct {
 
 	// Hub for asynchronously broadcasting UI state to every connected Web UI client.
 	WebUIHub *webUIHub
+
+	// resourceGraph is the typed resource-lifecycle model (resource_graph.go),
+	// mutated only from enqueueSequenceFollowups on the single main-loop
+	// goroutine (see resource_graph.go's own ownership comment). nil-safe: every
+	// call site checks f.cfg.ResourceGraphEnabled first.
+	resourceGraph *ResourceGraph
 }
 
 func NewFuzzer(cfg Config) (*Fuzzer, error) {
@@ -341,6 +347,11 @@ func NewFuzzer(cfg Config) (*Fuzzer, error) {
 		requestSamples: make([]string, 0, 8),
 		WebUIHub:       newWebUIHub(),
 		uiWidthLocked:  0,
+		resourceGraph: newResourceGraph(ResourceGraphLimits{
+			MaxInstancesPerType:   cfg.ResourceGraphMaxPerType,
+			MaxAliasesPerInstance: cfg.ResourceGraphMaxAliases,
+			MaxTransitions:        cfg.ResourceGraphMaxTransitions,
+		}),
 	}
 	for i := range f.templates {
 		t := &f.templates[i]

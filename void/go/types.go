@@ -97,10 +97,27 @@ type Config struct {
 	SequenceProb                float64
 	SequenceMaxDepth            int
 	SequenceFanout              int
-	CrashFile                   string
-	UniqueCrashFile             string
-	SummaryFile                 string
-	ReportFile                  string
+	// Resource state graph (docs/resource-state-graph-plan.md): typed
+	// resource-lifecycle tracking + generalized extraction + coverage-directed
+	// consumer scheduling, layered on top of the existing sequence engine.
+	// ResourceGraphEnabled defaults true since the new path is additive (old
+	// name/path-based extraction and static verb-affinity scoring still run and
+	// still contribute) -- set false to reproduce the exact prior fanout
+	// ordering and extraction set for comparison/rollback.
+	ResourceGraphEnabled          bool
+	ResourceGraphMaxPerType       int
+	ResourceGraphMaxAliases       int
+	ResourceGraphMaxTransitions   int
+	ResourceGraphExploreRate      float64
+	ResourceGraphMinConfidence    float64
+	ResourceGraphUnreachedWeight  float64
+	ResourceGraphYieldWeight      float64
+	ResourceGraphFailurePenalty   float64
+	ResourceGraphStaleExploreProb float64
+	CrashFile                     string
+	UniqueCrashFile               string
+	SummaryFile                   string
+	ReportFile                    string
 	// SARIFFile, when set, additionally writes findings in SARIF 2.1.0 format
 	// (Top-20 §16) so they drop directly into GitHub code scanning / DefectDojo /
 	// any other SARIF-consuming dashboard. Opt-in: empty (the default) writes nothing.
@@ -358,6 +375,15 @@ type SequenceState struct {
 	Provenance map[string]string `json:"provenance"`
 	History    []SequenceStep    `json:"history"`
 	Energy     float64           `json:"energy"`
+
+	// Resources/Transitions (docs/resource-state-graph-plan.md) are populated
+	// only at persistence time (persistWorkflow, sequence.go), from the run-wide
+	// ResourceGraph's own snapshotForSequence -- additive, omitempty fields, so
+	// a workflow JSON file written before this existed, or with -resource-graph=
+	// false, decodes identically to before (nil slices, nothing reads them back
+	// programmatically today).
+	Resources   []*ResourceInstance  `json:"resources,omitempty"`
+	Transitions []ResourceTransition `json:"transitions,omitempty"`
 }
 
 type WorkItem struct {

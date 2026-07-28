@@ -25,6 +25,12 @@ const stateNoveltyBonus = 5.0
 
 func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	source := res.Item
+	if f.cfg.ResourceGraphEnabled {
+		// Track this consumer's own result *before* any early return below, so
+		// the "repeated failure" scheduling penalty (scoreConsumer) sees every
+		// attempt, not just ones that went on to branch further.
+		f.resourceGraph.markConsumerResult(source.TemplateID, res.Status >= 400)
+	}
 	if source.SeqDepth >= maxInt(1, f.cfg.SequenceMaxDepth) {
 		f.maybePersistSequence(res)
 		return 0
@@ -93,6 +99,15 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 
 	provKey := fmt.Sprintf("%s %s", source.Method, source.Path)
 
+	// Resource state graph (docs/resource-state-graph-plan.md): generalized
+	// extraction (HAL/JSON:API/header/shape, not just id/Id/data[].id) +
+	// typed lifecycle tracking, additive on top of the entityIDs extraction
+	// above (which state.Values substitution below still uses unchanged).
+	novelTransition := false
+	if f.cfg.ResourceGraphEnabled {
+		novelTransition = f.recordResourceGraphStep(source, res, state.ID, provKey)
+	}
+
 	if rid := inferResourceIDKeyFromPath(source.Path); rid != "" {
 		for _, eid := range entityIDs {
 			state.Values[rid] = eid
@@ -140,6 +155,14 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		// EvoMaster's state-based search prioritizes over re-treading known states.
 		fanout = minInt(fanout+1, len(followups))
 	}
+	if novelTransition {
+		// A finer-grained signal than newState above: reaching a never-seen
+		// (from-lifecycle, to-lifecycle, consumer-op) transition -- e.g. the
+		// first time this run a DELETE-then-GET pattern was observed for ANY
+		// resource of this type, not just this exact chain's shape -- also
+		// earns one extra branch of search budget.
+		fanout = minInt(fanout+1, len(followups))
+	}
 	enqueued := 0
 	for _, tid := range followups[:fanout] {
 		// Clone state for branching
@@ -171,7 +194,23 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 			continue
 		}
 
-		if len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
+		usedStaleExploration := false
+		if f.cfg.ResourceGraphEnabled && strings.Contains(item.Path, "{") && rand.Float64() < f.cfg.ResourceGraphStaleExploreProb {
+			// Phase 7 of docs/resource-state-graph-plan.md: deliberately bind this
+			// follow-up to a resource already known to be DELETED/INVALIDATED,
+			// instead of the freshly-produced entityIDs[0] below -- this is the
+			// concrete mechanism that produces "create -> delete -> read",
+			// "update after delete" and similar deliberately-invalid-transition
+			// workflows, rather than only ever continuing a valid one.
+			if rt := resourceTypeFromEndpointPath(f.meta[tid].Norm); rt != "" {
+				stale := f.resourceGraph.findCompatibleResources(rt, LifecycleDeleted, LifecycleInvalidated)
+				if len(stale) > 0 {
+					item.Path = rePathParam.ReplaceAllString(item.Path, stale[0].Canonical.RawValue)
+					usedStaleExploration = true
+				}
+			}
+		}
+		if !usedStaleExploration && len(entityIDs) > 0 && strings.Contains(item.Path, "{") {
 			item.Path = rePathParam.ReplaceAllString(item.Path, entityIDs[0])
 		}
 
@@ -184,6 +223,9 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		if item.MutationLabel != "seed" {
 			seqLabel += "+" + item.MutationLabel
 		}
+		if usedStaleExploration {
+			seqLabel += "+explore_stale"
+		}
 		item.MutationLabel = seqLabel
 		item.MutationName = "sequence"
 		item.Trace = f.extendTrace(source.Trace, item)
@@ -193,6 +235,9 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 		}
 		f.sequenceQueue = append(f.sequenceQueue, item)
 		enqueued++
+		if f.cfg.ResourceGraphEnabled {
+			f.resourceGraph.markConsumerReached(tid)
+		}
 	}
 
 	if enqueued == 0 {
@@ -200,6 +245,103 @@ func (f *Fuzzer) enqueueSequenceFollowups(res SendResult) int {
 	}
 
 	return enqueued
+}
+
+// recordResourceGraphStep runs the generalized extraction pipeline
+// (resource_extraction.go) over this step's response, records each candidate
+// above f.cfg.ResourceGraphMinConfidence as a resource instance (or alias of an
+// already-known one) in f.resourceGraph, derives and records a lifecycle
+// transition per instance (deriveLifecycleTransition, resource_scheduling.go),
+// and links multi-segment route-template matches (e.g.
+// /organizations/{orgId}/projects/{projectSlug}) as parent->child. Returns
+// whether any recorded transition's signature was never seen before this call
+// -- the fanout-widening signal in enqueueSequenceFollowups.
+func (f *Fuzzer) recordResourceGraphStep(source WorkItem, res SendResult, seqID, provKey string) bool {
+	candidates := f.extractResourceCandidates(res.Body, res.Headers, provKey)
+	// The request's OWN path is a candidate source too, not just the response:
+	// a DELETE returning 204 (no body at all) or a GET/PUT whose response
+	// doesn't echo the resource's own id back carry their target resource's
+	// identity only in the request path itself. Without this, a real
+	// create->delete->read-again chain against a fixture that returns an empty
+	// body on DELETE would never record the DELETED transition at all -- the
+	// resource simply wouldn't exist in the graph despite a real state change
+	// having happened.
+	candidates = append(candidates, f.matchRouteTemplateCandidates(source.Path, provKey, "request_path", confRouteTemplateOnly)...)
+	if len(candidates) == 0 {
+		return false
+	}
+
+	novelAny := false
+	// Candidates sharing the same Strategy+JSONPath/HeaderName came from one
+	// matchRouteTemplateCandidates call and are already in path-segment order
+	// (see resource_extraction.go) -- consecutive ones from that same call are
+	// linked parent->child below.
+	var lastRouteGroupKey string
+	var lastInstance *ResourceInstance
+	// firstIdentityForValue tracks, within this single step, the first identity
+	// seen for a given (resourceType, rawValue) pair -- when a *different*
+	// extraction strategy later reports the same underlying value under a
+	// different representation (e.g. a HAL self-link's last path segment and a
+	// JSON:API "data.id" happen to be the same order id from the same
+	// response), the later one is recorded as an alias of the first rather than
+	// a second independent instance.
+	firstIdentityForValue := map[string]ResourceIdentity{}
+
+	for _, c := range candidates {
+		if c.Confidence < f.cfg.ResourceGraphMinConfidence {
+			continue
+		}
+		id := c.toIdentity()
+		prior := LifecycleUnknown
+		if existing := f.resourceGraph.getInstance(id); existing != nil {
+			prior = existing.Lifecycle
+		}
+		to, result := deriveLifecycleTransition(source.Method, res.Status, prior)
+		inst := f.resourceGraph.recordInstance(id, provKey, seqID, to, c.Confidence)
+
+		valueKey := id.ResourceType + "|" + c.RawValue
+		if primary, seen := firstIdentityForValue[valueKey]; seen {
+			if primary.IdentityKind != id.IdentityKind {
+				f.resourceGraph.recordAlias(primary, id)
+			}
+		} else {
+			firstIdentityForValue[valueKey] = inst.Canonical
+		}
+
+		if c.Strategy == "route_template" {
+			groupKey := c.Strategy + "|" + c.JSONPath
+			if groupKey == lastRouteGroupKey && lastInstance != nil && lastInstance.Canonical.ResourceType != inst.ResourceType {
+				if inst.ParentKey == "" {
+					inst.ParentKey = lastInstance.Canonical.graphKey()
+				}
+				hasChild := false
+				for _, ck := range lastInstance.ChildKeys {
+					if ck == inst.Canonical.graphKey() {
+						hasChild = true
+						break
+					}
+				}
+				if !hasChild {
+					lastInstance.ChildKeys = append(lastInstance.ChildKeys, inst.Canonical.graphKey())
+				}
+			}
+			lastRouteGroupKey = groupKey
+			lastInstance = inst
+		} else {
+			lastRouteGroupKey = ""
+			lastInstance = nil
+		}
+
+		novel := f.resourceGraph.recordTransition(ResourceTransition{
+			From: prior, To: to, ConsumerOp: provKey, SequenceID: seqID,
+			StatusCode: res.Status, CoverageDelta: res.CoverageDelta, Result: result,
+			Identities: []ResourceIdentity{id}, Confidence: c.Confidence,
+		})
+		if novel {
+			novelAny = true
+		}
+	}
+	return novelAny
 }
 
 func (f *Fuzzer) maybePersistSequence(res SendResult) {
@@ -325,6 +467,10 @@ func (f *Fuzzer) persistWorkflow(state *SequenceState) {
 	outDir := filepath.Join(filepath.Dir(f.cfg.TimelineDir), "workflows")
 	_ = os.MkdirAll(outDir, 0o755)
 
+	if f.cfg.ResourceGraphEnabled {
+		state.Resources, state.Transitions = f.resourceGraph.snapshotForSequence(state.ID)
+	}
+
 	fnameBase := fmt.Sprintf("workflow_d%d_%s", state.Depth+1, state.ID)
 	fpathJSON := filepath.Join(outDir, fnameBase+".json")
 	fpathSH := filepath.Join(outDir, fnameBase+".sh")
@@ -413,6 +559,13 @@ func (f *Fuzzer) findFollowups(sourceID int, sourceMethod, sourceNorm string, pr
 		out = append(out, tid)
 	}
 
+	if f.cfg.ResourceGraphEnabled {
+		// Coverage-directed ranking (docs/resource-state-graph-plan.md §8.4):
+		// blends historical coverage yield, never-reached bonus, and failure
+		// penalty with the static verb-affinity table below as one input among
+		// several, instead of static priority being the sole signal.
+		return f.rankConsumersCoverageDirected(out, sourceMethod, sourceNorm)
+	}
 	sort.SliceStable(out, func(i, j int) bool {
 		a := f.meta[out[i]]
 		b := f.meta[out[j]]
