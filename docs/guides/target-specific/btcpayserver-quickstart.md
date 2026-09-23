@@ -1,0 +1,211 @@
+# UpsideFuzz — BTCPayServer Quick Start
+
+> Run the full coverage-guided fuzzing pipeline on **BTCPayServer** (Greenfield API) from scratch on any machine.
+
+**→ [Back to README](../../../README.md) · [Full Runbook](../../getting-started/quickstart.md) · [Authentication Guide](../authentication.md) · [Docs Index](../../index.md)**
+
+---
+
+## Prerequisites
+
+```bash
+docker --version        # Docker 24+
+docker compose version  # Compose v2+
+python3 --version       # Python 3.9+
+```
+
+---
+
+## Step 1: Clone repositories
+
+```bash
+# Clone the fuzzer
+git clone https://github.com/malchikserega/upside-fuzzer.git
+cd upside-fuzzer
+
+# Clone BTCPayServer (target application)
+git clone https://github.com/btcpayserver/btcpayserver.git
+```
+
+---
+
+## Step 2: Instrument the project
+
+```bash
+python3 bin/fuzz-prep-multi.py \
+  --src ./btcpayserver \
+  --out ./btcpayserver_prep \
+  --main BTCPayServer
+```
+
+> **Zero-edit by default** (`--inject-mode hook`): the target's `Program.cs`/`Startup.cs`/`.csproj` are not modified; coverage is wired via `DOTNET_STARTUP_HOOKS` + an ASP.NET hosting-startup assembly, and lazily-loaded assemblies are linked at load time. To use the legacy source-injection path instead, append `--inject-mode source`. After the stack is up, verify: `curl -s http://localhost:8080/shm/health` → `{"linked_assemblies":N,...}`.
+
+This creates an instrumented copy in `./btcpayserver_prep/` with:
+- SharpFuzz IL instrumentation for all business logic DLLs
+- Docker Compose configuration adapted for testing
+
+> **Note:** BTCPayServer relies on background PostgreSQL, NBXplorer, and Bitcoin node containers for its initialization. The `docker-compose.instrumented.yml` automatically connects to these services assuming they are running (e.g. via `BTCPayServer.Tests`).
+
+---
+
+## Step 3: Build and start the target
+
+```bash
+cd btcpayserver_prep
+docker compose -f docker-compose.instrumented.yml up -d instrumented
+
+# Wait for database migrations and connection to NBXplorer
+sleep 45
+```
+
+---
+
+## Step 4: Authentication & API Key
+
+BTCPayServer's Greenfield API requires an API key. 
+
+You can automatically register an admin user and generate an API key by running the helper script:
+
+```bash
+# Inside btcpayserver_prep
+python3 ../docs/guides/examples/btcpayserver/get_apikey.py
+```
+
+This will save the generated API key as an authorization header in `fuzzer.env`.
+
+---
+
+## Step 5: Extract OpenAPI Spec (Swagger)
+
+The fuzzer uses the OpenAPI specification to generate its grammar. Download the Swagger JSON from the running server:
+
+```bash
+curl -s -u admin@btcpayserver.local:Password123! http://localhost:7777/swagger/v1/swagger.json > swagger-btc.json
+```
+
+---
+
+## Step 6: Compile the grammar
+
+RESTler is retired (Top-20 #9/#10) — one command (`tools/grammar/grammarc/` + `tools/dotnet/analyzer/`), no Docker,
+writes `templates.export.json` + `dict.json` directly to `--out`:
+
+```bash
+cd ..  # back to upside-fuzzer root
+
+# Note: BTCPayServer's Swagger JSON has a malformed reference that needs to be patched
+python3 docs/guides/examples/btcpayserver/fix_swagger_paths.py  # Patches btcpayserver_prep/swagger-btc.json in place
+
+# Compile grammar (tools/grammar/grammarc/ OpenAPI parser + tools/dotnet/analyzer/ Roslyn syntax-tree analysis)
+./bin/compile-grammar.sh btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
+```
+
+> **Pro Tip:** Open `grammars/btcpay/dict.json` (a flat `{fieldName: [values...]}` map) and add domain-specific professional terms under the relevant field-name keys (e.g., `"currency": ["BTC","SATS"]`, `"speedPolicy": ["HighSpeed"]`, `"status": ["Settled"]`, an `xpub`-shaped key for `"xpub661..."`-style values). This significantly increases the probability of passing strict API validation checks, allowing the fuzzer to explore deeper state transitions rather than being blocked at the schema validation layer.
+>
+> This complements two things that already happen automatically during the fuzz run: fields
+> with a real declared constraint get boundary-aware mutation (`ARCHITECTURE_REVIEW.md`
+> Top-20 #14), and 400 validation-error responses get mined for required fields/valid values
+> fed back into the same dictionary at runtime (Top-20 #11).
+
+---
+
+## Step 7: Build the fuzzer Docker image
+
+```bash
+docker build -t void-fuzzer -f void/Dockerfile.go void/
+```
+
+---
+
+## Step 8: Run the fuzzer (Direct SHM mode)
+
+> **⚠️ Use `-shm-read-mode mmap`, not `file`.** `mmap` only activates on Linux
+> (`shouldUseMmap()`, `src/void/internal/engine/coverage.go`) — which this container is, being built from
+> `golang:...-alpine`. Without it, every coverage check re-reads *and re-scans* the
+> **entire** multi-MB bitmap file from scratch via a fresh syscall, called ~2x per
+> request. Measured on a real target: `-shm-read-mode file` was actually **slower
+> overall (229 req/s) than plain HTTP-mode coverage polling (266–302 req/s)**, because
+> HTTP mode fetches one pre-computed integer from the target instead of re-reading/
+> re-scanning a multi-MB buffer in Go on every call. `mmap` gives a persistent zero-copy
+> view instead, with no such per-call cost — it's the entire reason to use direct-shm at
+> all; without it you get the added setup complexity with *worse* throughput, not better.
+
+```bash
+mkdir -p crashes
+
+docker run -it --rm \
+  --network btcpayserver_prep_default \
+  -v btcpayserver_prep_coverage_shm:/coverage_shm \
+  -v $(pwd)/grammars/btcpay:/grammar:ro \
+  -v $(pwd)/crashes:/fuzzer/crashes \
+  --env-file btcpayserver_prep/fuzzer.env \
+  -e TARGET_HOST=http://btcpayserver_prep-instrumented-1:8080 \
+  -e SHM_HOST=http://btcpayserver_prep-instrumented-1:8080 \
+  void-fuzzer \
+  -grammar /grammar \
+  -direct-shm \
+  -shm-path /coverage_shm/bitmap \
+  -shm-read-mode mmap \
+  -skip-endpoint-on-500 \
+  -time-budget 15 \
+  -concurrency 10 \
+  -sequence-prob 0.35
+```
+
+**What happens:**
+- The fuzzer automatically loads the authorization header from `fuzzer.env`. *(Note: the underlying auth parsing logic universally supports arbitrary custom headers like `Authorization: token <key>` without breaking standard `Bearer` tokens for other projects).*
+- The compiled templates carry `tools/grammar/grammarc/dependencies.py`'s producer/consumer id mapping, allowing the Sequence Engine to test deep stateful workflows automatically.
+- The fuzzer reads the coverage bitmap directly from the shared `coverage_shm` tmpfs volume.
+- Runs with high concurrency and deep fuzzing sequences for 15 minutes.
+
+> **Note on 401/404 Errors in Logs:** During fuzzing, you will likely see many `401 Unauthorized` or `404 Not Found` blocks in the UI logs (e.g., `[AUTH-BLOCK] DELETE /api/v1/stores/{param}`). This is **expected and desirable**. It means the fuzzer is dynamically testing Resource-Based Authorization by attempting to access or mutate resources with fuzzed IDs (e.g., trying to delete a store owned by another user, or an invalid UUID). The Sequence Engine specifically falls back to randomized UUIDs when producers fail to generate real IDs, ensuring these critical authorization boundaries are stress-tested.
+
+---
+
+## Step 9: View results
+
+```bash
+# Unique crashes (deduplicated)
+cat crashes/unique-crashes-*.jsonl | \
+  python3 -c "import sys,json; [print(json.dumps(json.loads(l),indent=2)) for l in sys.stdin]"
+
+# Generated PoC scripts
+ls crashes/pocs/
+```
+
+---
+
+## The same thing, via the `upsidefuzz` CLI
+
+Steps 2, 3, and 6 above map onto CLI subcommands. Steps 4 (`get_apikey.py`), 5 (basic-auth
+swagger download), and the swagger patch in Step 6 are BTCPayServer-specific helper scripts
+with no generic CLI equivalent — keep running those exactly as documented above, then hand
+their output to the CLI subcommands:
+
+```bash
+# Native: python3 bin/compatibility/upsidefuzz.py ...   |   Zero-install (only Docker needed): ./upsidefuzz ...
+upsidefuzz instrument --src ./btcpayserver --out ./btcpayserver_prep --main BTCPayServer
+
+upsidefuzz up --dir ./btcpayserver_prep --services instrumented --wait-secs 45
+
+# Steps 4-5 (get_apikey.py, basic-auth curl) stay manual -- see above -- then:
+upsidefuzz verify --base http://localhost:7777   # --probe is optional; omit if you don't have
+                                                  # a known-good unauthenticated GET endpoint handy
+
+# Step 6's fix_swagger_paths.py patch stays manual too; feed the CLI the already-patched file:
+upsidefuzz grammar btcpayserver_prep/swagger-btc.json --src ./btcpayserver --out grammars/btcpay
+
+# Host mode (HTTP coverage polling) -- the direct-shm sidecar command in Step 8 above still
+# works unchanged if you specifically want the faster direct-shm read path; the CLI's `fuzz`
+# always runs void directly rather than as a separate networked sidecar container, so it
+# talks to the target over the published host port instead:
+export $(cat btcpayserver_prep/fuzzer.env | xargs)   # loads the auth header get_apikey.py wrote
+upsidefuzz fuzz --grammar grammars/btcpay --target http://localhost:7777 \
+  --profile security --time-budget 15
+```
+
+See [CLI.md](../../getting-started/cli.md) for the full subcommand reference.
+
+---
+
+**→ [Back to README](../../../README.md) · [Full Runbook](../../getting-started/quickstart.md) · [Authentication Guide](../authentication.md) · [BTCPay Report](../../reports/BTCPAYSERVER_REPORT.md)**

@@ -1,0 +1,53 @@
+# deployments/docker/Dockerfile.cli — the "zero local install" upsidefuzz CLI
+# image. Build context is the REPO ROOT (see the ./upsidefuzz launcher script).
+#
+# Bundles everything upsidefuzz.py's subcommands need (Python 3, .NET SDK 8+
+# for the Roslyn analyzer, a prebuilt `void` binary, and the Docker CLI for
+# Docker-outside-of-Docker) so the only thing a user needs installed on their
+# machine is Docker itself. Run it via the `./upsidefuzz` launcher script
+# (repo root), which handles the socket/volume mounting -- see docs/CLI.md.
+#
+# This image does NOT change how any tool behaves: bin/fuzz-prep-multi.py,
+# bin/compile-grammar.sh, bin/verify-hook.sh, tools/grammar/grammarc/,
+# tools/dotnet/analyzer/, and src/void/ (cmd/+internal/) are copied in unmodified.
+# Running natively with `python3 bin/compatibility/upsidefuzz.py ...` (using your own
+# locally-installed Python/.NET/Go/Docker) keeps working exactly as before --
+# this image is purely an additive convenience.
+
+FROM golang:1.22-alpine AS void-builder
+WORKDIR /src
+COPY src/void/go.mod src/void/go.sum ./
+RUN go mod download
+COPY src/void/cmd/ ./cmd/
+COPY src/void/internal/ ./internal/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -ldflags="-s -w" -o /out/void ./cmd/void
+
+# Official Docker CLI + compose-v2 plugin, for docker-outside-of-docker against
+# the host socket the launcher mounts in -- avoids brittle GitHub-release URLs.
+FROM docker:27-cli AS docker-cli
+
+# analyzer/analyzer.csproj targets net9.0 (the .NET 9 SDK can still build/run
+# net8.0-targeted projects like the instrumentor -- SDKs build down, not just
+# same-version -- so 9.0 covers both without needing two SDKs installed).
+FROM mcr.microsoft.com/dotnet/sdk:9.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+COPY --from=void-builder /out/void /usr/local/bin/void
+
+WORKDIR /upsidefuzz
+COPY . .
+RUN chmod +x bin/compile-grammar.sh bin/verify-hook.sh bin/compatibility/upsidefuzz.py scripts/*.sh 2>/dev/null || true
+
+# Tells upsidefuzz.py it's running as a Docker sibling of the target's own
+# containers (via the ./upsidefuzz launcher's socket mount), not natively on
+# the host -- so it rewrites localhost/127.0.0.1 URLs to host.docker.internal.
+# See bin/compatibility/upsidefuzz.py::_containerize_url.
+ENV UPSIDEFUZZ_IN_CONTAINER=1
+
+ENTRYPOINT ["python3", "/upsidefuzz/bin/compatibility/upsidefuzz.py"]

@@ -1,0 +1,54 @@
+{
+  "version": "1",
+  "identities": [
+    {
+      "name": "acme-admin",
+      "jwt": "<paste alice@acme.test's token here -- see README.md 'Collecting identity tokens'>",
+      "weight": 1.5
+    },
+    {
+      "name": "acme-manager",
+      "jwt": "<paste bob@acme.test's token here>",
+      "weight": 1.2
+    },
+    {
+      "name": "acme-member",
+      "jwt": "<paste carol@acme.test's token here>",
+      "weight": 1.0
+    },
+    {
+      "name": "globex-admin",
+      "jwt": "<paste dave@globex.test's token here>",
+      "weight": 1.2
+    },
+    {
+      "name": "globex-member",
+      "jwt": "<paste erin@globex.test's token here>",
+      "weight": 1.0
+    },
+    {
+      "name": "initech-admin",
+      "jwt": "<paste admin@initech.test's token here>",
+      "weight": 1.0
+    },
+    {
+      "name": "initech-member",
+      "jwt": "<paste member1@initech.test's token here>",
+      "weight": 0.8
+    },
+    {
+      "name": "umbrella-admin",
+      "jwt": "<paste admin@umbrella.test's token here>",
+      "weight": 1.0
+    },
+    {
+      "name": "umbrella-member",
+      "jwt": "<paste member1@umbrella.test's token here>",
+      "weight": 0.8
+    },
+    {
+      "name": "guest",
+      "weight": 0.3
+    }
+  ]
+}

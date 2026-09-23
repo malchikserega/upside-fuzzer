@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>analyzer</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- bin/compile-grammar.sh invokes this via `dotnet run` on the host, which enforces
+         an exact TFM match unless roll-forward is allowed; hosts with only newer
+         SDKs installed (no net8.0 runtime) would otherwise fail with
+         "You must install or update .NET to run this application" even though the
+         app runs fine under a newer runtime. Matches analyzer.Tests.csproj/
+         instrumentor.Tests.csproj, which already set this for the same reason. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
+  </ItemGroup>
+</Project>

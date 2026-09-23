@@ -1,0 +1,35 @@
+# Example campaign.yaml — copy this file, edit the values, then run:
+#   python3 campaign.py plan campaign.yaml   # prints the resolved env/flags, changes nothing
+#   python3 campaign.py run campaign.yaml    # reset -> wait for readiness -> seed -> prints the void invocation -> cleanup
+#
+# See docs/CAMPAIGN.md for the full field reference and what each scenario
+# name turns on.
+
+target:
+  base_url: http://localhost:8080
+  swagger_url: http://localhost:8080/swagger/v1/swagger.json
+  readiness:
+    - /health
+    - /shm/health
+
+state:
+  reset: docker compose down -v && docker compose up -d
+  seed: ./populate-test-data.sh
+  cleanup: ./cleanup-test-data.sh
+
+identities:
+  file: auth.identities.json
+  required_roles:
+    - tenant_a_admin
+    - tenant_b_user
+
+policy:
+  max_rps: 40
+  destructive_operations: isolated
+  workflow_depth: 6
+
+scenarios:
+  - baseline
+  - bola
+  - lifecycle
+  - concurrency

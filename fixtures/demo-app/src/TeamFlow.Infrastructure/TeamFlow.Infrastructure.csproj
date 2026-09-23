@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../TeamFlow.Core/TeamFlow.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
+    <!-- Deliberately present alongside EF Core: the search endpoint (#10 in the demo's
+         vulnerability catalog) uses this directly for a raw, string-concatenated query
+         instead of EF Core's parameterized LINQ, the realistic way SQLi actually gets
+         introduced into an otherwise-safe codebase. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- Scriban renders task descriptions as templates for the "preview" feature
+         (#15), a real, popular .NET templating engine, not a toy stand-in. Its
+         {{ expr }} syntax is exactly what void/go's SSTI payloads already target. -->
+    <PackageReference Include="Scriban" Version="7.2.5" />
+    <!-- Newtonsoft.Json with unsafe TypeNameHandling is used ONLY by the "legacy
+         import" endpoint (#22) to demonstrate the .NET deserialization-gadget
+         mutation category, never used for normal request binding, which is
+         System.Text.Json (ASP.NET Core's safe default) everywhere else. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
+  </ItemGroup>
+</Project>
