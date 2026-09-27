@@ -1,0 +1,172 @@
+# UpsideFuzz documentation site (GitHub Pages)
+#
+# Local preview:   pip install -r docs-site/requirements.txt && mkdocs serve
+# Production build: .github/workflows/pages.yml (push to main -> GitHub Pages)
+#
+# The Markdown under docs/ is used as-is. docs-site/hooks.py pulls a few files that live
+# outside docs/ (README.md, the TeamFlow demo README, the void CLI reference, ...) into the
+# site and rewrites repo-relative links so the same Markdown works both on github.com and
+# here. See docs-site/README.md.
+
+site_name: UpsideFuzz
+site_description: Coverage-guided, stateful REST API fuzzer for .NET — IL instrumentation, typed grammars, and security oracles that find BOLA, mass assignment and injection, not just 500s.
+site_url: https://malchikserega.github.io/upside-fuzzer/
+site_author: malchikserega
+repo_url: https://github.com/malchikserega/upside-fuzzer
+repo_name: malchikserega/upside-fuzzer
+edit_uri: edit/main/docs/
+copyright: UpsideFuzz · Apache License 2.0 · Third-party product names are trademarks of their respective owners; UpsideFuzz is not affiliated with or endorsed by them.
+
+docs_dir: docs
+site_dir: site
+
+hooks:
+  - docs-site/hooks.py
+
+theme:
+  name: material
+  custom_dir: docs-site/overrides
+  logo: assets/brand/logo.svg
+  favicon: assets/brand/logo.svg
+  language: en
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - content.action.view
+
+extra_css:
+  - assets/stylesheets/upsidefuzz.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/malchikserega/upside-fuzzer
+      name: UpsideFuzz on GitHub
+
+plugins:
+  - search
+  - tags
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: "#"
+      permalink_title: Link to this section
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.smartsymbols
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+validation:
+  omitted_files: info
+  absolute_links: info
+  unrecognized_links: info
+
+# Pages marked "(repo)" are pulled in from outside docs/ by docs-site/hooks.py.
+nav:
+  - Home: index.md
+  - Getting started:
+      - How it works: getting-started/how-it-works.md
+      - Installation: getting-started/installation.md
+      - Quickstart runbook: getting-started/quickstart.md
+      - upsidefuzz CLI: getting-started/cli.md
+      - TeamFlow demo app: demo/teamflow.md
+      - Project README: project/readme.md
+  - Guides:
+      - Authentication & identities: guides/authentication.md
+      - Campaigns (campaign.yaml): guides/campaigns.md
+      - Security scenarios: guides/security-scenarios.md
+      - Typed structural mutation: guides/typed-structural-mutation.md
+      - MCP dictionary enrichment: guides/mcp-integration.md
+      - Repo layout: guides/repo-layout.md
+      - Target quickstarts:
+          - eShopOnWeb: guides/target-specific/eshop-quickstart.md
+          - SimplCommerce: guides/target-specific/simplcommerce-quickstart.md
+          - BTCPayServer: guides/target-specific/btcpayserver-quickstart.md
+          - Bitwarden: guides/target-specific/bitwarden-quickstart.md
+          - Bitwarden runbook: guides/target-specific/bitwarden-runbook.md
+          - Jellyfin: guides/target-specific/jellyfin-quickstart.md
+  - Architecture:
+      - Pipeline overview: architecture/overview.md
+      - Void engine internals: architecture/engine.md
+      - Stateful fuzzing: architecture/stateful-fuzzing.md
+  - Reference:
+      - void CLI & flags: reference/void-cli.md
+      - Components:
+          - grammarc (grammar compiler): reference/grammarc.md
+          - Roslyn analyzer: reference/analyzer.md
+          - IL instrumentor: reference/instrumentor.md
+      - Planted-bug E2E fixture: reference/planted-bug-api.md
+  - Research:
+      - Whitepaper: research/whitepaper.md
+  - Contributing:
+      - Contributing guide: development/contributing.md
+      - Code map (for AI agents): development/code-map.md
+      - Test organization: development/tests.md
+      - Local working state (.work/): development/work-dir.md
+      - Full docs index: docs-index.md

@@ -1,0 +1,38 @@
+{
+  "version": "1",
+  "identities": [
+    {
+      "name": "org-a-admin",
+      "jwt": "eyJhbGciOi...",
+      "weight": 2.0
+    },
+    {
+      "name": "org-a-member",
+      "jwt": "eyJhbGciOi...",
+      "weight": 1.2
+    },
+    {
+      "name": "org-b-member",
+      "jwt": "eyJhbGciOi...",
+      "weight": 1.0
+    },
+    {
+      "name": "viewer",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOi...",
+        "X-Tenant": "acme"
+      },
+      "weight": 0.8
+    },
+    {
+      "name": "partner-api",
+      "api_key_env": "PARTNER_API_KEY",
+      "api_key_header": "X-Api-Key",
+      "weight": 1.0
+    },
+    {
+      "name": "guest",
+      "weight": 0.2
+    }
+  ]
+}

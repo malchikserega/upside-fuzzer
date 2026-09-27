@@ -1,0 +1,258 @@
+# security_scenarios.yaml — the declarative security-scenario library
+# (Phase 5 #125). See docs/SECURITY_SCENARIOS.md for the full field
+# reference and this file's honest scope (a validated catalog cross-checked
+# against the real Go implementation, not a runtime rule interpreter).
+#
+# Parsed by security_scenarios.py (python3 security_scenarios.py) using
+# campaign.py's own stdlib-only parse_simple_yaml.
+
+scenarios:
+  cross_tenant_read:
+    family: bola
+    description: Identity B reads a resource identity A created in a different tenant/organization
+    requires:
+      - resource.owner_identity
+      - resource.tenant_key
+      - second_identity
+    valid:
+      identity: owner
+      operation: read
+    attack:
+      identity: other
+      operation: same
+    confirm:
+      status_in: [200, 201, 204]
+      response_contains_resource_identity: true
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "oracle.go::maybeEnqueueAccessProbes (oracleKindBOLA)"
+
+  bola_update:
+    family: bola
+    description: Identity B updates a resource identity A created, without ownership of it
+    requires:
+      - resource.owner_identity
+      - second_identity
+    valid:
+      identity: owner
+      operation: update
+    attack:
+      identity: other
+      operation: same
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "oracle.go::maybeEnqueueAccessProbes (oracleKindBOLA)"
+
+  bola_delete:
+    family: bola
+    description: Identity B deletes a resource identity A created, without ownership of it
+    requires:
+      - resource.owner_identity
+      - second_identity
+    valid:
+      identity: owner
+      operation: delete
+    attack:
+      identity: other
+      operation: same
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "oracle.go::maybeEnqueueAccessProbes (oracleKindBOLA)"
+
+  bola_nested_resource:
+    family: bola
+    description: Identity B accesses a child resource nested under a parent identity A owns
+    requires:
+      - resource.parent_key
+      - resource.owner_identity
+      - second_identity
+    valid:
+      identity: owner
+      operation: read
+    attack:
+      identity: other
+      operation: same
+    confirm:
+      status_in: [200, 201, 204]
+      response_contains_resource_identity: true
+    request_budget: 3
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "oracle.go::maybeEnqueueAccessProbes (oracleKindBOLA)"
+
+  tenant_escape:
+    family: tenant_escape
+    description: A child resource created under tenant A is substituted into a request scoped to tenant B's own parent
+    requires:
+      - resource.tenant_key
+      - second_identity.tenant_key
+    valid:
+      identity: owner
+      operation: read
+    attack:
+      identity: other
+      operation: same
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 3
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "resource_graph.go::findCompatibleResourcesInTenant"
+
+  mass_assignment_privileged_field:
+    family: mass_assignment
+    description: A privileged field over-posted into a write against an already-confirmed real resource is accepted
+    requires:
+      - resource.confirmed_real
+    valid:
+      identity: owner
+      operation: write
+    attack:
+      identity: owner
+      operation: same_with_privileged_field
+    confirm:
+      status_in: [200, 201, 204]
+      response_reflects_injected_field: true
+    request_budget: 1
+    minimization_strategy: drop-non-privileged-fields
+    implemented_by: "oracle.go::maybeEnqueueMassAssignProbe"
+
+  workflow_bypass_skip_predecessor:
+    family: workflow_bypass
+    description: An action endpoint succeeds against a resource whose known state does not satisfy its declared predecessor state
+    requires:
+      - endpoint.x_state_transition
+      - resource.attributes.status
+    valid:
+      identity: owner
+      operation: create_then_correct_sequence
+    attack:
+      identity: owner
+      operation: action_without_predecessor
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-steps
+    implemented_by: "adversarial.go::recordWorkflowBypassFinding"
+
+  stale_object_delete_then_get:
+    family: stale_object
+    description: A GET against a resource this run already observed as deleted still succeeds
+    requires:
+      - resource.lifecycle
+    valid:
+      identity: owner
+      operation: create_then_delete
+    attack:
+      identity: owner
+      operation: read
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-steps
+    implemented_by: "adversarial.go::recordStaleObjectFinding"
+
+  stale_object_delete_then_update:
+    family: stale_object
+    description: An update against a resource this run already observed as deleted still succeeds
+    requires:
+      - resource.lifecycle
+    valid:
+      identity: owner
+      operation: create_then_delete
+    attack:
+      identity: owner
+      operation: update
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 2
+    minimization_strategy: drop-unnecessary-steps
+    implemented_by: "adversarial.go::recordStaleObjectFinding"
+
+  optimistic_locking_stale_etag:
+    family: optimistic_locking
+    description: A write is accepted despite carrying a deliberately wrong If-Match against a resource with a known ETag
+    requires:
+      - resource.version
+    valid:
+      identity: owner
+      operation: read_then_write
+    attack:
+      identity: owner
+      operation: write_with_stale_etag
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 1
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "adversarial.go::maybeEnqueueStaleETagProbe"
+
+  idempotency_replay_create:
+    family: idempotency
+    description: An identical POST replayed verbatim creates a second different resource instead of returning the original
+    requires:
+      - resource.created_id
+    valid:
+      identity: owner
+      operation: create
+    attack:
+      identity: owner
+      operation: replay_same_request
+    confirm:
+      status_in: [200, 201]
+      response_id_differs_from_origin: true
+    request_budget: 1
+    minimization_strategy: drop-unnecessary-fields
+    implemented_by: "idempotency.go::maybeEnqueueIdempotencyReplayProbe"
+
+  race_concurrent_action:
+    family: races
+    description: More than one of N concurrent identical requests against an approve/redeem/withdraw-shaped endpoint succeeds
+    requires:
+      - endpoint.race_candidate
+    valid:
+      identity: owner
+      operation: action
+    attack:
+      identity: owner
+      operation: same_concurrent_burst
+    confirm:
+      success_count_greater_than: 1
+    request_budget: 8
+    minimization_strategy: reduce-burst-size
+    implemented_by: "race.go::recordRaceBurstResult"
+
+  auth_confusion_verb_content_type:
+    family: auth_confusion
+    description: A verb/content-type/route-case/param-location variant bypasses auth enforcement already proven on this endpoint
+    requires:
+      - endpoint.auth_required_strong
+    valid:
+      identity: owner
+      operation: same
+    attack:
+      identity: none
+      operation: variant
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 4
+    minimization_strategy: drop-unnecessary-headers-then-fields
+    implemented_by: "oracle.go::maybeEnqueueDifferentialProbes"
+
+  async_premature_consume:
+    family: async_workflows
+    description: "A result/consume step succeeds before the async operation it depends on ever reported a terminal status. NOT YET a dedicated finding oracle -- async.go's scheduler bias (asyncPollBonus) keeps the planner polling a pending operation, but nothing flags a premature-consume attempt as its own finding today. Cataloged as an honest gap, not claimed as implemented."
+    requires:
+      - resource.attributes.async_submitted
+    valid:
+      identity: owner
+      operation: submit_then_poll_to_terminal
+    attack:
+      identity: owner
+      operation: consume_before_terminal
+    confirm:
+      status_in: [200, 201, 204]
+    request_budget: 5
+    minimization_strategy: drop-unnecessary-poll-steps
+    implemented_by: "async.go::isAsyncOperationPending"

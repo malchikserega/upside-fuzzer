@@ -1,0 +1,130 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Structural Mutation Fixture", "version": "1.0.0" },
+  "paths": {
+    "/organizations/{orgId}/orders": {
+      "post": {
+        "operationId": "createOrder",
+        "parameters": [
+          { "name": "orgId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/OrderCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Order" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/orders/{orderId}": {
+      "get": {
+        "operationId": "getOrder",
+        "parameters": [
+          { "name": "orgId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "orderId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Order" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderCreate": {
+        "type": "object",
+        "required": ["customerId", "title", "items", "payment"],
+        "properties": {
+          "customerId": { "type": "string" },
+          "title": { "type": "string", "minLength": 3, "maxLength": 20 },
+          "tags": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": { "type": "string" }
+          },
+          "shippingAddress": {
+            "type": "object",
+            "required": ["city"],
+            "properties": {
+              "city": { "type": "string", "minLength": 2, "maxLength": 40 },
+              "zip": { "type": "string" }
+            }
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5,
+            "items": { "$ref": "#/components/schemas/OrderLine" }
+          },
+          "payment": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/CardPayment" },
+              { "$ref": "#/components/schemas/WalletPayment" }
+            ],
+            "discriminator": {
+              "propertyName": "type",
+              "mapping": {
+                "card": "#/components/schemas/CardPayment",
+                "wallet": "#/components/schemas/WalletPayment"
+              }
+            }
+          },
+          "note": { "type": "string" }
+        }
+      },
+      "OrderLine": {
+        "type": "object",
+        "required": ["sku", "qty"],
+        "properties": {
+          "sku": { "type": "string" },
+          "qty": { "type": "integer", "minimum": 1, "maximum": 10 }
+        }
+      },
+      "CardPayment": {
+        "type": "object",
+        "required": ["type", "cardNumber"],
+        "properties": {
+          "type": { "type": "string", "enum": ["card"] },
+          "cardNumber": { "type": "string" }
+        }
+      },
+      "WalletPayment": {
+        "type": "object",
+        "required": ["type", "walletId"],
+        "properties": {
+          "type": { "type": "string", "enum": ["wallet"] },
+          "walletId": { "type": "string" }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "orgId": { "type": "string" },
+          "customerId": { "type": "string" },
+          "title": { "type": "string" }
+        }
+      }
+    }
+  }
+}

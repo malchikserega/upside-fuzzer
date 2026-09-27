@@ -1,0 +1,137 @@
+name: E2E (planted-bug regression gate)
+
+# Top-20 #7: proves the whole pipeline -- instrument -> coverage -> grammar -> fuzz ->
+# detect -- still works end to end against fixtures/planted-bug-api/, not just that each
+# stage runs without error. This is the first CI this project has ever had; it protects
+# tools/grammar/grammarc/ + tools/dotnet/analyzer/ (Top-20 #9/#10) and the constraint-aware mutation engine
+# (Top-20 #14), none of which had any automated coverage before scripts/e2e/e2e-test.sh.
+#
+# `unit-tests` (added 2026-07-26) closes a real gap discovered building demo_app/: every
+# language's test suite (Go: internal/engine/*_test.go, C#: instrumentor.Tests + analyzer.Tests,
+# Python: grammarc/test_*.py + fuzzprep/test_fuzz_prep_multi.py) already existed and passed
+# locally, but NONE of them were ever actually run by CI -- only this E2E script was.
+# fuzz-prep-multi.py specifically (~2.8k LOC, zero tests before this) is where 3 real
+# bugs were found by hand in one session; unit-tests now gates it going forward instead
+# of relying on someone noticing a broken Dockerfile at `docker build` time again.
+# The "Stateful-security E2E fixture matrix" step (Phase 5 #128,
+# internal/engine/stateful_security_fixtures_test.go) is a real-HTTP-round-trip proof, per
+# named vulnerability class (BOLA, stale object, ignored ETag, workflow bypass,
+# double-payment idempotency, async job, valid-chain-gated mass assignment,
+# whole-chain minimization), that the engine's oracle/resource-graph/report pipeline
+# actually fires end to end -- already covered by the blanket `go test ./...` step
+# above, but named separately so this specific class of regression shows up as its
+# own gate rather than one line in an aggregate pass/fail.
+#
+# `e2e` depends on it so a basic regression fails in ~1-2 minutes, not after a 20-minute
+# Docker build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: src/void/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: "Go engine unit tests (src/void: cmd/void + internal/...)"
+        run: go -C src/void test ./...
+
+      # Phase 5 #128: named separately from the blanket run above so a
+      # regression in the stateful-security fixture matrix (BOLA, stale
+      # object/ETag, workflow bypass, idempotency, async, mass-assignment,
+      # whole-chain minimization -- stateful_security_fixtures_test.go) fails
+      # as its own visible gate instead of being buried in "go test ./..."'s
+      # aggregate pass/fail.
+      - name: Stateful-security E2E fixture matrix (internal/engine)
+        run: go -C src/void test ./... -run TestStatefulSecurityFixture -v
+
+      # Typed structural mutation (requirement #10's E2E fixture): compiles
+      # internal/engine/testdata/structural_mutation_fixture.swagger.json
+      # through the REAL python3 -m grammarc.cli, loads the real output, then
+      # exercises the real build/mutate/bind/send/minimize pipeline against a
+      # real httptest.Server -- named separately for the same reason as the
+      # stateful-security step above.
+      - name: Structural mutation E2E fixture (internal/engine)
+        run: go -C src/void test ./... -run TestStructuralMutationFixture -v
+
+      - name: C# instrumentor unit tests
+        run: dotnet test tools/dotnet/instrumentor.Tests/instrumentor.Tests.csproj
+
+      - name: C# analyzer unit tests
+        run: dotnet test tools/dotnet/analyzer.Tests/analyzer.Tests.csproj
+
+      - name: Python grammarc unit tests
+        working-directory: tools/grammar
+        run: |
+          python3 -m unittest \
+            grammarc.test_oas grammarc.test_boundary grammarc.test_body_serializer \
+            grammarc.test_dependencies grammarc.test_emit_dict grammarc.test_multipart \
+            grammarc.test_response_schemas grammarc.test_roslyn_merge \
+            grammarc.test_schema_ast grammarc.test_typed_body_integration -v
+
+      - name: Python fuzz-prep-multi.py unit tests
+        working-directory: tools/prep
+        run: python3 -m unittest fuzzprep.test_fuzz_prep_multi -v
+
+      - name: Python campaign/scenarios unit tests
+        working-directory: tools
+        run: python3 -m unittest campaign.test_campaign campaign.test_scenarios -v
+
+      - name: compile-grammar.sh CLI regression tests
+        run: ./scripts/test/test-compile-grammar-cli.sh
+
+      - name: Compatibility wrapper smoke tests
+        working-directory: tests/integration/compatibility
+        run: python3 -m unittest test_compat_wrappers -v
+
+  e2e:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: src/void/go.sum
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run E2E regression check
+        run: ./scripts/e2e/e2e-test.sh
+
+      - name: Upload crash/summary artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts
+          path: |
+            /tmp/e2e-planted-bug-run/crashes.jsonl
+            /tmp/e2e-planted-bug-run/summary.json
+            /tmp/e2e-planted-bug-run/report.json
+          if-no-files-found: warn

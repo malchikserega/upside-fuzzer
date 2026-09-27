@@ -1,0 +1,1130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UpsideFuzz — Fuzzing Pipeline</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #060a14;
+  --surface: rgba(10, 20, 40, 0.85);
+  --code-bg: #0d1117;
+  --border: rgba(56, 189, 248, 0.13);
+  --border-hi: rgba(56, 189, 248, 0.35);
+  --cyan: #38bdf8;
+  --cyan-b: #00d4ff;
+  --green: #4ade80;
+  --green-b: #00ff88;
+  --purple: #a78bfa;
+  --red: #f87171;
+  --red-b: #ff2244;
+  --orange: #fb923c;
+  --gold: #fbbf24;
+  --text: #e2e8f0;
+  --muted: #4b5563;
+  --dim: #1e293b;
+  --r: 10px;
+  --mono: 'SF Mono','JetBrains Mono','Fira Code','Courier New',monospace;
+  --sans: -apple-system,BlinkMacSystemFont,'Segoe UI','Inter',system-ui,sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+/* ── BG ─────────────────────────────────────────── */
+#bgc {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+}
+
+/* ── APP ─────────────────────────────────────────── */
+#app {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column;
+  height: 100vh; padding: 10px; gap: 8px;
+}
+
+/* ── HEADER ──────────────────────────────────────── */
+#hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 18px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); backdrop-filter: blur(24px);
+  flex-shrink: 0;
+}
+.hlogo { display: flex; align-items: center; gap: 11px; }
+.hlogo svg { width: 30px; height: 30px; flex-shrink: 0; }
+.htitle {
+  font-size: 17px; font-weight: 700; letter-spacing: -.4px;
+  background: linear-gradient(135deg, var(--cyan), var(--purple));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.hsub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.hright { display: flex; align-items: center; gap: 14px; }
+.pdots { display: flex; gap: 3px; align-items: center; }
+.pdot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted); transition: background .3s, transform .3s;
+}
+.pdot.active { background: var(--cyan); transform: scale(1.5); }
+.pdot.done { background: var(--green); }
+.pnum { font-size: 10px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+.pname {
+  font-size: 13px; font-weight: 600; color: var(--cyan);
+  min-width: 220px; text-align: right;
+  transition: opacity .4s;
+}
+
+/* ── MAIN GRID ───────────────────────────────────── */
+#main {
+  display: grid; grid-template-columns: 248px 1fr 248px;
+  gap: 8px; flex: 1; min-height: 0;
+}
+
+/* ── PANEL ───────────────────────────────────────── */
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); backdrop-filter: blur(24px);
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: border-color .4s;
+}
+.panel.active { border-color: var(--border-hi); }
+.ph {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ph-icon { font-size: 13px; }
+.ph-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: #94a3b8; }
+.ph-badge {
+  margin-left: auto; font-size: 9px; font-weight: 600;
+  padding: 2px 7px; border-radius: 100px;
+  background: rgba(56,189,248,.12); color: var(--cyan);
+  transition: all .3s;
+}
+
+/* ── CODE BLOCKS ─────────────────────────────────── */
+.cblock {
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.65;
+  color: #abb2bf; background: var(--code-bg); border-radius: 7px;
+  padding: 10px; overflow: hidden;
+}
+.cblock .k { color: #c678dd; }
+.cblock .s { color: #98c379; }
+.cblock .n { color: #d19a66; }
+.cblock .p { color: #e06c75; }
+.cblock .c { color: #5c6370; font-style: italic; }
+.cblock .hl {
+  display: block; background: rgba(0,212,255,.1);
+  border-left: 2px solid var(--cyan-b); margin: 0 -10px; padding: 0 8px;
+  animation: glHL 2s ease-in-out infinite;
+}
+.cblock .hg {
+  display: block; background: rgba(0,255,136,.09);
+  border-left: 2px solid var(--green-b); margin: 0 -10px; padding: 0 8px;
+  animation: glGR 1.5s ease-in-out infinite;
+}
+.cblock .hr {
+  display: block; background: rgba(255,34,68,.14);
+  border-left: 2px solid var(--red-b); margin: 0 -10px; padding: 0 8px;
+  animation: glRD .8s ease-in-out infinite;
+}
+@keyframes glHL { 0%,100%{background:rgba(0,212,255,.07)} 50%{background:rgba(0,212,255,.18)} }
+@keyframes glGR { 0%,100%{background:rgba(0,255,136,.07)} 50%{background:rgba(0,255,136,.19)} }
+@keyframes glRD { 0%,100%{background:rgba(255,34,68,.11)} 50%{background:rgba(255,34,68,.24)} }
+
+/* ── LEFT PANEL ──────────────────────────────────── */
+.spec-view { flex: 1; padding: 10px; overflow: hidden; }
+.pdivider { height: 1px; background: var(--border); flex-shrink: 0; }
+.corpus-sec { flex: 0 0 auto; display: flex; flex-direction: column; max-height: 210px; }
+.corpus-list { padding: 6px 8px; overflow: hidden; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+.centry {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 7px; border-radius: 5px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.05);
+  font-family: var(--mono); font-size: 9.5px;
+  animation: slideIn .3s ease-out;
+}
+@keyframes slideIn { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:none} }
+.mbadge {
+  font-size: 8px; font-weight: 700; padding: 1px 5px;
+  border-radius: 3px; flex-shrink: 0;
+}
+.m-get    { background: rgba(56,189,248,.2); color: var(--cyan); }
+.m-post   { background: rgba(74,222,128,.2); color: var(--green); }
+.m-put    { background: rgba(251,191,36,.2);  color: var(--gold); }
+.m-delete { background: rgba(248,113,113,.2); color: var(--red); }
+.m-patch  { background: rgba(167,139,250,.2); color: var(--purple); }
+.epath { color: #94a3b8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eedge { color: var(--green); font-size: 9px; flex-shrink: 0; }
+
+/* ── CENTER PANEL ────────────────────────────────── */
+.fcore { padding: 10px; flex: 1; display: flex; flex-direction: column; gap: 9px; overflow: hidden; }
+
+/* Epoch bar */
+.epoch-row { display: flex; align-items: flex-start; gap: 3px; }
+.elabel { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-right: 4px; margin-top: 4px; }
+.epoch-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.epoch-track { width: 100%; height: 4px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; }
+.epoch-fill { height: 100%; border-radius: 2px; width: 0%; transition: width .6s ease; }
+.epoch-item:nth-child(2) .epoch-fill { background: var(--cyan); }
+.epoch-item:nth-child(3) .epoch-fill { background: var(--purple); }
+.epoch-item:nth-child(4) .epoch-fill { background: var(--orange); }
+.epoch-item:nth-child(5) .epoch-fill { background: var(--gold); }
+.ename { font-size: 8.5px; color: var(--muted); transition: color .3s; }
+.epoch-item.active .ename { color: var(--cyan); font-weight: 600; }
+.epoch-item.active:nth-child(3) .ename { color: var(--purple); }
+.epoch-item.active:nth-child(4) .ename { color: var(--orange); }
+.epoch-item.active:nth-child(5) .ename { color: var(--gold); }
+
+/* Stats */
+.stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 7px; }
+.scard {
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 9px; text-align: center;
+}
+.sval { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--cyan); line-height: 1.2; }
+.slbl { font-size: 8.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-top: 2px; }
+
+/* Mutations */
+.mut-box { background: rgba(255,255,255,.025); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; flex-shrink: 0; }
+.mut-title { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 7px; }
+.mut-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.mt {
+  font-size: 9.5px; padding: 2px 7px; border-radius: 100px;
+  font-weight: 500; transition: all .4s; opacity: .3;
+}
+.mt.on { opacity: 1; box-shadow: 0 0 8px currentColor; }
+.mt-sqli    { background: rgba(239,68,68,.2);   color: #f87171; }
+.mt-xss     { background: rgba(251,146,60,.2);  color: #fb923c; }
+.mt-path    { background: rgba(167,139,250,.2); color: #a78bfa; }
+.mt-bound   { background: rgba(251,191,36,.2);  color: #fbbf24; }
+.mt-ssrf    { background: rgba(34,211,238,.2);  color: #22d3ee; }
+.mt-cmdi    { background: rgba(248,113,113,.2); color: #f87171; }
+.mt-nosql   { background: rgba(74,222,128,.2);  color: #4ade80; }
+.mt-over    { background: rgba(99,102,241,.2);  color: #818cf8; }
+
+/* Flow area */
+.flow-area {
+  flex: 1; position: relative; overflow: hidden;
+  background: rgba(255,255,255,.02); border: 1px solid var(--border);
+  border-radius: 7px; min-height: 70px;
+}
+.fl { position: absolute; font-size: 8.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; z-index: 2; }
+.fl.l { top: 7px; left: 9px; }
+.fl.r { top: 7px; right: 9px; }
+.flow-scan {
+  position: absolute; left: 0; right: 0; height: 1px; z-index: 1; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(56,189,248,.4), transparent);
+  animation: scan 3s linear infinite;
+}
+@keyframes scan { from{top:0} to{top:100%} }
+
+/* Packets */
+.pkt {
+  position: absolute; height: 20px; border-radius: 10px;
+  display: flex; align-items: center; padding: 0 7px;
+  font-family: var(--mono); font-size: 8.5px; font-weight: 600;
+  white-space: nowrap; pointer-events: none; z-index: 5;
+  box-shadow: 0 0 10px rgba(0,0,0,.5);
+}
+.pkt-get    { background: rgba(56,189,248,.2);  color: var(--cyan);   border: 1px solid rgba(56,189,248,.45); }
+.pkt-post   { background: rgba(74,222,128,.2);  color: var(--green);  border: 1px solid rgba(74,222,128,.45); }
+.pkt-put    { background: rgba(251,191,36,.2);  color: var(--gold);   border: 1px solid rgba(251,191,36,.45); }
+.pkt-delete { background: rgba(248,113,113,.2); color: var(--red);    border: 1px solid rgba(248,113,113,.45); }
+.pkt-crash  { background: rgba(255,34,68,.35);  color: #ff4466;       border: 1px solid rgba(255,34,68,.7); box-shadow: 0 0 14px rgba(255,34,68,.5); }
+
+/* Current request */
+.creq-box {
+  background: rgba(255,255,255,.02); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px; flex-shrink: 0;
+}
+.creq-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.creq-val { font-family: var(--mono); font-size: 10px; color: #94a3b8; white-space: pre-wrap; }
+
+/* ── RIGHT PANEL ─────────────────────────────────── */
+.code-panel { flex: 1; padding: 10px; overflow: hidden; display: flex; flex-direction: column; gap: 5px; }
+.cfname { font-size: 9.5px; color: var(--muted); font-family: var(--mono); padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+.bitmap-sec { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 9px 11px; }
+.bmap-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.bmap-title { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.bmap-stat { font-size: 9.5px; color: var(--green); font-family: var(--mono); }
+#bcanvas { display: block; width: 100%; border-radius: 4px; image-rendering: pixelated; }
+.shm-row {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 5px;
+}
+.shm-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--muted); flex-shrink: 0;
+  transition: background .5s;
+}
+.shm-dot.on { background: var(--green); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.7)} }
+
+/* ── BOTTOM BAR ──────────────────────────────────── */
+#bot {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  flex-shrink: 0; height: 86px;
+}
+.bpanel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); backdrop-filter: blur(24px);
+  padding: 7px 13px; overflow: hidden;
+}
+.btitle {
+  font-size: 9.5px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .8px; margin-bottom: 7px; display: flex; align-items: center; gap: 5px;
+}
+
+/* Sequence chain */
+.seq-chain { display: flex; align-items: center; overflow: hidden; gap: 0; }
+.seq-step {
+  display: flex; align-items: center; gap: 0;
+  opacity: 0; transform: translateX(-16px); transition: all .45s ease;
+}
+.seq-step.vis { opacity: 1; transform: none; }
+.seq-box {
+  background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  border-radius: 5px; padding: 3px 7px; font-family: var(--mono); font-size: 9px; white-space: nowrap;
+}
+.seq-box.prod { border-color: rgba(74,222,128,.4); color: var(--green); }
+.seq-box.cons { border-color: rgba(56,189,248,.4); color: var(--cyan); }
+.seq-box.boom { border-color: rgba(255,34,68,.6); color: var(--red); animation: boomFlash .6s ease-in-out infinite; }
+@keyframes boomFlash { 0%,100%{background:rgba(255,34,68,.05)} 50%{background:rgba(255,34,68,.2)} }
+.seq-arr { font-size: 12px; color: var(--muted); padding: 0 3px; flex-shrink: 0; }
+.seq-lbl { font-size: 8px; color: var(--muted); margin-top: 1px; text-align: center; }
+.seq-step-inner { display: flex; flex-direction: column; align-items: center; }
+
+/* Status */
+.status-lines { display: flex; flex-direction: column; gap: 3px; }
+.sline { display: flex; align-items: center; gap: 7px; font-size: 10.5px; transition: opacity .3s; }
+.sline-icon { flex-shrink: 0; font-size: 9px; }
+.sline-text { color: #94a3b8; }
+.sline-text.cyan { color: var(--cyan); }
+.sline-text.green { color: var(--green); }
+.sline-text.red { color: var(--red); }
+.sline-text.warn { color: var(--gold); }
+.sline-text.purple { color: var(--purple); }
+
+/* ── CRASH OVERLAY ───────────────────────────────── */
+#cov {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.65); backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none; transition: opacity .5s;
+}
+#cov.vis { opacity: 1; pointer-events: auto; }
+.cpanel {
+  background: rgba(12,6,10,.97); border: 1px solid rgba(255,34,68,.4);
+  border-radius: 12px; padding: 18px; width: 540px;
+  box-shadow: 0 0 60px rgba(255,34,68,.2), 0 0 120px rgba(255,34,68,.08);
+  transform: scale(.88) translateY(22px);
+  transition: transform .5s cubic-bezier(.34,1.56,.64,1);
+}
+#cov.vis .cpanel { transform: scale(1) translateY(0); }
+.cphdr {
+  display: flex; align-items: center; gap: 9px;
+  margin-bottom: 13px; padding-bottom: 11px; border-bottom: 1px solid rgba(255,34,68,.18);
+}
+.cp-icon { font-size: 18px; }
+.cp-title { font-size: 14px; font-weight: 700; color: var(--red-b); letter-spacing: -.2px; }
+.cp-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.cp-score {
+  margin-left: auto; font-size: 9.5px; font-weight: 700;
+  padding: 3px 9px; border-radius: 100px;
+  background: rgba(255,34,68,.18); color: var(--red-b); border: 1px solid rgba(255,34,68,.3);
+}
+.cpmeta { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-bottom: 13px; }
+.cpmi {
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 6px; padding: 7px 9px;
+}
+.cpmi-k { font-size: 8.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+.cpmi-v { font-family: var(--mono); font-size: 11px; color: var(--text); margin-top: 2px; }
+.cpmi-v.r { color: var(--red); }
+.cpmi-v.c { color: var(--cyan); }
+.cpmi-v.g { color: var(--green); }
+.trace {
+  background: var(--code-bg); border-radius: 7px;
+  padding: 11px; font-family: var(--mono); font-size: 9.5px; line-height: 1.7;
+  max-height: 150px; overflow: hidden;
+}
+.tl { color: #4b5563; }
+.tl.hi { color: #f87171; font-weight: 600; }
+.tl.fr { color: #6b7280; }
+.cpfoot { margin-top: 13px; }
+.cpoc {
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 6px; padding: 7px 9px; font-family: var(--mono);
+  font-size: 9px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── EDGE FLASH ──────────────────────────────────── */
+.edge-flash {
+  position: absolute; top: 5px; right: 6px; z-index: 10;
+  font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+  background: rgba(74,222,128,.28); color: var(--green);
+  animation: edgeFade 1.6s ease forwards;
+}
+@keyframes edgeFade {
+  0%{opacity:0;transform:scale(.8)} 15%{opacity:1;transform:scale(1)}
+  75%{opacity:1} 100%{opacity:0}
+}
+
+/* ── UTILS ───────────────────────────────────────── */
+@keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.fadein { animation: fadeIn .4s ease forwards; }
+</style>
+</head>
+<body>
+
+<canvas id="bgc"></canvas>
+
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="hdr">
+    <div class="hlogo">
+      <svg viewBox="0 0 30 30" fill="none">
+        <circle cx="15" cy="15" r="13" fill="rgba(56,189,248,.08)" stroke="rgba(56,189,248,.45)" stroke-width="1.4"/>
+        <path d="M9 19 L15 7 L21 19" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M11.5 16 L18.5 16" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round" opacity=".55"/>
+        <circle cx="15" cy="7" r="2" fill="#00d4ff"/>
+        <circle cx="9"  cy="19" r="2" fill="#a78bfa"/>
+        <circle cx="21" cy="19" r="2" fill="#4ade80"/>
+      </svg>
+      <div>
+        <div class="htitle">UpsideFuzz</div>
+        <div class="hsub">Coverage-Guided REST API Fuzzer for .NET</div>
+      </div>
+    </div>
+    <div class="hright">
+      <div class="pdots" id="pdots"></div>
+      <div class="pnum">Phase <span id="pnum">1</span>/12</div>
+      <div class="pname" id="pname">Loading OpenAPI Specification</div>
+    </div>
+  </header>
+
+  <!-- MAIN 3-COL -->
+  <div id="main">
+
+    <!-- LEFT: Input + Corpus -->
+    <div class="panel" id="lpanel">
+      <div class="ph">
+        <span class="ph-icon">📄</span>
+        <span class="ph-title">Input Stage</span>
+        <span class="ph-badge" id="gbadge">swagger.json</span>
+      </div>
+      <div class="spec-view">
+        <div class="cblock" id="specCode" style="height:100%;"></div>
+      </div>
+      <div class="pdivider"></div>
+      <div class="corpus-sec">
+        <div class="ph" style="border-bottom:none;border-top:1px solid var(--border);">
+          <span class="ph-icon">📦</span>
+          <span class="ph-title">Corpus</span>
+          <span class="ph-badge" id="cbadge">0 inputs</span>
+        </div>
+        <div class="corpus-list" id="clist"></div>
+      </div>
+    </div>
+
+    <!-- CENTER: Fuzzer Engine -->
+    <div class="panel" id="cpanel">
+      <div class="ph">
+        <span class="ph-icon">⚡</span>
+        <span class="ph-title">Void Fuzzer Engine</span>
+        <span class="ph-badge" id="rrate">0 req/s</span>
+      </div>
+      <div class="fcore">
+        <!-- Epoch bar -->
+        <div class="epoch-row">
+          <span class="elabel">Epoch</span>
+          <div class="epoch-item" id="ep0"><div class="epoch-track"><div class="epoch-fill"></div></div><div class="ename">Baseline</div></div>
+          <div class="epoch-item" id="ep1"><div class="epoch-track"><div class="epoch-fill"></div></div><div class="ename">Deterministic</div></div>
+          <div class="epoch-item" id="ep2"><div class="epoch-track"><div class="epoch-fill"></div></div><div class="ename">Havoc</div></div>
+          <div class="epoch-item" id="ep3"><div class="epoch-track"><div class="epoch-fill"></div></div><div class="ename">Splicing</div></div>
+        </div>
+        <!-- Stats -->
+        <div class="stats-row">
+          <div class="scard"><div class="sval" id="sv0">0</div><div class="slbl">Requests</div></div>
+          <div class="scard"><div class="sval" id="sv1" style="color:var(--green)">0</div><div class="slbl">Edges</div></div>
+          <div class="scard"><div class="sval" id="sv2" style="color:var(--red)">0</div><div class="slbl">Crashes</div></div>
+          <div class="scard"><div class="sval" id="sv3" style="color:var(--purple)">0</div><div class="slbl">Corpus</div></div>
+        </div>
+        <!-- Mutations -->
+        <div class="mut-box">
+          <div class="mut-title">Active Mutations (MOpt-weighted)</div>
+          <div class="mut-tags">
+            <span class="mt mt-bound" id="mt-bound">boundary</span>
+            <span class="mt mt-sqli"  id="mt-sqli">sqli</span>
+            <span class="mt mt-xss"   id="mt-xss">xss</span>
+            <span class="mt mt-path"  id="mt-path">path_traversal</span>
+            <span class="mt mt-ssrf"  id="mt-ssrf">ssrf</span>
+            <span class="mt mt-cmdi"  id="mt-cmdi">cmdi</span>
+            <span class="mt mt-nosql" id="mt-nosql">nosqli</span>
+            <span class="mt mt-over"  id="mt-over">overflow</span>
+          </div>
+        </div>
+        <!-- Flow area -->
+        <div class="flow-area" id="flowArea">
+          <div class="flow-scan"></div>
+          <div class="fl l">FUZZER</div>
+          <div class="fl r">TARGET</div>
+        </div>
+        <!-- Current request -->
+        <div class="creq-box">
+          <div class="creq-label">Current Request</div>
+          <div class="creq-val" id="creq">Waiting for grammar...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Target + Bitmap -->
+    <div class="panel" id="rpanel">
+      <div class="ph">
+        <span class="ph-icon">🎯</span>
+        <span class="ph-title">Target Application</span>
+        <span class="ph-badge" id="tstatus">Offline</span>
+      </div>
+      <div class="code-panel">
+        <div class="cfname" id="cfname">src/Api/Controllers/AccountsController.cs</div>
+        <div class="cblock" style="flex:1;overflow:hidden;" id="tcode"></div>
+      </div>
+      <div class="bitmap-sec">
+        <div class="bmap-hdr">
+          <div class="bmap-title">Coverage Bitmap (SHM)</div>
+          <div class="bmap-stat"><span id="bedges">0</span> edges</div>
+        </div>
+        <canvas id="bcanvas" width="226" height="76"></canvas>
+        <div class="shm-row">
+          <div class="shm-dot" id="sdot"></div>
+          <span>/coverage_shm/bitmap &bull; 262144 bytes</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+  <!-- BOTTOM BAR -->
+  <div id="bot">
+    <div class="bpanel">
+      <div class="btitle"><span>🔗</span> Sequence Engine — Stateful Request Chains</div>
+      <div class="seq-chain" id="seqChain">
+        <div class="seq-step" id="sq0">
+          <div class="seq-step-inner"><div class="seq-box prod">POST /api/v1/stores</div><div class="seq-lbl">→ storeId</div></div>
+        </div>
+        <div class="seq-step" id="sq1" style="transition-delay:.18s">
+          <div class="seq-arr">→</div>
+          <div class="seq-step-inner"><div class="seq-box cons">POST /stores/{id}/invoices</div><div class="seq-lbl">→ invoiceId</div></div>
+        </div>
+        <div class="seq-step" id="sq2" style="transition-delay:.36s">
+          <div class="seq-arr">→</div>
+          <div class="seq-step-inner"><div class="seq-box cons">GET /invoices/{id}</div><div class="seq-lbl">→ verify</div></div>
+        </div>
+        <div class="seq-step" id="sq3" style="transition-delay:.54s">
+          <div class="seq-arr">→</div>
+          <div class="seq-step-inner"><div class="seq-box boom">DELETE /stores/{id} 💥</div><div class="seq-lbl" style="color:var(--red)">→ 500!</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="bpanel">
+      <div class="btitle"><span>📊</span> Run Status</div>
+      <div class="status-lines">
+        <div class="sline"><span class="sline-icon">🔵</span><span class="sline-text" id="sl1">Initializing pipeline...</span></div>
+        <div class="sline"><span class="sline-icon" id="si2">⚪</span><span class="sline-text" id="sl2">—</span></div>
+        <div class="sline"><span class="sline-icon" id="si3">⚪</span><span class="sline-text" id="sl3">—</span></div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<!-- CRASH OVERLAY -->
+<div id="cov">
+  <div class="cpanel">
+    <div class="cphdr">
+      <span class="cp-icon">💥</span>
+      <div>
+        <div class="cp-title">Unique Crash Discovered</div>
+        <div class="cp-sub">Stable reproducible &bull; 5/5 repro checks passed &bull; Crash triage: likely_vuln</div>
+      </div>
+      <div class="cp-score">Score: 7.38</div>
+    </div>
+    <div class="cpmeta">
+      <div class="cpmi"><div class="cpmi-k">Endpoint</div><div class="cpmi-v c">POST /api/v1/pull-payments/{id}/boltcards</div></div>
+      <div class="cpmi"><div class="cpmi-k">Status</div><div class="cpmi-v r">500 Internal Server Error</div></div>
+      <div class="cpmi"><div class="cpmi-k">Mutation</div><div class="cpmi-v" style="color:var(--orange)">nosqli + json_type_confusion</div></div>
+      <div class="cpmi"><div class="cpmi-k">Signature</div><div class="cpmi-v g">7ecd321e718f5a26</div></div>
+    </div>
+    <div class="trace">
+      <div class="tl hi">System.NullReferenceException: Object reference not set to an instance of an object.</div>
+      <div class="tl fr">&nbsp;&nbsp; at BTCPayServer.Controllers.GreenField</div>
+      <div class="tl fr">&nbsp;&nbsp;&nbsp;&nbsp; .GreenfieldPullPaymentController.CreateBoltCard(String pullPaymentId, ...)</div>
+      <div class="tl hi">&nbsp;&nbsp; ↳ pp.Metadata — pp is null (GetPullPayment returned null)</div>
+      <div class="tl fr">&nbsp;&nbsp; at Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor</div>
+      <div class="tl fr">&nbsp;&nbsp; at Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker.Next()</div>
+      <div class="tl fr">&nbsp;&nbsp; at Microsoft.AspNetCore.Mvc.Infrastructure.ResourceInvoker.InvokeAsync()</div>
+    </div>
+    <div class="cpfoot">
+      <div class="cpoc">📝 crashes/pocs/poc-7ecd321e718f5a26.sh &bull; curl -X POST http://target/api/v1/pull-payments/... -H 'Authorization: Bearer ${AUTH_TOKEN}' -d '{"$type":null,"UID":"..."}' → 500</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║           UPSIDEFUZZ PIPELINE ANIMATION — ORCHESTRATOR               ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+const N_PHASES = 12;
+let phase = 0;
+let reqCount = 0, edgeCount = 0, crashCount = 0, corpusCount = 0;
+let phTimer = null, pktTimer = null, rateTimer = null;
+let bitmapArr, bcvs, bctx, BW, BH;
+
+// ─── Background canvas ─────────────────────────────
+(function initBG() {
+  const c = document.getElementById('bgc');
+  const ctx = c.getContext('2d');
+  const resize = () => { c.width = innerWidth; c.height = innerHeight; };
+  resize(); addEventListener('resize', resize);
+
+  const pts = Array.from({length:55}, () => ({
+    x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+    vx: (Math.random()-.5)*.25, vy: (Math.random()-.5)*.25,
+    r: Math.random() * 1.4 + .4, a: Math.random() * .4 + .08
+  }));
+
+  function frame() {
+    ctx.clearRect(0, 0, c.width, c.height);
+    // grid
+    ctx.strokeStyle = 'rgba(56,189,248,.035)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < c.width; x += 44) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,c.height); ctx.stroke(); }
+    for (let y = 0; y < c.height; y += 44) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(c.width,y); ctx.stroke(); }
+    // particles
+    pts.forEach(p => {
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = c.width; else if (p.x > c.width) p.x = 0;
+      if (p.y < 0) p.y = c.height; else if (p.y > c.height) p.y = 0;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.28);
+      ctx.fillStyle = `rgba(56,189,248,${p.a})`; ctx.fill();
+    });
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+
+// ─── Bitmap ────────────────────────────────────────
+function initBitmap() {
+  bcvs = document.getElementById('bcanvas');
+  bctx = bcvs.getContext('2d');
+  BW = 57; BH = 19;
+  bitmapArr = new Uint8Array(BW * BH);
+  drawBitmap();
+}
+
+function drawBitmap() {
+  const cw = bcvs.width, ch = bcvs.height;
+  const cw2 = cw / BW, ch2 = ch / BH;
+  bctx.fillStyle = '#0d1117'; bctx.fillRect(0, 0, cw, ch);
+  for (let i = 0; i < BW * BH; i++) {
+    const v = bitmapArr[i];
+    const x = (i % BW) * cw2, y = Math.floor(i / BW) * ch2;
+    if (v === 0) bctx.fillStyle = 'rgba(255,255,255,.04)';
+    else if (v === 1) bctx.fillStyle = `rgba(74,222,128,${.35 + Math.random()*.18})`;
+    else if (v === 2) bctx.fillStyle = '#00ff88';
+    else bctx.fillStyle = '#ff2244';
+    bctx.fillRect(x+1, y+1, cw2-2, ch2-2);
+  }
+}
+
+function fillBitmap(n) {
+  let added = 0;
+  for (let t = 0; t < n * 4 && added < n; t++) {
+    const i = Math.floor(Math.random() * bitmapArr.length);
+    if (bitmapArr[i] === 0) { bitmapArr[i] = 1; added++; edgeCount++; }
+    else if (bitmapArr[i] === 1 && Math.random() < .08) bitmapArr[i] = 2;
+  }
+  drawBitmap();
+  updEdge();
+}
+
+function markCrashBitmap() {
+  const i = Math.floor(Math.random() * bitmapArr.length);
+  bitmapArr[i] = 3;
+  drawBitmap();
+}
+
+function updEdge() {
+  document.getElementById('sv1').textContent = edgeCount.toLocaleString();
+  document.getElementById('bedges').textContent = edgeCount.toLocaleString();
+}
+
+// Continuous slow bitmap growth
+setInterval(() => {
+  if (phase >= 4 && edgeCount < BW * BH * .72) fillBitmap(1);
+}, 450);
+
+// ─── Content ───────────────────────────────────────
+const specHTML = {
+swagger: `<span class="c">// swagger.json — OpenAPI 3.0 specification</span>
+{
+  <span class="p">"openapi"</span>: <span class="s">"3.0.1"</span>,
+  <span class="p">"info"</span>: { <span class="p">"title"</span>: <span class="s">"Bitwarden Internal API"</span> },
+  <span class="p">"paths"</span>: {
+    <span class="p">"/accounts/register"</span>: {
+      <span class="p">"post"</span>: {
+        <span class="p">"operationId"</span>: <span class="s">"PostRegister"</span>,
+        <span class="p">"requestBody"</span>: {
+          <span class="p">"$ref"</span>: <span class="s">"#/components/schemas/RegisterRequestModel"</span>
+        }
+      }
+    },
+    <span class="p">"/ciphers/{id}"</span>: {
+      <span class="p">"get"</span>: { <span class="c">/* ... */</span> },
+      <span class="p">"put"</span>: { <span class="c">/* ... */</span> },
+      <span class="p">"delete"</span>: { <span class="c">/* ... */</span> }
+    },
+    <span class="p">"/organization/sponsorship/{id}/sync-status"</span>: {
+      <span class="p">"get"</span>: { <span class="p">"operationId"</span>: <span class="s">"GetSyncStatus"</span> }
+    }
+  }
+}`,
+grammar: `<span class="c"># grammar.py — compiled by RESTler + SSE</span>
+<span class="k">from</span> restler.engine.primitives <span class="k">import</span> *
+
+<span class="p">request_collection</span> = {
+  <span class="s">"post /accounts/register"</span>: [
+    <span class="k">restler_static_string</span>(<span class="s">"POST"</span>),
+    <span class="k">restler_fuzzable_string</span>(<span class="s">"email"</span>,
+        examples=[<span class="s">"test@example.com"</span>]),
+    <span class="k">restler_fuzzable_int</span>(<span class="s">"kdfIterations"</span>,
+        examples=[<span class="n">600000</span>]),
+  ],
+  <span class="s">"get /ciphers/{id}"</span>: [
+    <span class="k">restler_fuzzable_uuid4</span>(<span class="s">"id"</span>),
+    dependencies.<span class="k">producer</span>(<span class="s">"post_ciphers_id"</span>)
+  ],
+}
+<span class="c"># 142 templates · 24 producers · 118 consumers</span>`
+};
+
+const codeHTML = {
+instrument: `<span class="c">// After SharpFuzz IL instrumentation (fuzz-prep-multi.py)</span>
+<span class="k">public class</span> <span class="p">AccountsController</span> : ControllerBase {
+
+<span class="hg">  SharpFuzz.Coverage.Hit(0x4a1b); <span class="c">// ← coverage hook injected</span></span>
+  <span class="k">public async</span> Task&lt;ActionResult&gt; <span class="p">PostRegister</span>(
+      <span class="p">RegisterRequestModel</span> model) {
+
+<span class="hg">    SharpFuzz.Coverage.Hit(0x4a1c); <span class="c">// ← injected into every branch</span></span>
+    <span class="k">if</span> (model == <span class="k">null</span> || !ModelState.IsValid)
+      <span class="k">return</span> BadRequest();
+
+<span class="hg">    SharpFuzz.Coverage.Hit(0x4a1d); <span class="c">// ← 1847 hooks across all DLLs</span></span>
+    <span class="k">await</span> _userService.RegisterAsync(model);
+    <span class="k">return</span> Ok();
+  }
+}`,
+running: `<span class="c">// GreenfieldPullPaymentController.cs</span>
+[<span class="p">AllowAnonymous</span>] <span class="c">// ← no auth required!</span>
+<span class="k">public async</span> Task&lt;ActionResult&gt; <span class="p">CreateBoltCard</span>(
+    <span class="k">string</span> pullPaymentId,
+    <span class="p">CreateBoltCardRequest</span> req) {
+
+<span class="hl">  SharpFuzz.Coverage.Hit(0x7e3a); <span class="c">// ← edge hit</span></span>
+  <span class="k">var</span> pp = <span class="k">await</span> _ppService
+      .GetPullPayment(pullPaymentId);
+
+<span class="hl">  SharpFuzz.Coverage.Hit(0x7e3b); <span class="c">// ← new edge!</span></span>
+  <span class="k">var</span> result = pp.Metadata
+      .CreateBoltcard(req.UID);
+  <span class="k">return</span> Ok(result);
+}`,
+crash: `<span class="c">// GreenfieldPullPaymentController.cs</span>
+[<span class="p">AllowAnonymous</span>]
+<span class="k">public async</span> Task&lt;ActionResult&gt; <span class="p">CreateBoltCard</span>(
+    <span class="k">string</span> pullPaymentId, <span class="p">CreateBoltCardRequest</span> req) {
+
+<span class="hr">  SharpFuzz.Coverage.Hit(0x7e3a); <span class="c">// reached</span></span>
+  <span class="k">var</span> pp = <span class="k">await</span> _ppService
+      .GetPullPayment(pullPaymentId); <span class="c">// → null</span>
+
+<span class="hr">  SharpFuzz.Coverage.Hit(0x7e3b); <span class="c">// reached</span></span>
+  <span class="k">var</span> result = pp.Metadata <span class="c">// 💥 NullReferenceException!</span>
+      .CreateBoltcard(req.UID);
+  <span class="k">return</span> Ok(result);
+}`
+};
+
+// ─── Phases ────────────────────────────────────────
+const PHASES = [
+{
+  name: 'Loading OpenAPI Specification',
+  dur: 3400,
+  run() {
+    setSpec('swagger'); setGBadge('swagger.json');
+    setTStatus('Offline', '');
+    setStatus(['Loading swagger.json from instrumented API...', '—', '—'], ['🔵','⚪','⚪'], ['','','']);
+    setCode(codeHTML.instrument, 'src/Api/Controllers/AccountsController.cs');
+  }
+},{
+  name: 'Generating Grammar & Request Templates',
+  dur: 3400,
+  run() {
+    setSpec('grammar'); setGBadge('grammar.py');
+    setStatus(['compile-grammar.sh → RESTler → grammar.py', 'export-templates.py → templates.export.json', '142 request templates · 24 producers · 118 consumers'], ['🔷','🔷','🟢'], ['cyan','cyan','green']);
+    setCreq('python3 compile-grammar.sh swagger.json\n→ Enhance with source-aware SSE\n→ 142 templates generated');
+  }
+},{
+  name: 'Instrumenting Target Application',
+  dur: 4000,
+  run() {
+    setCode(codeHTML.instrument, 'src/Api/Controllers/AccountsController.cs');
+    setTStatus('Building...', 'warn');
+    setStatus(['fuzz-prep-multi.py → Docker build with SharpFuzz', 'Injecting Coverage.Hit() into 1,847 basic blocks', 'HttpExtensions.dll SHM middleware added to pipeline'], ['🔷','🔷','🔷'], ['cyan','cyan','cyan']);
+  }
+},{
+  name: 'Connecting Shared Memory Coverage',
+  dur: 3400,
+  run() {
+    setCode(codeHTML.running, 'src/Api/Controllers/GreenfieldPullPaymentController.cs');
+    setTStatus('Online', 'green');
+    document.getElementById('sdot').classList.add('on');
+    setStatus(['POST /shm/create → {"mode":"file-backed-mmap","size":262144}', 'SHM bitmap mounted: /coverage_shm/bitmap', 'Coverage feedback loop active — zero HTTP overhead'], ['🟢','🟢','🟢'], ['green','green','green']);
+    for(let i=0;i<4;i++) setTimeout(()=>fillBitmap(4), i*180);
+  }
+},{
+  name: 'Baseline Epoch — Seeding the Corpus',
+  dur: 4000,
+  run() {
+    setEpoch(0,100); startPkts('baseline');
+    setStatus(['Baseline: 142 templates sent unmutated', 'Building seed corpus and coverage baseline ceiling', 'Adaptive concurrency: 10 workers → scaling up'], ['🔷','🔷','🔷'], ['cyan','cyan','cyan']);
+    setCreq('GET /api/v1/stores HTTP/1.1\nHost: target:8080\nAuthorization: Bearer eyJhbGciOiJSUzI1...');
+  }
+},{
+  name: 'Deterministic Epoch — Systematic Field Mutations',
+  dur: 4000,
+  run() {
+    setEpoch(1,75); activateMuts(['bound','over']);
+    startPkts('determ');
+    setStatus(['Deterministic: one mutation per field per template', 'Boundary values: -1, 0, 2147483647, "", null, []', `Corpus: ${corpusCount} seeds · ${edgeCount} edges covered`], ['🟣','🟣','🟢'], ['purple','purple','green']);
+    setCreq('POST /api/v1/stores HTTP/1.1\nContent-Type: application/json\n\n{"name":"","websiteUrl":"-1","defaultCurrency":""}');
+  }
+},{
+  name: 'Havoc Epoch — Stacked Mutation Bursts',
+  dur: 4000,
+  run() {
+    setEpoch(2,55); activateMuts(['sqli','xss','ssrf','nosql']);
+    startPkts('havoc');
+    setStatus(['Havoc: 1-4 stacked mutations · depth escalating on stall', `Concurrency: ${Math.min(16,Math.floor(edgeCount/120)+6)} workers → adaptive`, 'Security dict active: sqli, nosqli, path traversal...'], ['🟠','🟠','🟢'], ['','','green']);
+    setCreq('POST /api/v1/pull-payments/{id}/boltcards HTTP/1.1\n\n{"$type":null,"UID":"\\u0027 OR 1=1--\\u003b"}');
+  }
+},{
+  name: 'New Coverage Edges Discovered',
+  dur: 3400,
+  run() {
+    setEpoch(2,82); activateMuts(['sqli','bound','path','cmdi']);
+    startPkts('havoc');
+    flashEdges(18);
+    setStatus([`+18 new edges in last burst! Total: ${edgeCount}`, `Corpus expanded: ${corpusCount} → ${corpusCount+8} seeds`, 'Source-aware priority boosting business logic routes'], ['🟢','🟢','🔷'], ['green','green','cyan']);
+  }
+},{
+  name: 'Stateful Sequence Fuzzing',
+  dur: 4000,
+  run() {
+    setEpoch(2,100); showSeq(3);
+    startPkts('seq');
+    setStatus(['Sequence engine: building producer→consumer chains', 'POST /stores → POST /stores/{id}/invoices → GET /invoices/{id}', 'Depth: 5 · Fanout: 8 · Prob: 0.45'], ['🟡','🟡','🔷'], ['','','cyan']);
+    setCreq('# Sequence step 2/3 (consumer)\nGET /api/v1/invoices/f3c2-a7d1-... HTTP/1.1\nAuthorization: Bearer eyJhbGciOiJSUzI1...');
+  }
+},{
+  name: 'Splicing Epoch — Cross-Seed Mutations',
+  dur: 3400,
+  run() {
+    setEpoch(3,50); activateMuts(['nosql','over','path','sqli','cmdi']);
+    startPkts('splice');
+    setStatus(['Splicing: cross-pollinating payloads from two corpus seeds', 'json_dotnet_deser + json_deep_nest combination active', 'High-signal endpoints weighted 8× by crash boost'], ['🟣','🟣','🟠'], ['purple','purple','']);
+    setCreq('POST /api/v1/pull-payments/{"$ne":null}/boltcards HTTP/1.1\n\n{"$type":{"n":{"n":{"v":"System.Config.Install.AssemblyInstaller,..."}}},"UID":"..."}');
+  }
+},{
+  name: 'Bug Discovered — 500 Internal Server Error 💥',
+  dur: 5200,
+  run() {
+    setEpoch(3,80); activateMuts(['nosql','over']);
+    startPkts('crash');
+    crashCount++; document.getElementById('sv2').textContent = crashCount;
+    setCode(codeHTML.crash, 'src/Api/Controllers/GreenfieldPullPaymentController.cs');
+    markCrashBitmap();
+    showSeq(4);
+    setStatus(['💥 CRASH: NullReferenceException in CreateBoltCard()', 'Signature: 7ecd321e718f5a26 · Triage: likely_vuln (7.38)', 'Repro 5/5 · Minimizing payload · Generating PoC...'], ['💥','💥','⚠️'], ['red','red','warn']);
+    setTimeout(showCrash, 1700);
+  }
+},{
+  name: 'Crash Report Saved — Campaign Continues',
+  dur: 4000,
+  run() {
+    hideCrash();
+    setEpoch(3,100); startPkts('baseline');
+    setCode(codeHTML.running, 'src/Api/Controllers/GreenfieldPullPaymentController.cs');
+    setStatus(['✅ PoC saved: crashes/pocs/poc-7ecd321e718f5a26.sh', '✅ Timeline: crashes/timelines/timeline-7ecd321e718f5a26.md', 'Skipping endpoint · continuing campaign breadth-first'], ['🟢','🟢','🔷'], ['green','green','cyan']);
+    setTimeout(()=>showSeq(0), 1000);
+  }
+}];
+
+// ─── Phase runner ──────────────────────────────────
+function runPhase(p) {
+  phase = p;
+  // dots
+  for (let i = 0; i < N_PHASES; i++) {
+    const d = document.getElementById(`d${i}`);
+    if (!d) continue;
+    d.className = 'pdot' + (i < p ? ' done' : i === p ? ' active' : '');
+  }
+  document.getElementById('pnum').textContent = p + 1;
+  document.getElementById('pname').textContent = PHASES[p].name;
+  PHASES[p].run();
+  phTimer = setTimeout(() => {
+    stopPkts();
+    const next = p + 1;
+    if (next < N_PHASES) runPhase(next);
+    else setTimeout(reset, 800);
+  }, PHASES[p].dur);
+}
+
+function reset() {
+  clearTimeout(phTimer); stopPkts(); hideCrash();
+  reqCount = edgeCount = crashCount = corpusCount = 0;
+  ['sv0','sv1','sv2','sv3'].forEach(id => document.getElementById(id).textContent = '0');
+  document.getElementById('bedges').textContent = '0';
+  document.getElementById('rrate').textContent = '0 req/s';
+  document.getElementById('cbadge').textContent = '0 inputs';
+  document.getElementById('clist').innerHTML = '';
+  bitmapArr.fill(0); drawBitmap();
+  for (let i = 0; i < 4; i++) setEpoch(i, 0);
+  document.querySelectorAll('.mt').forEach(t => t.classList.remove('on'));
+  showSeq(0);
+  document.getElementById('sdot').classList.remove('on');
+  setTStatus('Offline', '');
+  setTimeout(() => runPhase(0), 400);
+}
+
+// ─── Helpers ───────────────────────────────────────
+function setSpec(k) { document.getElementById('specCode').innerHTML = specHTML[k] || ''; }
+function setCode(h, fn) {
+  document.getElementById('tcode').innerHTML = h;
+  document.getElementById('cfname').textContent = fn;
+}
+function setGBadge(t) { document.getElementById('gbadge').textContent = t; }
+function setTStatus(t, c) {
+  const el = document.getElementById('tstatus');
+  el.textContent = t;
+  el.style.color = c === 'green' ? 'var(--green)' : c === 'warn' ? 'var(--gold)' : c === 'red' ? 'var(--red)' : 'var(--muted)';
+}
+function setCreq(t) {
+  document.getElementById('creq').textContent = t;
+}
+function setStatus(lines, icons, cls) {
+  const clsMap = { green:'green', cyan:'cyan', red:'red', warn:'warn', purple:'purple' };
+  [1,2,3].forEach(i => {
+    document.querySelector(`.sline:nth-child(${i}) .sline-icon`).textContent = icons[i-1];
+    const el = document.querySelector(`.sline:nth-child(${i}) .sline-text`);
+    el.textContent = lines[i-1];
+    el.className = 'sline-text ' + (clsMap[cls[i-1]] || '');
+  });
+}
+function setEpoch(idx, pct) {
+  for (let i = 0; i < 4; i++) {
+    const el = document.getElementById(`ep${i}`);
+    el.classList.toggle('active', i === idx);
+    el.querySelector('.epoch-fill').style.width = (i < idx ? 100 : i === idx ? pct : 0) + '%';
+  }
+}
+function activateMuts(names) {
+  document.querySelectorAll('.mt').forEach(t => t.classList.remove('on'));
+  names.forEach(n => { const t = document.getElementById(`mt-${n}`); if (t) t.classList.add('on'); });
+}
+function showSeq(n) {
+  [0,1,2,3].forEach(i => {
+    const el = document.getElementById(`sq${i}`);
+    if (el) el.classList.toggle('vis', i < n);
+  });
+}
+
+// ─── Flash new edges ───────────────────────────────
+function flashEdges(n) {
+  fillBitmap(n);
+  const fa = document.getElementById('flowArea');
+  const f = document.createElement('div');
+  f.className = 'edge-flash'; f.textContent = `+${n} new edges!`;
+  fa.appendChild(f); setTimeout(() => f.remove(), 1700);
+}
+
+// ─── Crash panel ───────────────────────────────────
+function showCrash() { document.getElementById('cov').classList.add('vis'); }
+function hideCrash() { document.getElementById('cov').classList.remove('vis'); }
+
+// ─── Corpus ────────────────────────────────────────
+const CORPUS_POOL = [
+  {m:'GET',  p:'/api/v1/stores',             e:'+12'},
+  {m:'POST', p:'/accounts/register',         e:'+34'},
+  {m:'GET',  p:'/ciphers',                   e:'+8'},
+  {m:'PUT',  p:'/api/v1/invoices/{id}',      e:'+21'},
+  {m:'POST', p:'/sends/access/0',            e:'+15'},
+  {m:'DELETE',p:'/api/v1/pull-payments/{id}',e:'+9'},
+  {m:'GET',  p:'/devices/knowndevice',       e:'+6'},
+  {m:'PATCH',p:'/api/v1/stores/{id}',        e:'+17'},
+  {m:'POST', p:'/stores/{id}/webhooks',      e:'+11'},
+  {m:'GET',  p:'/organization/sponsorship',  e:'+28'},
+];
+
+function addCorpus() {
+  const list = document.getElementById('clist');
+  while (list.children.length >= 7) list.removeChild(list.firstChild);
+  const e = CORPUS_POOL[corpusCount % CORPUS_POOL.length]; corpusCount++;
+  const d = document.createElement('div'); d.className = 'centry';
+  d.innerHTML = `<span class="mbadge m-${e.m.toLowerCase()}">${e.m}</span><span class="epath">${e.p}</span><span class="eedge">${e.e}</span>`;
+  list.appendChild(d);
+  document.getElementById('cbadge').textContent = `${corpusCount} inputs`;
+  document.getElementById('sv3').textContent = corpusCount;
+}
+
+// ─── Packets ───────────────────────────────────────
+const PKT_DEFS = {
+  baseline:[
+    {m:'GET',  p:'/api/v1/stores',        c:'get'},
+    {m:'GET',  p:'/api/catalog-items',    c:'get'},
+    {m:'POST', p:'/accounts/register',    c:'post'},
+    {m:'GET',  p:'/ciphers',              c:'get'},
+    {m:'GET',  p:'/devices/knowndevice',  c:'get'},
+  ],
+  determ:[
+    {m:'GET',  p:'/api/catalog-items?pageSize=-1', c:'get'},
+    {m:'POST', p:'/api/v1/stores',                  c:'post'},
+    {m:'PUT',  p:'/ciphers/{uuid}',                 c:'put'},
+    {m:'DELETE',p:'/folders/{uuid}',                c:'delete'},
+  ],
+  havoc:[
+    {m:'POST', p:'/accounts/delete-recover-token',      c:'post'},
+    {m:'POST', p:'/sends/access/0',                     c:'post'},
+    {m:'PUT',  p:'/devices/id/fuzz-str/clear-token',   c:'put'},
+    {m:'POST', p:'/api/v1/pull-payments/Infinity/payouts', c:'post'},
+  ],
+  seq:[
+    {m:'POST', p:'/api/v1/stores → storeId',             c:'post'},
+    {m:'POST', p:'/stores/{id}/invoices → invoiceId',    c:'post'},
+    {m:'GET',  p:'/api/v1/invoices/{id}',                c:'get'},
+  ],
+  splice:[
+    {m:'POST', p:'/api/v1/pull-payments/{"$ne":null}/boltcards', c:'post'},
+    {m:'POST', p:'/api/v1/users',  c:'post'},
+    {m:'POST', p:'/api/v1/stores/;', c:'post'},
+  ],
+  crash:[
+    {m:'POST', p:'/api/v1/pull-payments/{id}/boltcards 💥', c:'crash'},
+  ]
+};
+
+const RPS_MAP = { baseline:120, determ:340, havoc:1840, seq:480, splice:1320, crash:60 };
+
+let pkts = []; let pktIdx = 0;
+
+function spawnPkt(def, yFrac) {
+  const fa = document.getElementById('flowArea');
+  const h = fa.clientHeight;
+  const el = document.createElement('div');
+  el.className = `pkt pkt-${def.c}`;
+  const lbl = `${def.m} ${def.p}`;
+  el.textContent = lbl.length > 38 ? lbl.slice(0,35)+'…' : lbl;
+
+  const dur = def.c === 'crash' ? 1.8 : (1.3 + Math.random() * .9);
+  const top = 12 + yFrac * (h - 34);
+  el.style.cssText = `top:${top}px; left:4%;`;
+
+  fa.appendChild(el);
+  pkts.push(el);
+
+  // animate via JS for crash vs normal
+  const start = performance.now();
+  const isCrash = def.c === 'crash';
+  const endLeft = isCrash ? 55 : 91; // percent
+
+  function tick(now) {
+    const t = Math.min(1, (now - start) / (dur * 1000));
+    const ease = t < .5 ? 2*t*t : -1+(4-2*t)*t;
+    if (isCrash && t > .55) {
+      el.style.transform = `scale(${1 + (t-.55)*2})`;
+      el.style.opacity = Math.max(0, 1-(t-.55)*4);
+    } else {
+      el.style.left = (4 + ease * (endLeft - 4)) + '%';
+      el.style.opacity = t < .1 ? t*10 : t > .85 ? Math.max(0,(1-t)*6.7) : 1;
+    }
+    if (t < 1) requestAnimationFrame(tick);
+    else { el.remove(); pkts = pkts.filter(p=>p!==el); }
+  }
+  requestAnimationFrame(tick);
+
+  // side effects
+  setTimeout(() => {
+    if (def.c !== 'crash') {
+      if (Math.random() < .28) addCorpus();
+      if (Math.random() < .4) fillBitmap(Math.ceil(Math.random()*3));
+    }
+  }, dur * 700);
+}
+
+function startPkts(mode) {
+  stopPkts();
+  const defs = PKT_DEFS[mode] || PKT_DEFS.baseline;
+  const rps = RPS_MAP[mode] || 120;
+  document.getElementById('rrate').textContent = `${rps.toLocaleString()} req/s`;
+  const interval = mode === 'crash' ? 900 : mode === 'havoc' || mode === 'splice' ? 220 : 450;
+
+  clearInterval(rateTimer);
+  rateTimer = setInterval(() => {
+    reqCount += Math.round(rps / 5);
+    document.getElementById('sv0').textContent = reqCount.toLocaleString();
+  }, 200);
+
+  pktTimer = setInterval(() => {
+    spawnPkt(defs[pktIdx++ % defs.length], Math.random());
+  }, interval);
+}
+
+function stopPkts() {
+  clearInterval(pktTimer); clearInterval(rateTimer);
+  pkts.forEach(p => p.remove()); pkts = [];
+}
+
+// ─── Boot ──────────────────────────────────────────
+function boot() {
+  // Phase dots
+  const pd = document.getElementById('pdots');
+  for (let i = 0; i < N_PHASES; i++) {
+    const d = document.createElement('div');
+    d.className = 'pdot'; d.id = `d${i}`;
+    pd.appendChild(d);
+  }
+
+  initBitmap();
+  setSpec('swagger');
+  setCode(codeHTML.instrument, 'src/Api/Controllers/AccountsController.cs');
+  runPhase(0);
+}
+
+window.addEventListener('load', boot);
+</script>
+</body>
+</html>

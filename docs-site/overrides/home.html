@@ -1,0 +1,292 @@
+{#- Custom landing page for the UpsideFuzz docs site (used by the generated index.md, see docs-site/hooks.py). -#}
+{% extends "main.html" %}
+
+{% block tabs %}
+{{ super() }}
+<div class="uf-home">
+
+  <!-- ───────────────────────────── HERO ───────────────────────────── -->
+  <section class="uf-hero">
+    <div class="uf-hero__bg" aria-hidden="true"></div>
+    <div class="md-grid uf-hero__grid">
+      <div class="uf-hero__copy">
+        <a class="uf-pill" href="{{ 'research/whitepaper/' | url }}">
+          <span class="uf-pill__dot"></span> Open source · Apache-2.0 · read the whitepaper →
+        </a>
+        <h1 class="uf-hero__title">
+          Fuzz your .NET API<br>
+          <span class="uf-grad">from the inside.</span>
+        </h1>
+        <p class="uf-hero__lead">
+          UpsideFuzz rewrites your compiled assemblies so every request reports the code it reached,
+          builds a typed grammar from your OpenAPI spec and C# validation rules, and drives a
+          Go engine that hunts for <strong>broken access control, mass assignment and injection</strong>
+          — not just HTTP&nbsp;500s.
+        </p>
+        <div class="uf-hero__cta">
+          <a class="uf-btn uf-btn--primary" href="{{ 'getting-started/quickstart/' | url }}">Get started</a>
+          <a class="uf-btn" href="{{ 'getting-started/how-it-works/' | url }}">How it works</a>
+          <a class="uf-btn uf-btn--ghost" href="{{ config.repo_url }}" rel="noopener">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            GitHub
+          </a>
+        </div>
+        <ul class="uf-hero__chips" aria-label="Technologies">
+          <li><span style="--c:#a78bfa"></span>SharpFuzz · Mono.Cecil IL</li>
+          <li><span style="--c:#38bdf8"></span>Go engine “void”</li>
+          <li><span style="--c:#fbbf24"></span>Roslyn + OpenAPI grammar</li>
+          <li><span style="--c:#4ade80"></span>SARIF 2.1.0</li>
+        </ul>
+      </div>
+
+      <div class="uf-term" role="img" aria-label="Example: running the whole UpsideFuzz pipeline with one command">
+        <div class="uf-term__bar">
+          <i></i><i></i><i></i>
+          <span>zsh — upside-fuzzer</span>
+        </div>
+        <pre class="uf-term__body"><code><span class="c"># one command, only Docker required</span>
+<span class="p">$</span> ./upsidefuzz run \
+    --src ./TeamFlow --main TeamFlow.Api \
+    --out ./teamflow-fuzz \
+    --target http://localhost:5299 \
+    --swagger http://localhost:5299/swagger/v1/swagger.json
+
+<span class="k">[1/5]</span> instrument   <span class="ok">✓</span> zero-edit startup hook
+<span class="k">[2/5]</span> build + up   <span class="ok">✓</span>
+<span class="k">[3/5]</span> verify       <span class="ok">✓</span> bitmap moving, edges &gt; 0
+<span class="k">[4/5]</span> grammar      <span class="ok">✓</span> templates + dict (Roslyn)
+<span class="k">[5/5]</span> fuzz         <span class="run">▶</span> void -profile security
+</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── PIPELINE ───────────────────────────── -->
+  <section class="md-grid uf-section">
+    <header class="uf-section__head">
+      <p class="uf-eyebrow">The pipeline</p>
+      <h2>Three programs, one feedback loop</h2>
+      <p>Loosely coupled and joined by files, HTTP and shared memory — each stage can be run, replaced or debugged on its own.</p>
+    </header>
+
+    <div class="uf-flow">
+      <article class="uf-stage" style="--c:#a78bfa">
+        <div class="uf-stage__num">01</div>
+        <h3>Instrument</h3>
+        <p class="uf-stage__tool">fuzz-prep-multi.py · Cecil instrumentor</p>
+        <p>SharpFuzz rewrites every basic block of your published DLLs. A <code>DOTNET_STARTUP_HOOKS</code> assembly links coverage at load time — <strong>no edits</strong> to <code>Program.cs</code>, <code>Startup.cs</code> or <code>.csproj</code>.</p>
+        <ul>
+          <li>AFL-style hit-count buckets, auto-sized bitmap</li>
+          <li>CmpLog: magic values from the target’s own comparisons</li>
+          <li>Constant dictionary harvested from IL</li>
+        </ul>
+        <a href="{{ 'architecture/overview/' | url }}">Pipeline internals →</a>
+      </article>
+
+      <div class="uf-flow__arrow" aria-hidden="true"><span>SHM bitmap</span></div>
+
+      <article class="uf-stage" style="--c:#fbbf24">
+        <div class="uf-stage__num">02</div>
+        <h3>Compile grammar</h3>
+        <p class="uf-stage__tool">grammarc · Roslyn analyzer</p>
+        <p>A first-party OpenAPI 2/3 compiler (no RESTler) produces typed request templates. The optional Roslyn pass reads the <em>real</em> <code>[Range]</code>, <code>[StringLength]</code>, enum and FluentValidation rules per type and property.</p>
+        <ul>
+          <li>Producer → consumer id inference</li>
+          <li>Boundary values: min−1, min, max, max+1</li>
+          <li><code>dict.custom.json</code> for your own values</li>
+        </ul>
+        <a href="{{ 'reference/grammarc/' | url }}">Grammar compiler →</a>
+      </article>
+
+      <div class="uf-flow__arrow" aria-hidden="true"><span>templates.export.json</span></div>
+
+      <article class="uf-stage" style="--c:#38bdf8">
+        <div class="uf-stage__num">03</div>
+        <h3>Fuzz with void</h3>
+        <p class="uf-stage__tool">Go engine · src/void</p>
+        <p>Energy-scheduled seeds, MOpt-weighted mutation, stateful request chains over a typed resource-lifecycle graph, and security oracles replaying every success under other identities.</p>
+        <ul>
+          <li>Fail-closed warm-up coverage probe</li>
+          <li>Triage tiers, root-cause clustering, repro + PoC</li>
+          <li>SARIF with run manifest and chain trace</li>
+        </ul>
+        <a href="{{ 'architecture/engine/' | url }}">Engine internals →</a>
+      </article>
+    </div>
+
+    <div class="uf-loop">
+      <span class="uf-loop__icon" aria-hidden="true">↻</span>
+      <p>Every response carries an <code>X-Coverage-Delta</code>. Requests that open new code earn energy and get mutated further; endpoints that stop teaching the fuzzer anything lose budget.
+      <a href="{{ 'assets/pipeline-animation/' | url }}">Watch the pipeline animation →</a></p>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── ORACLES ───────────────────────────── -->
+  <section class="uf-band">
+    <div class="md-grid uf-section">
+      <header class="uf-section__head">
+        <p class="uf-eyebrow">Oracles</p>
+        <h2>The worst API bugs return <span class="uf-code200">200 OK</span></h2>
+        <p>A crash says the code is fragile. It says nothing about whether another tenant can read your invoices. The oracles below run alongside ordinary fuzzing and look for bugs that crash-only fuzzers structurally cannot see.</p>
+      </header>
+
+      <div class="uf-oracles">
+        <div class="uf-oracle uf-oracle--hi"><em>Access control</em><h4>BOLA / IDOR</h4><p>Successful requests replayed under every other identity; identical or foreign data coming back is flagged.</p><code>bola_identical_cross_identity_response</code></div>
+        <div class="uf-oracle uf-oracle--hi"><em>Access control</em><h4>Broken authentication</h4><p>No-credential replay, only on endpoints already proven to enforce auth — no public-endpoint noise.</p><code>auth_bypass_unauthenticated_access</code></div>
+        <div class="uf-oracle uf-oracle--hi"><em>Access control</em><h4>Differential auth bypass</h4><p>Verb swap, content-type confusion, route-case and param-location tricks.</p><code>differential_auth_bypass:&lt;technique&gt;</code></div>
+        <div class="uf-oracle uf-oracle--hi"><em>Access control</em><h4>Mass assignment</h4><p>Privileged fields (<code>role</code>, <code>isAdmin</code>) over-posted on real, confirmed resources.</p><code>mass_assignment_privileged_field_accepted</code></div>
+        <div class="uf-oracle"><em>Stateful</em><h4>Stale / deleted object</h4><p>Reads or writes that succeed against a resource this run saw deleted.</p><code>stale_object</code></div>
+        <div class="uf-oracle"><em>Stateful</em><h4>Ignored ETag</h4><p>Writes accepted despite a deliberately wrong <code>If-Match</code>.</p><code>stale_etag_accepted</code></div>
+        <div class="uf-oracle"><em>Stateful</em><h4>Workflow bypass</h4><p>An action succeeds while the resource skipped its declared predecessor state.</p><code>workflow_bypass</code></div>
+        <div class="uf-oracle"><em>Stateful</em><h4>Idempotency &amp; races</h4><p>Verbatim replays and concurrent bursts that double-create, double-pay or over-redeem.</p><code>idempotency_not_enforced</code></div>
+        <div class="uf-oracle"><em>Injection</em><h4>SQLi · SSTI · XSS</h4><p>Positive signals: time-based delays, evaluated <code>{{ '{{' }}1337*1337{{ '}}' }}</code>, unescaped reflection.</p><code>sqli_time_based · ssti_evaluated</code></div>
+        <div class="uf-oracle"><em>Injection</em><h4>SSRF · path traversal</h4><p>Metadata-service content or well-known system files showing up in a response.</p><code>ssrf_metadata_reflected · file_read_success</code></div>
+        <div class="uf-oracle"><em>Injection</em><h4>Unsafe deserialization</h4><p><code>$type</code>-driven Newtonsoft gadget payloads, triaged as crashes — not overclaimed as RCE.</p><code>dotnet_deser</code></div>
+        <div class="uf-oracle"><em>Contract</em><h4>Response-schema drift</h4><p>Undeclared fields (flagged higher when they look like secrets) and type mismatches.</p><code>schema_undeclared_sensitive_field</code></div>
+      </div>
+
+      <p class="uf-more"><a href="{{ 'project/readme/' | url }}#vulnerability-classes-detected">Full catalog with finding tags →</a> &nbsp;·&nbsp; <a href="{{ 'guides/security-scenarios/' | url }}">security_scenarios.yaml →</a></p>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── ENGINE ───────────────────────────── -->
+  <section class="md-grid uf-section uf-split">
+    <div>
+      <p class="uf-eyebrow">Scheduling</p>
+      <h2>Five epochs, rebalanced while it runs</h2>
+      <p>The time budget is split into epochs. An epoch that stops finding new edges loses part of its budget to Havoc; seeds that reach new code earn energy, with a bonus for the first new edge after a long drought.</p>
+      <div class="uf-epochs" role="img" aria-label="Epoch budget: Baseline 5%, Harvest 25%, Deterministic 25%, Havoc 35%, Splicing 10%">
+        <div style="--w:5;--c:#64748b"><span>Baseline</span></div>
+        <div style="--w:25;--c:#a78bfa"><span>Harvest</span></div>
+        <div style="--w:25;--c:#fbbf24"><span>Deterministic</span></div>
+        <div style="--w:35;--c:#38bdf8"><span>Havoc</span></div>
+        <div style="--w:10;--c:#4ade80"><span>Splice</span></div>
+      </div>
+      <dl class="uf-epoch-legend">
+        <div><dt>Baseline · 5%</dt><dd>every template once, unmutated</dd></div>
+        <div><dt>Harvest · 25%</dt><dd>write-weighted, collects real ids</dd></div>
+        <div><dt>Deterministic · 25%</dt><dd>one mutation per field</dd></div>
+        <div><dt>Havoc · 35%</dt><dd>1–4 stacked mutations, deeper on stall</dd></div>
+        <div><dt>Splicing · 10%</dt><dd>havoc-based splice mode</dd></div>
+      </dl>
+    </div>
+    <div>
+      <p class="uf-eyebrow">Stateful</p>
+      <h2>Workflows, not single requests</h2>
+      <p>A <code>POST</code> that creates an invoice feeds its real id into <code>GET</code>/<code>PUT</code>/<code>DELETE</code> follow-ups. A typed resource graph tracks each object’s lifecycle, and a never-seen workflow shape earns extra budget.</p>
+      <ol class="uf-chain">
+        <li><span class="m m--post">POST</span>/api/projects/{id}/tasks <em>201 · id=412</em></li>
+        <li><span class="m m--post">POST</span>/api/tasks/412/submit-for-review <em>200 · in_review</em></li>
+        <li><span class="m m--del">DELETE</span>/api/tasks/412 <em>204 · deleted</em></li>
+        <li class="bad"><span class="m m--put">PUT</span>/api/tasks/412 <em>200 · <b>stale_object</b></em></li>
+      </ol>
+      <p class="uf-note">Illustrative chain. Crashes reached through chains are minimized as whole chains and exported with producer → consumer bindings.</p>
+      <a class="uf-link" href="{{ 'architecture/stateful-fuzzing/' | url }}">Stateful fuzzing architecture →</a>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── QUICKSTART ───────────────────────────── -->
+  <section class="uf-band">
+    <div class="md-grid uf-section">
+      <header class="uf-section__head">
+        <p class="uf-eyebrow">Quickstart</p>
+        <h2>From source to findings</h2>
+        <p>Pick the path that fits. The demo app is the fastest way to watch every oracle fire.</p>
+      </header>
+      <div class="uf-qs">
+        <input type="radio" name="uf-qs" id="uf-qs-1" checked>
+        <input type="radio" name="uf-qs" id="uf-qs-2">
+        <input type="radio" name="uf-qs" id="uf-qs-3">
+        <div class="uf-qs__tabs" role="tablist">
+          <label for="uf-qs-1">Demo app</label>
+          <label for="uf-qs-2">One command</label>
+          <label for="uf-qs-3">Step by step</label>
+        </div>
+        <div class="uf-qs__panel" id="uf-qs-p1">
+<pre><code><span class="c"># TeamFlow: 57 endpoints, 42 planted bugs, Swagger UI on :5299</span>
+git clone {{ config.repo_url }}.git
+cd upside-fuzzer/fixtures/demo-app
+dotnet run --project src/TeamFlow.Api
+<span class="c"># then follow the demo README: instrument → fuzz</span></code></pre>
+          <a class="uf-link" href="{{ 'demo/teamflow/' | url }}">TeamFlow walkthrough →</a>
+        </div>
+        <div class="uf-qs__panel" id="uf-qs-p2">
+<pre><code><span class="c"># needs only Docker</span>
+./upsidefuzz doctor
+./upsidefuzz run \
+  --src ~/my-target/src --out ./my-target-fuzz --main MyProject.Api \
+  --target http://localhost:8080 \
+  --swagger http://localhost:8080/swagger/v1/swagger.json \
+  --time-budget 15</code></pre>
+          <a class="uf-link" href="{{ 'getting-started/cli/' | url }}">upsidefuzz CLI →</a>
+        </div>
+        <div class="uf-qs__panel" id="uf-qs-p3">
+<pre><code><span class="c"># 1 · instrument (zero-edit) and start</span>
+python3 bin/fuzz-prep-multi.py --src ./my-project --out ./my-project-fuzz --main MyProject.Api
+(cd my-project-fuzz &amp;&amp; docker compose build &amp;&amp; docker compose up -d)
+<span class="c"># 2 · verify coverage is live</span>
+curl -s http://localhost:8080/shm/health
+<span class="c"># 3 · compile the grammar</span>
+./bin/compile-grammar.sh swagger.json --src ./my-project
+<span class="c"># 4 · fuzz</span>
+docker compose --profile fuzz-go run --rm void \
+  -grammar grammars/my-project -auth-file ./auth.identities.json \
+  -direct-shm -profile security -time-budget 60</code></pre>
+          <a class="uf-link" href="{{ 'getting-started/quickstart/' | url }}">Full runbook →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── TARGETS ───────────────────────────── -->
+  <section class="md-grid uf-section">
+    <header class="uf-section__head">
+      <p class="uf-eyebrow">Real targets</p>
+      <h2>Run against real .NET applications</h2>
+      <p>Step-by-step guides for running these open-source projects in your own test environment, including every gotcha found along the way.</p>
+    </header>
+    <div class="uf-targets">
+      <a href="{{ 'demo/teamflow/' | url }}"><b>TeamFlow</b><span>In-repo demo · JWT · 5 identities</span></a>
+      <a href="{{ 'guides/target-specific/bitwarden-quickstart/' | url }}"><b>Bitwarden</b><span>Multi-service · JWT identity service · multi-identity</span></a>
+      <a href="{{ 'guides/target-specific/jellyfin-quickstart/' | url }}"><b>Jellyfin</b><span>Large media API · <code>MediaBrowser</code> auth</span></a>
+      <a href="{{ 'guides/target-specific/btcpayserver-quickstart/' | url }}"><b>BTCPayServer</b><span>Greenfield API · API-key auth</span></a>
+      <a href="{{ 'guides/target-specific/simplcommerce-quickstart/' | url }}"><b>SimplCommerce</b><span>Modular monolith · cookie + anti-forgery</span></a>
+      <a href="{{ 'guides/target-specific/eshop-quickstart/' | url }}"><b>eShopOnWeb</b><span>Smallest target · fastest end-to-end check</span></a>
+    </div>
+    <p class="uf-disclaimer">Product names are trademarks of their respective owners. UpsideFuzz is not affiliated with or endorsed by any of these projects; the guides only cover building and fuzzing their public source code locally. Findings against third-party software should be reported privately to the vendor, not published.</p>
+  </section>
+
+  <!-- ───────────────────────────── DOCS MAP ───────────────────────────── -->
+  <section class="uf-band">
+    <div class="md-grid uf-section">
+      <header class="uf-section__head">
+        <p class="uf-eyebrow">Documentation</p>
+        <h2>Where to go next</h2>
+      </header>
+      <div class="uf-docs">
+        <a href="{{ 'getting-started/how-it-works/' | url }}"><i>01</i><b>How it works</b><span>The problem, the idea, and why grey-box + oracles beat black-box fuzzing.</span></a>
+        <a href="{{ 'getting-started/quickstart/' | url }}"><i>02</i><b>Quickstart runbook</b><span>Instrument → build → verify → grammar → fuzz → analyze → troubleshoot.</span></a>
+        <a href="{{ 'guides/authentication/' | url }}"><i>03</i><b>Authentication</b><span>Identity files, multi-identity scheduling — required for BOLA findings.</span></a>
+        <a href="{{ 'reference/void-cli/' | url }}"><i>04</i><b>void CLI reference</b><span>Every flag, profiles, startup output, crash JSONL format.</span></a>
+        <a href="{{ 'architecture/overview/' | url }}"><i>05</i><b>Architecture</b><span>Instrumentation, SHM protocol, grammar compilation, engine, stateful model.</span></a>
+        <a href="{{ 'research/whitepaper/' | url }}"><i>06</i><b>Whitepaper</b><span>Fuzzing from zero to the full design — what’s novel, what’s prior art, what still doesn’t work.</span></a>
+        <a href="{{ 'guides/campaigns/' | url }}"><i>07</i><b>Campaigns</b><span>Declare target, identities, policy and scenarios once in <code>campaign.yaml</code>.</span></a>
+        <a href="{{ 'development/contributing/' | url }}"><i>08</i><b>Contributing</b><span>Setup, <code>make test</code> / <code>make lint</code> / <code>make e2e</code>, PR conventions.</span></a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────────── FOOTER CTA ───────────────────────────── -->
+  <section class="md-grid uf-cta">
+    <h2>Point it at an API you own.</h2>
+    <p>UpsideFuzz sends hundreds of thousands of hostile requests. Run it only against systems you are authorized to test — ideally a disposable copy.</p>
+    <div class="uf-hero__cta">
+      <a class="uf-btn uf-btn--primary" href="{{ 'getting-started/installation/' | url }}">Install prerequisites</a>
+      <a class="uf-btn" href="{{ config.repo_url }}" rel="noopener">Star on GitHub</a>
+    </div>
+  </section>
+
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}

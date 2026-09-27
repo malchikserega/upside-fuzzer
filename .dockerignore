@@ -1,0 +1,89 @@
+# .dockerignore for Dockerfile.cli (the upsidefuzz CLI image) and void/Dockerfile.go.
+# Docker does NOT respect .gitignore, so this mirrors it explicitly -- without this,
+# `docker build` would try to send several GB of local target checkouts and fuzzer
+# output (bitwarden_src/, crashes/, grammars/, etc.) as build context on every build.
+
+.git/
+.github/
+
+# ── Vendored / instrumented target repositories (large, per-run local state) ──
+*_prep/
+*_prep*/
+prepared-*/
+*-prepared/
+loyalty-prep/
+eshprep/
+bitwarden_prep*/
+bitwarden_src/
+btcpayserver/
+btcpayserver_prep/
+simplcommerce/
+simplcommerce_prep/
+nopCommerce/
+esh/
+examples/
+
+# ── Fuzzer run output / generated grammars ─────────────────────────────────────
+crashes/
+summaries/
+grammars/
+void/crashes/
+void/summaries/
+void/logs/
+void/fuzzer/
+restler_output/
+restler_input/
+restler_runs/
+restler_bin/
+
+# ── Secrets ─────────────────────────────────────────────────────────────────────
+*.env
+fuzzer.env
+*.secret
+*_cookies.txt
+auth-identities.json
+auth_file.json
+
+# ── .NET build artifacts ────────────────────────────────────────────────────────
+bin/
+obj/
+.vs/
+*.dll
+*.pdb
+*.exe
+*.user
+*.suo
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+*.egg-info/
+
+# ── Go binaries (source only -- image builds void itself) ─────────────────────
+src/void/cmd/void/smartfuzzergo*
+src/void/cmd/void/void*
+
+# ── OS / IDE ──────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Misc large/irrelevant to the CLI image ─────────────────────────────────────
+*.tar
+*.zip
+*.tmp
+*.log
+nohup.out
+swagger*.json
+*-dictionary.json
+arxiv_paper/
+
+# Docker
+.dockerignore

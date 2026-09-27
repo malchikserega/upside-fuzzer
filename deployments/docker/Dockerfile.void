@@ -1,0 +1,24 @@
+# Builds the void fuzzer binary. Build context is the REPO ROOT (not this
+# directory) since the self-contained Go module (src/void/go.mod) needs to be
+# reached from here: `docker build -t void-fuzzer -f deployments/docker/Dockerfile.void .`
+FROM golang:1.22-alpine AS builder
+WORKDIR /src
+
+# Copy dependency files first for better layer caching.
+# Docker will reuse this layer as long as go.mod/go.sum don't change.
+COPY src/void/go.mod src/void/go.sum ./
+RUN go mod download
+
+# Now copy the full source and build.
+COPY src/void/cmd/ ./cmd/
+COPY src/void/internal/ ./internal/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -ldflags="-s -w" -o /out/void ./cmd/void
+
+FROM alpine:3.19
+RUN apk add --no-cache python3
+WORKDIR /fuzzer
+COPY tools/grammar/export-templates.py .
+COPY --from=builder /out/void /usr/local/bin/void
+ENTRYPOINT ["/usr/local/bin/void"]

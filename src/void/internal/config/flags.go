@@ -1,0 +1,335 @@
+package config
+
+import (
+	"flag"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// A handful of tiny, pure helpers duplicated (not shared) from
+// internal/engine's utils.go: internal/engine imports internal/config for
+// the Config type, so internal/config importing back from internal/engine
+// for these would create an import cycle. Each is a few lines of stateless
+// math/path logic -- cheaper and safer to keep two small copies than to
+// invent a shared low-level package for five one-line functions.
+
+const (
+	minSHMBitmapSize     = 65536
+	defaultSHMBitmapSize = 262144
+)
+
+func absPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	a, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return a
+}
+
+func deriveReportPathFromSummary(summaryPath string) string {
+	sumAbs := absPath(summaryPath)
+	if strings.TrimSpace(sumAbs) == "" {
+		return absPath(filepath.Join("./summaries", "report.json"))
+	}
+
+	dir := filepath.Dir(sumAbs)
+	base := filepath.Base(sumAbs)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	if ext == "" {
+		ext = ".json"
+	}
+
+	var reportName string
+	switch {
+	case strings.EqualFold(stem, "summary"):
+		reportName = "report" + ext
+	case strings.HasPrefix(stem, "summary-"):
+		reportName = "report-" + strings.TrimPrefix(stem, "summary-") + ext
+	default:
+		reportName = stem + "-report" + ext
+	}
+	return filepath.Join(dir, reportName)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ParseFlags registers every void CLI flag, parses argv, applies the
+// -profile bundle (ApplyProfile) to whatever the user didn't explicitly set,
+// and normalizes/clamps the result. Moved here verbatim from void/go/main.go's
+// unexported parseFlags -- exported since cmd/void/main.go now calls it from
+// a different package.
+func ParseFlags() Config {
+	nowTS := time.Now().Format("20060102-150405")
+	cfg := Config{}
+	flag.StringVar(&cfg.Profile, "profile", "", "Preset knob bundle: fast | deep | security. Individual flags you pass still override the profile.")
+	flag.StringVar(&cfg.GrammarDir, "grammar", ".", "Path to directory containing grammar.py and dict.json")
+	flag.StringVar(&cfg.SourceDir, "src", "", "Path to source tree for source-aware endpoint prioritization")
+	flag.Int64Var(&cfg.Seed, "seed", 0, "Seed math/rand's global source for reproducible mutation/scheduling draws (0 = unseeded/random, the default). Not bit-for-bit deterministic under concurrency, but removes the dominant source of run-to-run variance.")
+	flag.StringVar(&cfg.RunID, "run-id", "", "Opaque run identifier stamped into every -event-log row (benchmark harness use; purely a label, no behavior change)")
+	flag.StringVar(&cfg.TargetImageDigest, "target-image-digest", "", "Container image digest of the target under test, recorded in the report/SARIF run manifest for reproducibility. A pass-through label only -- void does not inspect the running container itself.")
+	flag.StringVar(&cfg.OpenAPISpecHash, "openapi-spec-hash", "", "Hash of the source OpenAPI/swagger document this run's grammar was generated from, recorded in the run manifest. A pass-through label only -- void hashes the exported templates JSON it actually consumes itself (see templates_sha256 in the manifest).")
+	flag.StringVar(&cfg.CampaignConfig, "campaign-config", "", "Path to the campaign.yaml that drove this run, if any, recorded in the run manifest. A pass-through label only -- void does not parse campaign.yaml itself (see campaign.py).")
+	flag.StringVar(&cfg.EventLog, "event-log", "", "Path to a per-request JSONL event log (epoch, mutation category, coverage delta, sequence/corpus ancestry, identity, valid/state-change flags). Off by default -- opt in for benchmark data collection (BENCHMARK_PLAN.md Top-15 #6); adds one JSON-encode+write per completed request when enabled.")
+	flag.StringVar(&cfg.DictPath, "dict", "", "Path to custom JSON dictionary")
+	flag.StringVar(&cfg.TemplatesJSON, "templates-json", "", "Path to exported templates JSON (default: <grammar>/templates.export.json)")
+	flag.BoolVar(&cfg.RefreshTemplates, "refresh-templates", false, "Re-export templates from grammar.py even if templates JSON exists")
+	flag.StringVar(&cfg.ExporterPath, "exporter", "./export-templates.py", "Path to export-templates.py")
+	flag.Float64Var(&cfg.TimeBudgetMinutes, "time-budget", 10, "Minutes")
+	flag.IntVar(&cfg.Concurrency, "concurrency", 10, "Parallel requests")
+	flag.IntVar(&cfg.MinConcurrency, "min-concurrency", 1, "Adaptive min concurrency")
+	flag.IntVar(&cfg.MaxConcurrency, "max-concurrency", 64, "Adaptive max concurrency")
+	flag.BoolVar(&cfg.AdaptiveConcurrency, "adaptive-concurrency", true, "Enable adaptive concurrency")
+	flag.BoolVar(&cfg.AdaptiveContentType, "adaptive-content-type", true, "Adapt request Content-Type per endpoint using response feedback")
+	flag.BoolVar(&cfg.AutoAntiForgery, "auto-antiforgery", true, "Auto-harvest and inject anti-forgery tokens for MVC form endpoints")
+	flag.StringVar(&cfg.AntiForgeryField, "antiforgery-field", "__RequestVerificationToken", "Anti-forgery form field name")
+	flag.StringVar(&cfg.AntiForgeryHeader, "antiforgery-header", "RequestVerificationToken", "Anti-forgery request header name")
+	flag.Float64Var(&cfg.AntiForgeryCooldown, "antiforgery-cooldown", 10.0, "Cooldown seconds between anti-forgery harvest attempts per endpoint")
+	flag.Float64Var(&cfg.AntiForgerySampleRate, "antiforgery-sample-rate", 0.10, "Sample rate for passive anti-forgery token harvest from HTML responses")
+	flag.IntVar(&cfg.AntiForgeryMaxTokens, "antiforgery-max-tokens", 2048, "Max anti-forgery tokens kept in runtime pool")
+	flag.Float64Var(&cfg.AntiForgeryTokenTTL, "antiforgery-token-ttl", 300.0, "Anti-forgery token TTL seconds in runtime pool")
+	flag.Float64Var(&cfg.RequestTimeoutSec, "request-timeout", 5.0, "Per-request timeout seconds")
+	flag.IntVar(&cfg.MaxResponseBytes, "max-response-bytes", 262144, "Max bytes to decode from successful responses")
+	flag.IntVar(&cfg.CoverageInterval, "coverage-interval", 1, "Read coverage once every N completed requests")
+	flag.IntVar(&cfg.CoverageBitmapSize, "coverage-bitmap-size", defaultSHMBitmapSize, "Desired SHM bitmap size in bytes for direct SHM mode")
+	flag.IntVar(&cfg.EndpointStallReqs, "endpoint-stall-reqs", 220, "Down-weight endpoint after this many requests without new edges")
+	flag.IntVar(&cfg.EndpointZeroEdgeReqs, "endpoint-zero-edge-reqs", 120, "Down-weight endpoint when total requests exceed threshold but no edges found")
+	flag.BoolVar(&cfg.DirectSHM, "direct-shm", false, "Read coverage bitmap directly from SHM file")
+	flag.StringVar(&cfg.SHMPath, "shm-path", "/coverage_shm/bitmap", "Path to mmap bitmap")
+	flag.StringVar(&cfg.SHMReadMode, "shm-read-mode", "file", "Direct SHM read mode: file|mmap|auto. 'file' re-reads and re-scans the ENTIRE bitmap via a fresh syscall on every GetEdges() call (~2x per request) -- safe everywhere but can dominate runtime cost at the bitmap sizes real instrumented targets produce. 'mmap' gives a persistent zero-copy view (only on Linux -- i.e. void running inside a Linux container, which is the normal -direct-shm deployment shape) and is dramatically cheaper per call; always prefer it explicitly when running void as a Linux container against a shared-memory volume. 'file' remains the default because it is the only mode guaranteed correct on every OS/filesystem this flag might be used from")
+	flag.BoolVar(&cfg.AllowDegradedCoverage, "allow-degraded-coverage", false, "Continue even if /shm/health reports degraded instrumentation (no app assembly linked). Default: refuse to start a blind run.")
+	flag.BoolVar(&cfg.SkipOnCrash, "skip-on-crash", false, "Remove only the crashing template after any 5xx")
+	flag.BoolVar(&cfg.SkipEndpointOn500, "skip-endpoint-on-500", false, "Stop fuzzing endpoint after first HTTP 500")
+	flag.BoolVar(&cfg.SequentialBaseline, "sequential-baseline", false, "Run baseline epoch sequentially")
+	flag.BoolVar(&cfg.SourceAwarePriority, "source-aware-priority", true, "Prioritize sensitive endpoints using source + route heuristics")
+	flag.BoolVar(&cfg.RaceMode, "race-mode", true, "Enable conflict/race burst scheduling for stateful write endpoints")
+	flag.IntVar(&cfg.RaceBurst, "race-burst", 4, "Number of concurrent conflicting requests to enqueue in race mode")
+	flag.Float64Var(&cfg.RaceProb, "race-prob", 0.10, "Probability to enqueue race burst after successful write")
+	flag.BoolVar(&cfg.ProbeRaceOutcome, "probe-race-outcome", true, "Evaluate whether more than one of a race burst's N concurrent identical requests succeeded (double-spend/concurrent-approve-etc.), not just rely on a crash under contention (requires -race-mode)")
+	flag.BoolVar(&cfg.CrashTriage, "crash-triage", true, "Classify crashes (noise vs likely vuln) with severity scoring")
+	flag.StringVar(&cfg.CrashSignatureMode, "crash-signature-mode", "balanced", "Crash dedup signature mode: coarse|balanced|strict")
+	flag.BoolVar(&cfg.CrashSigMutation, "crash-signature-mutation", false, "Include normalized mutation label in unique crash signature")
+	flag.BoolVar(&cfg.CrashSigQueryValues, "crash-signature-query-values", false, "Include query values (not only query keys) in crash signature")
+	flag.IntVar(&cfg.CrashReplayCount, "crash-replay-count", 4, "Follow-up replay requests per unique crash")
+	flag.IntVar(&cfg.CrashReplayQueueMax, "crash-replay-queue-max", 96, "Global max queued crash replay requests")
+	flag.IntVar(&cfg.CrashReplayPerEndpoint, "crash-replay-per-endpoint", 24, "Max replay requests per endpoint per run (0 = unlimited)")
+	flag.Float64Var(&cfg.CrashReplayProb, "crash-replay-prob", 0.35, "Probability of draining crash replay queue on each scheduling step")
+	flag.IntVar(&cfg.CrashBoostRequests, "crash-boost-requests", 80, "Temporary endpoint boost duration (requests) after a unique crash (0 = disable)")
+	flag.IntVar(&cfg.CrashBoostMaxPerEndpoint, "crash-boost-max-per-endpoint", 2, "Max number of boost activations per endpoint")
+	flag.Float64Var(&cfg.CrashBoostWeight, "crash-boost-weight", 8.0, "Template health weight while crash boost is active")
+	flag.Float64Var(&cfg.EndpointReqShareCapPct, "endpoint-req-share-cap-pct", 2.0, "Soft cap on per-endpoint request share in percent when no new edges")
+	flag.IntVar(&cfg.EndpointReqCapMinReqs, "endpoint-req-cap-min-reqs", 500, "Minimum requests before endpoint share cap applies")
+	flag.Float64Var(&cfg.EndpointNoEdgeCapWeight, "endpoint-no-edge-cap-weight", 0.01, "Weight used when endpoint exceeds share cap without new edges")
+	flag.IntVar(&cfg.EndpointCrashRateMinCrashes, "endpoint-crash-rate-min-crashes", 50, "Minimum 5xx count before crash-rate throttling applies")
+	flag.Float64Var(&cfg.EndpointCrashRateThreshold, "endpoint-crash-rate-threshold", 50.0, "Crash-rate threshold in percent for endpoint throttling")
+	flag.Float64Var(&cfg.EndpointCrashRateWeight, "endpoint-crash-rate-weight", 0.02, "Weight used for high crash-rate endpoints")
+	flag.IntVar(&cfg.ReproRuns, "repro-runs", 5, "Repro check attempts for each unique crash (0 to disable)")
+	flag.Float64Var(&cfg.ReproTargetPct, "repro-target", 80.0, "Target reproducibility percentage for confirmed crash")
+	flag.Float64Var(&cfg.ReproTimeoutSec, "repro-timeout", 5.0, "Timeout per repro probe request")
+	flag.BoolVar(&cfg.MinimizeCrash, "minimize-crash", true, "Run payload/path/query minimization on unique crashes")
+	flag.BoolVar(&cfg.MinimizeChain, "minimize-chain", true, "For a crash reached through a multi-step sequence chain, also try dropping non-essential earlier steps entirely (requires -minimize-crash)")
+	flag.IntVar(&cfg.MinimizeMaxProbes, "minimize-max-probes", 24, "Max probe requests for crash delta-reduction")
+	flag.StringVar(&cfg.PocDir, "poc-dir", filepath.Join("./crashes", "pocs"), "Directory for generated reproducible PoC scripts")
+	flag.StringVar(&cfg.TimelineDir, "timeline-dir", filepath.Join("./crashes", "timelines"), "Directory for generated Mermaid exploit timelines")
+	flag.BoolVar(&cfg.MultiIdentity, "multi-identity", true, "Enable multi-identity scheduling from -auth-file/AUTH_FILE/AUTH_IDENTITIES_JSON")
+	flag.StringVar(&cfg.AuthFile, "auth-file", "", "Path to auth identities JSON file (JWT/API-key/cookie headers)")
+	flag.StringVar(&cfg.IdentitySampleMode, "identity-mode", "weighted", "Identity scheduling: weighted|round-robin|random")
+	flag.BoolVar(&cfg.IdentityIncludeGuest, "identity-include-guest", true, "Include an anonymous guest identity during multi-identity fuzzing")
+	flag.BoolVar(&cfg.NoUI, "no-ui", false, "Disable live UI")
+	flag.BoolVar(&cfg.WebUI, "web-ui", false, "Enable the web UI dashboard server")
+	flag.IntVar(&cfg.WebUIPort, "web-ui-port", 13377, "Port for the web UI dashboard")
+	flag.BoolVar(&cfg.ForceUI, "force-ui", false, "Force dashboard UI even when stdout is not a terminal")
+	flag.BoolVar(&cfg.PlainUI, "plain-ui", false, "Use plain line-by-line UI instead of dashboard")
+	flag.BoolVar(&cfg.UINoClear, "ui-no-clear", false, "Do not clear screen between dashboard refreshes")
+	flag.BoolVar(&cfg.ASCIIUI, "ascii-ui", false, "Use ASCII borders/progress in dashboard")
+	flag.IntVar(&cfg.UIWidth, "ui-width", 0, "Fixed dashboard width (80..200)")
+	flag.Float64Var(&cfg.UIIntervalSec, "ui-interval", 1.0, "UI refresh interval seconds")
+	flag.StringVar(&cfg.UIEndpointSort, "ui-endpoint-sort", "hot", "Live endpoint sort: hot|recent|req|edges|alpha")
+	flag.BoolVar(&cfg.UIEndpointRotate, "ui-endpoint-rotate", true, "Rotate endpoint pages in live dashboard")
+	flag.Float64Var(&cfg.UIEndpointRotateSec, "ui-endpoint-rotate-sec", 1.0, "Seconds between endpoint page rotation")
+	flag.Float64Var(&cfg.SequenceProb, "sequence-prob", 0.30, "Probability of draining sequence queue")
+	flag.IntVar(&cfg.SequenceMaxDepth, "sequence-max-depth", 3, "Maximum sequence chain depth")
+	flag.IntVar(&cfg.SequenceFanout, "sequence-fanout", 6, "Maximum follow-up requests per successful step")
+	flag.BoolVar(&cfg.PaginationChaining, "pagination-chaining", true, "Continue a paginated list response (recognized cursor/next-page field, or Link rel=\"next\") with a follow-up to the same endpoint's next page")
+	flag.BoolVar(&cfg.ResourceGraphEnabled, "resource-graph", true, "Typed resource-lifecycle tracking + generalized (HAL/JSON:API/header/shape) extraction + coverage-directed sequence consumer scheduling (see docs/resource-state-graph-plan.md). false reproduces the exact prior name-based extraction and static verb-affinity fanout ordering")
+	flag.IntVar(&cfg.ResourceGraphMaxPerType, "resource-graph-max-per-type", 500, "Maximum tracked resource instances per resource type (oldest/lowest-confidence evicted first)")
+	flag.IntVar(&cfg.ResourceGraphMaxAliases, "resource-graph-max-aliases", 16, "Maximum alternative identities tracked per resource instance")
+	flag.IntVar(&cfg.ResourceGraphMaxTransitions, "resource-graph-max-transitions", 5000, "Maximum lifecycle transitions retained (ring-bounded)")
+	flag.Float64Var(&cfg.ResourceGraphExploreRate, "resource-graph-explore-rate", 0.10, "Probability of promoting a lower-scored sequence consumer ahead of the coverage-directed ranking, so it is never permanently starved")
+	flag.Float64Var(&cfg.ResourceGraphMinConfidence, "resource-graph-min-confidence", 0.30, "Minimum extraction confidence for a candidate to be recorded in the resource graph")
+	flag.Float64Var(&cfg.ResourceGraphUnreachedWeight, "resource-graph-unreached-weight", 40.0, "Scoring bonus for a sequence consumer never yet reached")
+	flag.Float64Var(&cfg.ResourceGraphYieldWeight, "resource-graph-yield-weight", 2.0, "Scoring weight per historical new-edge discovered at a consumer's endpoint")
+	flag.Float64Var(&cfg.ResourceGraphFailurePenalty, "resource-graph-failure-penalty", 5.0, "Scoring penalty per consecutive failed attempt at a sequence consumer")
+	flag.Float64Var(&cfg.ResourceGraphStaleExploreProb, "resource-graph-stale-explore-prob", 0.15, "Probability of deliberately binding a follow-up request to a resource already known to be DELETED/INVALIDATED, to exercise post-lifecycle-transition behavior (stale reads, update-after-delete) rather than only continuing a valid workflow")
+	flag.IntVar(&cfg.ResourceGraphValueBiasWeight, "resource-graph-value-bias-weight", 3, "Extra weighted copies of a resource-graph-known, still-alive value added to a field's candidate pool before random selection (0 disables the bias)")
+	flag.Float64Var(&cfg.ResourceGraphSuccessProbWeight, "resource-graph-success-prob-weight", 15.0, "Scoring weight for a sequence consumer's own historical 2xx rate (endpointStats S2xx/Reqs) -- the valid-workflow planner's probability-of-success term (0 disables it)")
+	flag.Float64Var(&cfg.ResourceGraphAvailabilityWeight, "resource-graph-availability-weight", 20.0, "Scoring bonus when a resource instance of the consumer's expected type is actually available right now -- the valid-workflow planner's lifecycle-state-satisfiable term (0 disables it)")
+	flag.BoolVar(&cfg.TypedBodyMutation, "typed-body-mutation", true, "Structure-aware request-body mutation (object/array/oneOf/discriminator-aware) for templates whose grammar was compiled with a body_schema. Additive/no-op for templates without one (grammars predating this feature) -- false always uses the legacy flat-segment/mutateJSONBody path")
+	flag.Float64Var(&cfg.AdversarialBodyRate, "adversarial-body-rate", 0.5, "Probability (during mutate/havoc epochs) of applying exactly one deliberate structural violation to a typed request body, vs. a schema-correct 'valid' instance (requires -typed-body-mutation)")
+	flag.StringVar(&cfg.CheckpointPath, "checkpoint-path", "", "Path to periodically save a corpus + resource-graph checkpoint (JSON). Empty disables checkpointing entirely")
+	flag.Float64Var(&cfg.CheckpointIntervalSec, "checkpoint-interval-sec", 60.0, "How often to auto-save the checkpoint while running (also saved once on graceful exit)")
+	flag.BoolVar(&cfg.Resume, "resume", false, "Load an existing -checkpoint-path at startup (if present) instead of starting from a fresh baseline corpus/resource graph")
+	flag.StringVar(&cfg.CrashFile, "crash-file", filepath.Join("./crashes", "crashes-"+nowTS+".jsonl"), "Path to all crash JSONL")
+	flag.StringVar(&cfg.UniqueCrashFile, "unique-crash-file", filepath.Join("./crashes", "unique-crashes-"+nowTS+".jsonl"), "Path to unique crash JSONL")
+	flag.StringVar(&cfg.SummaryFile, "summary-file", filepath.Join("./summaries", "summary-"+nowTS+".json"), "Path to run summary JSON")
+	flag.StringVar(&cfg.ReportFile, "report-file", "", "Path to structured crash report JSON (default: derived from --summary-file)")
+	flag.StringVar(&cfg.SARIFFile, "sarif-file", "", "Path to write findings as SARIF 2.1.0 (optional; drops into GitHub code scanning / DefectDojo). Empty = don't write one.")
+	flag.IntVar(&cfg.BootstrapMax, "bootstrap-max", 20, "Max GET requests in runtime bootstrap harvest")
+	flag.BoolVar(&cfg.AccessProbe, "access-probe", true, "Master toggle for access-control oracles (BOLA + auth-bypass + mass-assignment)")
+	flag.BoolVar(&cfg.ProbeBOLA, "probe-bola", true, "Cross-identity BOLA/IDOR replay (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeAuthBypass, "probe-auth-bypass", true, "No-credential replay; only fires on endpoints that already returned 401/403 to unauth (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeMassAssign, "probe-mass-assign", true, "Privileged-field over-posting on writes (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeDifferential, "probe-differential", true, "Verb/content-type/route-case/param-location parser-confusion auth-bypass replay; only fires on endpoints with strong evidence of auth enforcement (requires -access-probe)")
+	flag.BoolVar(&cfg.ProbeStaleObject, "probe-stale-object", true, "Flag a mutating operation that unexpectedly succeeded against a resource this run already observed as deleted (requires -access-probe and -resource-graph)")
+	flag.BoolVar(&cfg.ProbeStaleETag, "probe-stale-etag", true, "Replay a write with a deliberately wrong If-Match against a resource with a known ETag; flags acceptance as an optimistic-locking gap (requires -access-probe and -resource-graph)")
+	flag.BoolVar(&cfg.ProbeWorkflowBypass, "probe-workflow-bypass", true, "Flag an action endpoint (x-state-transition declared) that succeeded against a resource whose known state doesn't satisfy the declared predecessor (requires -access-probe and -resource-graph; rarely fires without an x-state-transition-annotated spec)")
+	flag.BoolVar(&cfg.ProbeIdempotency, "probe-idempotency", true, "Replay a just-succeeded create-shaped POST verbatim; flags a second, different created resource id as non-idempotent processing (requires -access-probe)")
+	flag.Float64Var(&cfg.AccessProbeProb, "access-probe-prob", 0.5, "Probability of firing access-control probes after a successful resource-scoped request")
+	flag.IntVar(&cfg.AccessProbeMaxPerEndpoint, "access-probe-max-per-endpoint", 6, "Max access-control probes queued per endpoint per run")
+	flag.IntVar(&cfg.AccessProbeQueueMax, "access-probe-queue-max", 256, "Global max queued access-control probes")
+	flag.BoolVar(&cfg.InjectionOracle, "injection-oracle", true, "Enable positive injection oracles (time-based SQLi, SSTI arithmetic, reflection)")
+	flag.BoolVar(&cfg.SchemaConformance, "schema-conformance", true, "Validate 2xx response bodies against the declared OpenAPI response schema; flags undeclared fields and type drift (requires the grammar to carry response_schemas -- regenerate with an up-to-date grammarc)")
+	flag.Float64Var(&cfg.SQLiTimeThresholdSec, "sqli-time-threshold", 1.5, "Absolute latency (seconds) above which a sleep/benchmark SQLi payload is flagged (also requires >=3x baseline)")
+	flag.BoolVar(&cfg.CmpLog, "cmplog", true, "Poll /shm/cmplog for comparison operands harvested from the target's own IL (Top-20+ #21) and blend them into string/int mutation. No-op against a target built without --cmplog or in --inject-mode source.")
+	flag.Float64Var(&cfg.CmpLogInterval, "cmplog-interval", 3.0, "Seconds between /shm/cmplog polls")
+	flag.Parse()
+
+	// Apply the preset profile ONLY to knobs the user did not explicitly set,
+	// so any individual flag the user passed still wins.
+	setFlags := map[string]bool{}
+	flag.Visit(func(fl *flag.Flag) { setFlags[fl.Name] = true })
+	ApplyProfile(&cfg, setFlags)
+
+	cfg.GrammarDir = absPath(cfg.GrammarDir)
+	cfg.SourceDir = absPath(cfg.SourceDir)
+	cfg.CrashFile = absPath(cfg.CrashFile)
+	cfg.UniqueCrashFile = absPath(cfg.UniqueCrashFile)
+	cfg.SummaryFile = absPath(cfg.SummaryFile)
+	if strings.TrimSpace(cfg.ReportFile) == "" {
+		cfg.ReportFile = deriveReportPathFromSummary(cfg.SummaryFile)
+	} else {
+		cfg.ReportFile = absPath(cfg.ReportFile)
+	}
+	if strings.TrimSpace(cfg.SARIFFile) != "" {
+		cfg.SARIFFile = absPath(cfg.SARIFFile)
+	}
+	cfg.PocDir = absPath(cfg.PocDir)
+	cfg.TimelineDir = absPath(cfg.TimelineDir)
+	if strings.TrimSpace(cfg.AuthFile) == "" {
+		cfg.AuthFile = strings.TrimSpace(os.Getenv("AUTH_FILE"))
+	}
+	if strings.TrimSpace(cfg.AuthFile) != "" {
+		cfg.AuthFile = absPath(cfg.AuthFile)
+	}
+	cfg.MinConcurrency = maxInt(1, cfg.MinConcurrency)
+	cfg.MaxConcurrency = maxInt(cfg.MinConcurrency, cfg.MaxConcurrency)
+	cfg.Concurrency = clampInt(maxInt(1, cfg.Concurrency), cfg.MinConcurrency, cfg.MaxConcurrency)
+	cfg.SequenceMaxDepth = maxInt(1, cfg.SequenceMaxDepth)
+	cfg.SequenceFanout = maxInt(1, cfg.SequenceFanout)
+	cfg.ResourceGraphMaxPerType = maxInt(1, cfg.ResourceGraphMaxPerType)
+	cfg.ResourceGraphMaxAliases = maxInt(1, cfg.ResourceGraphMaxAliases)
+	cfg.ResourceGraphMaxTransitions = maxInt(1, cfg.ResourceGraphMaxTransitions)
+	cfg.ResourceGraphExploreRate = math.Max(0, math.Min(1, cfg.ResourceGraphExploreRate))
+	cfg.ResourceGraphMinConfidence = math.Max(0, math.Min(1, cfg.ResourceGraphMinConfidence))
+	cfg.ResourceGraphStaleExploreProb = math.Max(0, math.Min(1, cfg.ResourceGraphStaleExploreProb))
+	cfg.CoverageInterval = maxInt(1, cfg.CoverageInterval)
+	cfg.CoverageBitmapSize = maxInt(minSHMBitmapSize, cfg.CoverageBitmapSize)
+	cfg.EndpointStallReqs = maxInt(20, cfg.EndpointStallReqs)
+	cfg.EndpointZeroEdgeReqs = maxInt(20, cfg.EndpointZeroEdgeReqs)
+	cfg.SHMReadMode = strings.ToLower(strings.TrimSpace(cfg.SHMReadMode))
+	switch cfg.SHMReadMode {
+	case "file", "mmap", "auto":
+	default:
+		cfg.SHMReadMode = "file"
+	}
+	cfg.UIIntervalSec = math.Max(0.2, cfg.UIIntervalSec)
+	cfg.UIEndpointSort = strings.ToLower(strings.TrimSpace(cfg.UIEndpointSort))
+	switch cfg.UIEndpointSort {
+	case "hot", "recent", "req", "requests", "edges", "edge", "coverage", "alpha", "path":
+	default:
+		cfg.UIEndpointSort = "hot"
+	}
+	cfg.UIEndpointRotateSec = math.Max(0.5, cfg.UIEndpointRotateSec)
+	cfg.AntiForgeryField = strings.TrimSpace(cfg.AntiForgeryField)
+	if cfg.AntiForgeryField == "" {
+		cfg.AntiForgeryField = "__RequestVerificationToken"
+	}
+	cfg.AntiForgeryHeader = strings.TrimSpace(cfg.AntiForgeryHeader)
+	if cfg.AntiForgeryHeader == "" {
+		cfg.AntiForgeryHeader = "RequestVerificationToken"
+	}
+	cfg.AntiForgeryCooldown = math.Max(0.5, cfg.AntiForgeryCooldown)
+	cfg.AntiForgerySampleRate = clampFloat(cfg.AntiForgerySampleRate, 0.0, 1.0)
+	cfg.AntiForgeryMaxTokens = maxInt(1, cfg.AntiForgeryMaxTokens)
+	cfg.AntiForgeryTokenTTL = math.Max(0.0, cfg.AntiForgeryTokenTTL)
+	cfg.RaceBurst = clampInt(cfg.RaceBurst, 2, 64)
+	cfg.RaceProb = clampFloat(cfg.RaceProb, 0.0, 1.0)
+	cfg.CrashSignatureMode = strings.ToLower(strings.TrimSpace(cfg.CrashSignatureMode))
+	switch cfg.CrashSignatureMode {
+	case "coarse", "balanced", "strict":
+	default:
+		cfg.CrashSignatureMode = "balanced"
+	}
+	cfg.CrashReplayCount = clampInt(cfg.CrashReplayCount, 0, 256)
+	cfg.CrashReplayQueueMax = clampInt(cfg.CrashReplayQueueMax, 1, 10000)
+	cfg.CrashReplayPerEndpoint = maxInt(0, cfg.CrashReplayPerEndpoint)
+	cfg.CrashReplayProb = clampFloat(cfg.CrashReplayProb, 0.0, 1.0)
+	cfg.CrashBoostRequests = maxInt(0, cfg.CrashBoostRequests)
+	cfg.CrashBoostMaxPerEndpoint = maxInt(0, cfg.CrashBoostMaxPerEndpoint)
+	cfg.CrashBoostWeight = math.Max(0.0, cfg.CrashBoostWeight)
+	cfg.EndpointReqShareCapPct = clampFloat(cfg.EndpointReqShareCapPct, 0.0, 100.0)
+	cfg.EndpointReqCapMinReqs = maxInt(1, cfg.EndpointReqCapMinReqs)
+	cfg.EndpointNoEdgeCapWeight = clampFloat(cfg.EndpointNoEdgeCapWeight, 0.0, 1.0)
+	cfg.EndpointCrashRateMinCrashes = maxInt(1, cfg.EndpointCrashRateMinCrashes)
+	cfg.EndpointCrashRateThreshold = clampFloat(cfg.EndpointCrashRateThreshold, 0.0, 100.0)
+	cfg.EndpointCrashRateWeight = clampFloat(cfg.EndpointCrashRateWeight, 0.0, 1.0)
+	cfg.ReproRuns = clampInt(cfg.ReproRuns, 0, 20)
+	cfg.ReproTargetPct = clampFloat(cfg.ReproTargetPct, 1.0, 100.0)
+	cfg.ReproTimeoutSec = math.Max(0.2, cfg.ReproTimeoutSec)
+	cfg.MinimizeMaxProbes = clampInt(cfg.MinimizeMaxProbes, 4, 200)
+	cfg.IdentitySampleMode = strings.ToLower(strings.TrimSpace(cfg.IdentitySampleMode))
+	switch cfg.IdentitySampleMode {
+	case "weighted", "round-robin", "roundrobin", "rr", "random":
+	default:
+		cfg.IdentitySampleMode = "weighted"
+	}
+	if cfg.UIWidth > 0 {
+		cfg.UIWidth = clampInt(cfg.UIWidth, 80, 200)
+	}
+	cfg.AccessProbeProb = clampFloat(cfg.AccessProbeProb, 0.0, 1.0)
+	cfg.AccessProbeMaxPerEndpoint = maxInt(0, cfg.AccessProbeMaxPerEndpoint)
+	cfg.AccessProbeQueueMax = maxInt(1, cfg.AccessProbeQueueMax)
+	cfg.SQLiTimeThresholdSec = math.Max(0.5, cfg.SQLiTimeThresholdSec)
+	return cfg
+}
